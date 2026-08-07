@@ -1,0 +1,53 @@
+{
+	"name": "pi-repl",
+	"version": "0.1.0",
+	"type": "module",
+	"description": "A pi extension with a single tool: execute, running TypeScript host with a persistent Python evaluator",
+	"keywords": [
+		"pi-package",
+		"pi",
+		"agent",
+		"python",
+		"repl"
+	],
+	"license": "MIT",
+	"pi": {
+		"extensions": [
+			"./src/extension/index.ts"
+		]
+	},
+	"files": [
+		"src",
+		"README.md",
+		"ARCHITECTURE.md",
+		"LICENSE"
+	],
+	"engines": {
+		"node": ">=22"
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit",
+		"format": "biome format --write .",
+		"lint": "biome check .",
+		"check": "tsc --noEmit && biome check . && npm run test:ts && npm run test:py",
+		"test:ts": "vitest run test/",
+		"test:py": ".venv/bin/python -m pytest test/"
+	},
+	"dependencies": {},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*",
+		"@sinclair/typebox": "*"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.3.5",
+		"@earendil-works/pi-coding-agent": "^0.84.0",
+		"@earendil-works/pi-tui": "^0.84.0",
+		"@mariozechner/pi-coding-agent": "npm:@earendil-works/pi-coding-agent@^0.84.0",
+		"@mariozechner/pi-tui": "npm:@earendil-works/pi-tui@^0.84.0",
+		"@types/node": "^22.0.0",
+		"typebox": "^1.3.11",
+		"typescript": "^5.6.0",
+		"vitest": "^2.1.9"
+	}
+}

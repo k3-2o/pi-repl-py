@@ -1,0 +1,19 @@
+node_modules/
+*.log
+.DS_Store
+.pi-rlm/
+dist/
+
+# Local experiment artifacts (session transcripts, A/B runs)
+rig/
+
+# Editor / project config
+.vscode/
+
+# Python (guest)
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
