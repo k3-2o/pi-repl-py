@@ -68,6 +68,15 @@ a one-file custom function loads identically into every kernel.
 Requires [Pi](https://pi.dev) and [Bun](https://bun.sh) (the extension host) and Python 3.11+
 with `ipykernel` + `jupyter_client`.
 
+**As a pi package** (`pi install` / `npm install` of the tarball): the package's `postinstall`
+creates a stable per-user venv at `~/.pi/agent/pi-repl-venv` with `ipykernel` + `jupyter_client`
+automatically, so it runs out of the box (it needs a working `python3` and network on the machine).
+
+The engine resolves the interpreter in this order: repo `.venv` → project `.venv` →
+`~/.pi/agent/pi-repl-venv` (package install) → `$PYTHON`/`python3`.
+
+**From this repo (development):**
+
 ```bash
 just setup    # npm install + a project-local .venv with the guest deps
 ```

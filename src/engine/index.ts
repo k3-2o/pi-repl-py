@@ -17,6 +17,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
@@ -31,14 +32,23 @@ import {
 
 const GUEST_PATH = fileURLToPath(new URL("./guest.py", import.meta.url));
 
-/** Prefer the project's uv-managed Python (has ipykernel/jupyter_client); else PYTHON or python3. */
+/** Stable install-time venv created by the package's postinstall script. */
+function installVenvPython(): string {
+	return join(homedir(), ".pi", "agent", "pi-repl-venv", "bin", "python3");
+}
+
+/** Prefer a venv that has ipykernel/jupyter_client; else PYTHON or python3. */
 function resolvePythonPath(cwd: string | undefined): string {
-	// Prefer the venv sitting next to this repo's guest.py (stable regardless of
-	// the child process cwd, which tests set to a temp dir).
+	// 1. The repo's own venv (source checkout / dev).
 	const repoVenv = join(dirname(GUEST_PATH), "..", "..", ".venv", "bin", "python3");
 	if (existsSync(repoVenv)) return repoVenv;
+	// 2. A cwd-local venv (project dir).
 	const cwdVenv = cwd ? join(cwd, ".venv", "bin", "python3") : "";
 	if (cwdVenv && existsSync(cwdVenv)) return cwdVenv;
+	// 3. The stable per-user venv built by postinstall when this is installed as
+	//    a package (pi installs under ~/.pi/agent/npm, so no local .venv exists).
+	const installVenv = installVenvPython();
+	if (existsSync(installVenv)) return installVenv;
 	return process.env.PYTHON ?? "python3";
 }
 const DEFAULT_MAX_OUTPUT_CHARS = 65536;
