@@ -7,7 +7,15 @@
 
 import { highlightCode, keyHint, type Theme } from "@mariozechner/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
-import { type BgKind, type ExecuteRenderState, type RenderDeps, renderExecuteCell, statusKind } from "./render-core.js";
+import {
+	type BgKind,
+	type ExecuteRenderState,
+	type RenderDeps,
+	renderExecuteBody,
+	renderExecuteCell,
+	renderExecuteHeader,
+	statusKind,
+} from "./render-core.js";
 
 export type { ExecuteDetails, ExecuteRenderState } from "./render-core.js";
 
@@ -53,6 +61,7 @@ export class ExecuteCellComponent {
 	constructor(
 		private readonly state: ExecuteRenderState,
 		theme: Theme,
+		private readonly mode: "cell" | "header" | "body" = "cell",
 	) {
 		this.deps = makeDeps(theme);
 	}
@@ -62,11 +71,16 @@ export class ExecuteCellComponent {
 	}
 
 	render(width: number): string[] {
-		const key = renderVersion(this.state);
+		const key = `${renderVersion(this.state)}|${this.mode}`;
 		if (this.cachedLines && this.cachedWidth === width && this.cachedKey === key) {
 			return this.cachedLines;
 		}
-		const lines = renderExecuteCell(this.state, width, this.deps);
+		const lines =
+			this.mode === "header"
+				? renderExecuteHeader(this.state, width, this.deps)
+				: this.mode === "body"
+					? renderExecuteBody(this.state, width, this.deps)
+					: renderExecuteCell(this.state, width, this.deps);
 		this.cachedKey = key;
 		this.cachedWidth = width;
 		this.cachedLines = lines;

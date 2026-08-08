@@ -269,6 +269,23 @@ export function paintBackground(line: string, width: number, kind: StatusKind, d
 	return `${bgAnsi}${rearmed}\x1b[0m`;
 }
 
+export function renderExecuteHeader(state: ExecuteRenderState, width: number, deps: RenderDeps): string[] {
+	const safeWidth = Math.max(1, width);
+	const line = deps.truncateToWidth(` ${topLine(state, safeWidth, deps)}`, safeWidth, "");
+	const kind = statusKind(state);
+	return [paintBackground(line, safeWidth, kind, deps)];
+}
+
+export function renderExecuteBody(state: ExecuteRenderState, width: number, deps: RenderDeps): string[] {
+	if (!state.expanded) return [];
+	const safeWidth = Math.max(1, width);
+	const lines: string[] = [];
+	const hasCode = renderCode(state, lines, safeWidth, deps);
+	renderOutput(state, lines, safeWidth, hasCode, deps);
+	const kind = statusKind(state);
+	return lines.map((line) => paintBackground(line, safeWidth, kind, deps));
+}
+
 export function renderExecuteCell(state: ExecuteRenderState, width: number, deps: RenderDeps): string[] {
 	const safeWidth = Math.max(1, width);
 	const lines = [deps.truncateToWidth(` ${topLine(state, safeWidth, deps)}`, safeWidth, "")];

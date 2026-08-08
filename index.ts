@@ -153,7 +153,8 @@ export default function (pi: ExtensionAPI) {
 		renderShell: "self",
 		renderCall(args, theme, context) {
 			const state = syncRenderState(context.state, { ...context, args });
-			return new ExecuteCellComponent(state, theme);
+			// --- compact header lives in the call slot ---
+			return new ExecuteCellComponent(state, theme, "header");
 		},
 		renderResult(result, options, _theme, context) {
 			const state = syncRenderState(context.state, context);
@@ -165,8 +166,8 @@ export default function (pi: ExtensionAPI) {
 				?.filter((block): block is { type: "text"; text: string } => block.type === "text")
 				.map((block) => block.text)
 				.join("\n");
-			// --- the call slot renders the whole cell, result slot adds nothing ---
-			return { render: () => [], invalidate: () => {} };
+			// --- body (code + output) lives in the result slot; Ctrl+O expands it ---
+			return new ExecuteCellComponent(state, _theme, "body");
 		},
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			if (!active()) {
