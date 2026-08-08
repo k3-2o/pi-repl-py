@@ -42,8 +42,8 @@ kernel in a subprocess via `jupyter_client`. That buys:
 - rich, real tracebacks instead of a wrapped `except`;
 - the full standard library and real `import` semantics;
 - last-expression capture;
-- a namespace that genuinely survives errors instead of a vomit a script
-  wrapping `exec`.
+- a namespace that genuinely survives errors, instead of a script string passed
+to `exec`.
 
 And it is an honest isolation boundary: the kernel is a separate process from
 pi. A cell can raise, or consume memory, or spin, and pi keeps answering because

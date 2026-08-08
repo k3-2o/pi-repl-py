@@ -118,6 +118,18 @@ before reuse rather than trusting state that is gone.
 Gate: `just check` = biome + bun test (host) + pytest (guest).
 `just integration` adds the real-host seam.
 
+## Configuration reference
+
+Loaded from `~/.pi/agent/pi-repl.json` (or `$PI_REPL_CONFIG`), first-found-wins, never
+throws on a missing/malformed file.
+
+| Key | Type / default | Meaning |
+| --- | --- | --- |
+| `toolboxDir` | string, optional | Directory of one-function-per-`.py` files that replaces the shipped `src/engine/toolbox`. `~` is expanded; a bare relative path resolves from the process cwd (not reliable) — prefer an absolute path. |
+| `pythonPath` | string, optional | The interpreter used to spawn the guest. Omit to use `resolvePythonPath` (see venv). |
+| `timeoutMs` | number, 60000 | Per-cell execution timeout in ms. |
+| `snapshotDebounceMs` | number, 1500 | Debounce after an ok cell before snapshot, in ms. |
+
 ## Reference documentation
 
 - Philosophy and design rationale: [docs/philosophy.md](docs/philosophy.md)

@@ -47,9 +47,10 @@ That is everything. `summarize` loads into the kernel and the prompt shows
 
 ## The two pieces the loader reads
 
-**1. The signature, from the `def`, always.**
-Arguments are extracted from the actual `def` line, never hand-copied anywhere,
-so the prompt cannot drift from the code. Change `def summarize(text,
+**1. The signature comes from the `def`, not the description.**
+Arguments are read from the actual `def` line rather than hand-copied into a
+docstring, so the signature the model sees tracks the code for a normal
+single-line signature. Change `def summarize(text,
 limit=1):` to `limit=200`, and the prompt updates to match.
 
 **2. The description, from `function_description`, optional.**
