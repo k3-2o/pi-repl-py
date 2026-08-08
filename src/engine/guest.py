@@ -21,7 +21,6 @@ traceback; the kernel stays alive for the next cell.
 
 from __future__ import annotations
 
-import base64
 import json
 import os
 import sys
@@ -35,6 +34,9 @@ NONCE = os.environ.get(NONCE_ENV, "")
 os.environ.pop(NONCE_ENV, None)
 
 HELPERS = [h.strip() for h in os.environ.get("PI_REPL_HELPERS", "").split(",") if h.strip()]
+# Directory of toolbox functions, one file per function, exec'd into every kernel.
+TOOLS_DIR_ENV = "PI_TOOLS_DIR"
+TOOLS_DIR = os.environ.get(TOOLS_DIR_ENV, "").strip()
 # Per-cell timeout, from the host engine config (default 60s).
 CELL_TIMEOUT_S = float(os.environ.get("PI_REPL_TIMEOUT_MS", "60000")) / 1000.0
 
@@ -66,34 +68,49 @@ def _decode(line):
     return obj
 
 
-# ── stdlib helpers injected into every session (config-selectable) ───────────
-STDFN_SOURCE = r"""
-import subprocess as _sp
-import glob as _gl
+# ── toolbox functions, exec'd into every kernel ─────────────────────────────
+# Loaded from a directory (default: the sibling `tools/` dir shipped with the
+# repo; overridable via PI_TOOLS_DIR for the user's own folder). Each *.py file
+# defines one exported function. `help` and `ls` are hard-wired here, not
+# configurable, so a weak model always has a way to discover the toolbox.
 
-def sh(command, **kw):
-    return _sp.run(command, shell=True, capture_output=True, text=True, **kw)
+def _toolbox_files(directory):
+    """Return {function_name: source} for each *.py in `directory`."""
+    if not directory:
+        return {}
+    d = os.path.expanduser(directory)
+    if not os.path.isdir(d):
+        return {}
+    names = {}
+    for entry in sorted(os.listdir(d)):
+        if not entry.endswith(".py"):
+            continue
+        name = entry[:-3]
+        if not name.isidentifier() or name.startswith("_"):
+            continue
+        try:
+            with open(os.path.join(d, entry), encoding="utf-8") as f:
+                names[name] = f.read()
+        except OSError:
+            continue
+    return names
 
-def read(path, max_lines=200):
-    with open(path, encoding="utf-8", errors="replace") as f:
-        lines = f.readlines()
-    if len(lines) > max_lines:
-        tail = len(lines) - max_lines
-        lines = lines[:max_lines] + [f"...[truncated {tail} more lines]..."]
-    return "".join(lines)
+DEFAULT_TOOLS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools")
+_TOOLS_SRC = _toolbox_files(TOOLS_DIR or DEFAULT_TOOLS_DIR)
 
-def write(path, content):
-    try:
-        with open(path):
-            return f"Refused: {path} already exists. Use the edit tool for existing files."
-    except FileNotFoundError:
-        pass
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(content)
-    return f"wrote {path}"
+# help/ls are part of the evaluator, not the toolbox: any kernel, even a bare
+# one, gets a way to discover what is loaded.
+INTRINSIC = """
+def ls():
+    return sorted([n for n in globals() if not n.startswith('__') and callable(globals()[n])])
 
-def glob(pattern):
-    return _gl.glob(pattern, recursive=True)
+def help(name=None):
+    if name is None:
+        return ls()
+    fn = globals().get(name)
+    if fn is None or not callable(fn):
+        return f"no such function: {name!r}"
+    return fn.__doc__ or f"{name} (no docstring)"
 """
 
 
@@ -112,23 +129,13 @@ class Kernel:
         self._preload()
 
     def _preload(self):
-        """Selectively expose only the configured helpers, in the kernel ns."""
-        if not HELPERS:
-            return
-        select = "\n".join(
-            f"    globals().setdefault({name!r}, _tns[{name!r}])"
-            for name in HELPERS
-            if name.isidentifier()
-        )
-        code = (
-            f"def _rl_preload():\n"
-            f"    _tns = {{}}\n"
-            f"    exec({STDFN_SOURCE!r}, _tns)\n"
-            f"{select}\n"
-            f"_rl_preload()"
-        )
-        self.kc.execute(code)
-        self._drain()
+        """Exec every toolbox function + the intrinsic help/ls into the kernel ns."""
+        code = INTRINSIC + "\n"
+        for src in _TOOLS_SRC.values():
+            code += src + "\n"
+        if code.strip():
+            self.kc.execute(code)
+            self._drain()
 
     def _drain(self):
         try:
@@ -163,10 +170,13 @@ class Kernel:
         return "".join(out), "".join(err), error, result
 
     def snapshot_globals(self):
-        helper_names = json.dumps([h for h in HELPERS if h.isidentifier()])
+        # Skip the toolbox functions and intrinsic helpers (functions don't
+        # pickle anyway; excluding avoids a noisy `failed` list on every save).
+        tool_names = sorted(set(_TOOLS_SRC) | {"ls", "help"})
+        skip_names = json.dumps([h for h in HELPERS if h.isidentifier()] + tool_names)
         out, _, _, _ = self.execute(
             "import pickle as _pk, base64 as _b64, json as _js\n"
-            "__rlm_skip = set(" + helper_names + ") | {'In','Out','get_ipython','exit','quit','open','_rl_preload'}\n"
+            "__rlm_skip = set(" + skip_names + ") | {'In','Out','get_ipython','exit','quit','open','_rl_preload'}\n"
             "__rlm_v = {}\n__rlm_f = []\n"
             "for _k, _v in list(globals().items()):\n"
             "    # skip IPython bookkeeping and names with a leading underscore\n"

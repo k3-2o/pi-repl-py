@@ -29,11 +29,13 @@ class GuestProc:
     protocol pipe.
     """
 
-    def __init__(self, helpers=("read", "sh")):
+    def __init__(self, helpers=("read", "write", "edit", "bash"), tools_dir=None):
         self.fd3 = tempfile.NamedTemporaryFile(delete=False)
         self.fd3_name = self.fd3.name
         self.fd3.close()
         env = dict(os.environ, PI_RLM_NONCE="testnonce", PI_REPL_HELPERS=",".join(helpers))
+        if tools_dir:
+            env["PI_TOOLS_DIR"] = tools_dir
         # bash guarantees the child's fd 3 = the temp file
         self.proc = subprocess.Popen(
             ["bash", "-c", f"exec 3> {self.fd3_name}; exec {PYTHON} {GUEST}"],
@@ -191,11 +193,57 @@ def test_list_names(guest):
     assert "beta" in res["names"]
 
 
-# ── preloaded helpers ──────────────────────────────────────────────────────────
-def test_sh_helper_configured(guest):
-    d, streams = run_cell(guest, "print(sh('echo hi').stdout.strip())", "c1")
+# ── toolbox: read / write / edit / bash + intrinsic help/ls ─────────────────
+def test_bash_helper_runs_commands(guest):
+    d, streams = run_cell(guest, "r = bash('echo toolbox-ok'); print(r.stdout.strip())", "c1")
     assert d["status"] == "ok"
-    assert any("hi" in m["chunk"] for m in streams)
+    assert any("toolbox-ok" in m["chunk"] for m in streams)
+
+
+def test_read_helper(guest):
+    import os
+    path = os.path.join(tempfile.mkdtemp(), "r.txt")
+    with open(path, "w") as f:
+        f.write("line1\nline2\nline3\n")
+    d, streams = run_cell(guest, f"print(read({path!r}).splitlines()[0])", "c1")
+    assert d["status"] == "ok"
+    assert any("line1" in m["chunk"] for m in streams)
+
+
+def test_write_helper(guest):
+    import os
+    p = os.path.join(tempfile.mkdtemp(), "w.txt")
+    d, _ = run_cell(guest, f"print(write({p!r}, 'hello world'))", "c1")
+    assert d["status"] == "ok"
+    with open(p) as f:
+        assert f.read() == "hello world"
+
+
+def test_edit_rejects_stale_anchor(guest):
+    import os
+    p = os.path.join(tempfile.mkdtemp(), "e.txt")
+    with open(p, "w") as f:
+        f.write("the quick brown fox")
+    # exact, single occurrence
+    d, _ = run_cell(guest, f"print(edit({p!r}, 'quick', 'slow'))", "c1")
+    assert d["status"] == "ok"
+    with open(p) as f:
+        assert "slow brown fox" in f.read()
+    # stale anchor (already gone) fails loudly, no silent mangle
+    d2, _ = run_cell(guest, f"edit({p!r}, 'quick', 'again')", "c2")
+    assert d2["status"] == "error"
+    assert "could not find" in d2["error"]["message"]
+    assert "quick" not in open(p).read()
+
+
+def test_help_and_ls_are_always_available(guest):
+    d, streams = run_cell(guest, "print(ls())", "c1")
+    assert d["status"] == "ok"
+    joined = " ".join(m["chunk"] for m in streams)
+    assert "read" in joined and "bash" in joined
+    d2, streams2 = run_cell(guest, "print(help('edit'))", "c2")
+    assert d2["status"] == "ok"
+    assert any("edit" in m["chunk"] for m in streams2)
 
 def test_restore_reports_failed_values_without_crashing(guest):
     # Restoring garbage must be reported in `failed`, never crash the evaluator.
@@ -213,3 +261,26 @@ def test_restore_reports_failed_values_without_crashing(guest):
     # the guest is still responsive afterwards
     d, _ = run_cell(guest, "print('still alive')", "c2")
     assert d["status"] == "ok"
+
+
+def test_custom_tool_file_loads_from_tools_dir():
+    # A user folder in PI_TOOLS_DIR is loaded into the kernel; a one-file custom
+    # function appears alongside. Setting PI_TOOLS_DIR replaces the shipped
+    # default set rather than merging, so only the custom function is present.
+    import pathlib
+    import shutil
+    d = tempfile.mkdtemp()
+    try:
+        (pathlib.Path(d) / "double.py").write_text("def double(n):\n    return n * 2\n")
+        g = GuestProc(helpers=(), tools_dir=d)
+        for m in g.frames(timeout=20):
+            if m.get("type") == "ready":
+                break
+        try:
+            d2, streams = run_cell(g, "print(double(21))", "c1")
+            assert d2["status"] == "ok"
+            assert any("42" in m["chunk"] for m in streams)
+        finally:
+            g.close()
+    finally:
+        shutil.rmtree(d, ignore_errors=True)

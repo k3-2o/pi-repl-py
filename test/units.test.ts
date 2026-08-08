@@ -57,7 +57,8 @@ describe("system prompt", () => {
 		expect(prompt).toContain("/tmp/work");
 		expect(prompt).toContain("/tmp/s.jsonl");
 		expect(prompt).toContain("Recursive agent depth: 0");
-		expect(prompt).toContain("sh()");
+		expect(prompt).toContain("bash()");
+		expect(prompt).toContain("Toolbox functions");
 		expect(prompt).toContain("persist");
 		// The reset notice is only useful if the model knows what to do with it:
 		// re-verify before reuse, and above all before shell interpolation.
@@ -102,18 +103,16 @@ describe("system prompt", () => {
 		expect(prompt).toContain("have not edited since");
 	});
 
-	test("host tools section appears only when summaries are supplied, with doctrine", () => {
-		const withTools = buildRlmPyPrompt({
-			cwd: "/tmp",
-			toolSummaries: ["tools.read({ path: string }) — Read the contents of a file."],
-		});
-		expect(withTools).toContain("# Host tools");
-		expect(withTools).toContain("tools.read({ path: string })");
-		// The doctrine: edits over rewrites, tools.read for source/images, Bun.$ for shell.
-		expect(withTools).toContain("tools.edit");
-		expect(withTools).toContain("fails loudly");
-		expect(withTools).toContain("remains the way to run shell commands");
-		expect(buildRlmPyPrompt({ cwd: "/tmp" })).not.toContain("# Host tools");
+	test("toolbox section is always present and names the functions", () => {
+		const prompt = buildRlmPyPrompt({ cwd: "/tmp" });
+		expect(prompt).toContain("# Toolbox functions");
+		expect(prompt).toContain("read(path)");
+		expect(prompt).toContain("write(path");
+		expect(prompt).toContain("edit(path");
+		expect(prompt).toContain("bash(cmd)");
+		expect(prompt).toContain("help(name)");
+		// The doctrine: edits over rewrites, loud stale-anchor failure.
+		expect(prompt).toContain("fails loudly");
 	});
 
 	test("no unresolved template placeholders leak into the prompt", () => {

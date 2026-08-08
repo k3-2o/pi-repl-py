@@ -101,6 +101,7 @@ export default function (pi: ExtensionAPI) {
 				pythonPath: CFG.pythonPath,
 				timeoutMs: CFG.timeoutMs,
 				helpers: CFG.helpers,
+				toolsDir: CFG.toolsDir,
 				hostHandlers: { ...subagents.handlers, ...piTools.handlers },
 				// A snapshot is keyed to a session file; an ephemeral session has none
 				// to key it to, so its namespace lives and dies with the process.

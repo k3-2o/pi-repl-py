@@ -24,11 +24,11 @@ const EVALUATOR_CONTROL_PROMPT = [
 	"",
 	"Do not assume the evaluator is the native runtime of the external thing being investigated. A repository, package, service, dataset, paper, website, benchmark, or API may have its own environment and normal interface. Evaluate external systems through their own interface, then use the evaluator to coordinate the process and analyze what comes back.",
 	"",
-	"Run shell commands in-language with sh(): `out = sh('cmd args')` — then `out.stdout`, `out.stderr`, and `out.returncode` are ordinary values you can assign, slice, and branch on. The result is a CompletedProcess (like subprocess.run with capture_output=True, text=True). Each sh() call is a fresh subshell: shell-level state (cd, export, shell variables) does NOT carry between calls. Use Python's os.chdir() and os.environ['VAR'] = ... for state that must persist, or chain dependent shell steps inside one shell command string.",
+	"Run shell commands in-language with bash(): `out = bash('cmd args')` — then `out.stdout`, `out.stderr`, and `out.returncode` are ordinary values you can assign, slice, and branch on. The result is a CompletedProcess (like subprocess.run with capture_output=True, text=True). Each bash() call is a fresh subshell: shell-level state (cd, export, shell variables) does NOT carry between calls. Use Python's os.chdir() and os.environ['VAR'] = ... for state that must persist, or chain dependent shell steps inside one shell command string.",
 	"",
 	"Do not install dependencies into the evaluator just to make an external project import or run there. If a project import, test, script, CLI, or dependency check is needed, run it through that project's own environment and normal command interface (its documented commands, package scripts, venv, etc.) and treat failures from that native environment as the relevant result.",
 	"",
-	"Use code for reading, searching, and editing files (open(), Path.read_text(), sh('grep ...')). Always assign read/search results to named top-level variables so you can revisit, filter, and slice them later without re-reading.",
+	"Use code for reading, searching, and editing files (read(path), bash('grep ...'), open(), Path.read_text()). Always assign read/search results to named top-level variables so you can revisit, filter, and slice them later without re-reading.",
 	"",
 	"Writes are surgical; reads are full. grep, ls, and head are for locating — before editing a file or reasoning broadly about it, read it start to finish. Partial reads (match windows, head, offset slices) miss imports, types, helpers, and the file's shape, and a bad edit from missing context costs more than any full read. Scope a read only when the file is genuinely too large, or to re-check one region of a file you already read in full and have not edited since — once you edit a file, the next read of it must again be start to finish.",
 	"",
@@ -39,17 +39,14 @@ const EVALUATOR_CONTROL_PROMPT = [
 	"The final expression of a cell is rendered as its result. Prefer many small cells over one large cell: execute, observe, then continue.",
 ].join("\n");
 
-function buildHostToolsSection(summaries: readonly string[]): string {
+function buildHostToolsSection(): string {
 	return [
-		"# Host tools",
+		"# Toolbox functions",
 		"",
-		"pi's file tools are mounted in the evaluator as async functions on `tools`. Each resolves to `{ text, images, details }`: `text` is the tool's text output, `images` counts image blocks the host attaches to this cell's result (you will see them), `details` is the tool's structured data.",
+		"Loaded into the kernel at boot: read(path), write(path, content), edit(path, old_text, new_text), and bash(cmd). Use help(name) / ls() to discover them or their exact signatures.",
 		"",
-		...summaries,
-		"",
-		"Prefer `tools.edit({ path, edits: [{ oldText, newText }] })` over rewriting files with open('w') / write(): it fails loudly when an oldText is stale instead of silently reverting content you have not seen.",
-		"Prefer `tools.read({ path })` over open(path).read() or open().read_text() for source files and anything that might be an image: it enforces size caps with continuation offsets and makes the model's ability to see images work. Its `text` may end with bracketed reader notices; parse `raw` instead, which is the content alone.",
-		"`sh()` remains the way to run shell commands; `tools.bash` exists mainly for parity, timeouts, and validation.",
+		"Prefer edit() over rewriting files with open('w') / write(): it fails loudly when old_text is stale instead of silently reverting content you have not seen.",
+		"read() is bounded so a huge file can't melt context; pass it the file path and it returns text.",
 	].join("\n");
 }
 
@@ -105,10 +102,7 @@ export function buildRlmPyPrompt(options: RlmPromptOptions): string {
 	}
 
 	parts.push("", EVALUATOR_CONTROL_PROMPT);
-
-	if (options.toolSummaries && options.toolSummaries.length > 0) {
-		parts.push("", buildHostToolsSection(options.toolSummaries));
-	}
+	parts.push("", buildHostToolsSection());
 
 	if (options.contextFiles && options.contextFiles.length > 0) {
 		parts.push("", "# Project Context", "", "Project-specific instructions and guidelines:", "");
