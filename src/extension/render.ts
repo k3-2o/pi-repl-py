@@ -5,7 +5,7 @@
  * pure layout in render-core.ts, which is unit-tested outside pi's runtime.
  */
 
-import { highlightCode, keyHint, type Theme } from "@mariozechner/pi-coding-agent";
+import { highlightCode, keyHint, keyText, rawKeyHint, type Theme } from "@mariozechner/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
 import {
 	type BgKind,
@@ -24,7 +24,11 @@ function makeDeps(theme: Theme): RenderDeps {
 		fg: (color, text) => theme.fg(color as Parameters<Theme["fg"]>[0], text),
 		getBgAnsi: (bg: BgKind) => theme.getBgAnsi(bg),
 		highlight: (line) => highlightCode(line, "typescript")[0] ?? line,
-		keyHint: (expanded) => keyHint("app.tools.expand", expanded ? "to collapse" : "to expand"),
+		keyHint: (expanded) => {
+			const text = expanded ? "to collapse" : "to expand";
+			const key = keyText("app.tools.expand");
+			return key ? keyHint("app.tools.expand", text) : rawKeyHint("ctrl+o", text);
+		},
 		visibleWidth,
 		truncateToWidth,
 		wrapTextWithAnsi,
