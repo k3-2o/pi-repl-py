@@ -147,11 +147,11 @@ function topLine(state: ExecuteRenderState, width: number, deps: RenderDeps): st
 	const language = preview.kind === "shell" ? "repl · shell" : preview.kind === "agent" ? "repl · agent" : "repl";
 	const prefix = `${marker(state, deps)} ${deps.fg("muted", language)}`;
 
-	// Fixed metadata after the preview — these must always survive; the preview
-	// absorbs all truncation.
+	// Fixed metadata after the preview must always survive; the preview
+	// absorbs all truncation. Counts settle-only: live updates jitter the header.
 	const suffixParts: string[] = [];
 
-	// Counts settle-only: live-updating them mid-stream jitters the header.
+	// --- counts settle-only: live-updating them mid-stream jitters the header ---
 	if (!state.isPartial && statusKind(state) !== "running") {
 		const inputLines = code.split("\n").filter((line) => line.trim().length > 0).length;
 		const output = outputText(state);
@@ -167,8 +167,7 @@ function topLine(state: ExecuteRenderState, width: number, deps: RenderDeps): st
 
 	const errorName = !state.isPartial ? state.details?.errorName : undefined;
 	if (errorName) {
-		// "RangeError: demo explosion" beats a bare "RangeError" when it fits;
-		// the message is usually the fact the reader wants.
+		// --- the error message usually beats a bare name when it fits ---
 		const summary = state.details?.errorStack?.[0];
 		suffixParts.push(deps.fg("error", summary && deps.visibleWidth(summary) <= 48 ? summary : errorName));
 	}
@@ -178,13 +177,10 @@ function topLine(state: ExecuteRenderState, width: number, deps: RenderDeps): st
 	const separator = deps.fg("dim", " · ");
 	const separatorWidth = deps.visibleWidth(separator);
 	const suffix = suffixParts.join(separator);
-	// Budget: total width minus leading space, prefix, suffix, and the two
-	// separators around the preview slot.
+	// Budget: total width minus leading space, prefix, suffix, separators.
 	const fixed = 1 + deps.visibleWidth(prefix) + separatorWidth + deps.visibleWidth(suffix);
 	const previewBudget = Math.max(8, width - fixed - separatorWidth);
-
-	// A semantic preview (a command, a task, a file effect) is not TypeScript;
-	// syntax-highlighting it would lie about what it is. Accent it instead.
+	// A semantic preview is not TypeScript; syntax-highlighting it would lie. Accent it.
 	const middle = preview.text
 		? deps.truncateToWidth(
 				preview.kind === "ts" ? deps.highlight(preview.text) : deps.fg("accent", preview.text),

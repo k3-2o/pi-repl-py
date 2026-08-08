@@ -18,3 +18,5 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 *.egg-info/
+# internal contributor guide (not shipped)
+AGENTS.md

@@ -58,17 +58,11 @@ export default function (pi: ExtensionAPI) {
 		type: "boolean",
 		description: "Single execute tool backed by a persistent Python evaluator; replaces the default tool surface",
 	});
-	// CLI flag values are injected after extension factories run (verified by
-	// probe: getFlag is undefined here, true in every event), so activation is
-	// decided per event, never at load. PI_REPL_FORCE is the dev escape hatch:
-	// test rigs activate without flag plumbing.
+	// Flag only lands post-factory; gate per event. PI_REPL_FORCE is the dev escape.
 	const active = () => pi.getFlag("repl") === true || process.env.PI_REPL_FORCE === "1";
 
 	let location = { cwd: process.cwd(), sessionFile: undefined as string | undefined };
-	// A tool error must be thrown for pi to mark the call as failed, but pi's
-	// loop rebuilds thrown errors as bare text results, discarding details and
-	// content — and with them the collapsed header's metadata. Recapture them at
-	// throw time and re-attach them in the tool_result hook below.
+	// Pi rebuilds thrown errors as bare text; stash details to re-attach in tool_result.
 	const pendingErrorResults = new Map<string, { details: ExecuteDetails }>();
 
 	const lifecycle = new EngineLifecycle<EngineManager>({
@@ -81,29 +75,22 @@ export default function (pi: ExtensionAPI) {
 				pythonPath: CFG.pythonPath,
 				timeoutMs: CFG.timeoutMs,
 				toolboxDir: CFG.toolboxDir,
-				// A snapshot is keyed to a session file; an ephemeral session has none
-				// to key it to, so its namespace lives and dies with the process.
+				// --- snapshots are keyed to a session file; ephemeral sessions get none ---
 				snapshot: sessionKey ? { path: join(stateDir, "namespace.snapshot") } : undefined,
 			});
 		},
 		async dispose(engine) {
 			await engine.dispose();
 		},
-		// A wedged guest cannot answer the snapshot request dispose would send
-		// (it would stall for the full request timeout, then fail anyway), so a
-		// discard kills outright and relies on the last completed snapshot.
+		// --- a wedged guest can't answer dispose; kill and rely on the last snapshot ---
 		async discard(engine) {
 			await engine.kill();
 		},
 	});
 
-	// Replace pi's default prompt wholesale. It describes read, bash, and edit
-	// tools that this configuration does not register, and a prompt that
-	// advertises absent tools is worse than no prompt at all.
+	// --- replace pi's default prompt (it advertises tools we don't register) ---
 	pi.on("before_agent_start", async (event, ctx) => {
-		// Dormant: pi's default prompt stands, and it is correct — the builtin
-		// tools it describes are actually registered in this configuration.
-		if (!active()) return undefined;
+		if (!active()) return undefined; // --- dormant: stock prompt + stock tools stand ---
 		const options = (event as { systemPromptOptions?: { contextFiles?: Array<{ path: string; content: string }> } })
 			.systemPromptOptions;
 		return {
@@ -117,17 +104,13 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		if (!active()) {
-			// registerTool ran at load (the flag was unreadable then), so a stock
-			// session must actively drop execute from the surface to stay stock.
+			// --- drop execute so a stock session stays stock ---
 			pi.setActiveTools(pi.getActiveTools().filter((name) => name !== "execute"));
 			return;
 		}
-		// Active: the whole LLM surface collapses to the one tool.
+		// --- active: the whole surface collapses to the one tool ---
 		pi.setActiveTools(["execute"]);
-		// Revive a previous run's namespace before the first cell. This is the
-		// expected path, but never the only one: pi skips session_start on reload
-		// for extensions like this one, so the engine also revives itself when a
-		// cell has to build it. See session-engine.ts.
+		// --- revive the previous run; the engine also self-revives if session_start was skipped ---
 		location = { cwd: ctx.cwd, sessionFile: ctx.sessionManager.getSessionFile() ?? undefined };
 		const { restore } = await lifecycle.acquire("startup");
 		if (restore && restore.restored.length > 0) {
@@ -155,8 +138,7 @@ export default function (pi: ExtensionAPI) {
 		const stashed = pendingErrorResults.get(event.toolCallId);
 		pendingErrorResults.delete(event.toolCallId);
 		if (!stashed || !event.isError) return undefined;
-		// Re-attach the collapsed metadata (header details/stack) that pi's loop
-		// threw away, so an errored cell still shows its structure.
+		// --- restore the collapsed details an errored cell lost ---
 		return { content: event.content, details: stashed.details, isError: true };
 	});
 
@@ -183,7 +165,7 @@ export default function (pi: ExtensionAPI) {
 				?.filter((block): block is { type: "text"; text: string } => block.type === "text")
 				.map((block) => block.text)
 				.join("\n");
-			// The call slot renders the whole cell; the result slot contributes nothing.
+			// --- the call slot renders the whole cell, result slot adds nothing ---
 			return { render: () => [], invalidate: () => {} };
 		},
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
@@ -191,12 +173,10 @@ export default function (pi: ExtensionAPI) {
 				throw new Error("pi-repl is dormant in this session. Start pi with --repl (or PI_REPL_FORCE=1) to use execute.");
 			}
 			if (ctx?.cwd) location = { cwd: ctx.cwd, sessionFile: ctx.sessionManager?.getSessionFile?.() ?? undefined };
-			// Building the engine here means the previous one went away mid-session;
-			// acquire revives it and arms the notice this cell will carry.
+			// --- previous engine died mid-session; acquire revives it ---
 			const { engine: m } = await lifecycle.acquire("cell");
 			try {
-				// Accumulate: partial updates must only ever grow, or the TUI row height
-				// oscillates with each replacing chunk (visible as jumping).
+				// --- accumulate partial updates so the row height doesn't oscillate ---
 				let streamed = "";
 				const r = await m.execute(params.code, {
 					signal,
@@ -205,52 +185,44 @@ export default function (pi: ExtensionAPI) {
 						onUpdate?.({ content: [{ type: "text", text: streamed }], details: {} });
 					},
 				});
-				// A reset notice leads, so the model reads that its namespace was
-				// rebuilt before it reads output produced against the rebuilt one.
-				// The session_start chat message is not enough: mid-work it scrolls
-				// past, and the loss only shows up as a variable reading undefined.
+				// --- reset notice leads so the model reads that its namespace was rebuilt ---
 				const sections = [lifecycle.takeResetNotice(), r.stdout, r.stderr, r.result];
 				const errorLines = r.error ? composeErrorLines(r.error) : undefined;
 				if (r.status === "error" && errorLines) sections.push(errorLines.join("\n"));
 				if (r.status === "aborted") sections.push("[cell aborted]");
-				const text = sections.filter((section) => section !== undefined && section !== "").join("\n");
+			const text = sections.filter((section) => section !== undefined && section !== "").join("\n");
 
-				const details: ExecuteDetails = {
-					status: r.status,
-					durationMs: r.durationMs,
-					errorName: r.error?.name,
-					stdout: r.stdout || undefined,
-					stderr: r.stderr || undefined,
-					result: r.result,
-					errorStack: errorLines,
-				};
-				const result = { content: [{ type: "text" as const, text: text || "(no output)" }], details };
-				if (r.status === "error") {
-					pendingErrorResults.set(toolCallId, { details });
-					throw new Error(text || "(no output)");
-				}
-				return result;
-			} catch (error) {
-				if (error instanceof EngineBusyError) {
-					// Recovery is this handler's job, not the model's: keeping the
-					// wedged engine cached would make every later cell fail the same
-					// way. Discard it; the next cell acquires a fresh engine revived
-					// from the last completed snapshot and carries the reset notice.
-					await lifecycle.discard();
-					throw new Error(
-						"The evaluator was wedged by a previously interrupted cell and has been killed. " +
-							"Run the next cell to get a fresh evaluator revived from the last snapshot; " +
-							"anything newer than that snapshot is gone, so re-verify variables before reusing them.",
-					);
-				}
-				// A guest that died under this cell (process crash, kernel gone)
-				// leaves the engine in shutdown. Drop it so the next acquire rebuilds a
-				// fresh one from the last snapshot instead of failing forever.
-				if (m.isRunning === false) {
-					await lifecycle.discard();
-				}
-				throw error;
+			const details: ExecuteDetails = {
+				status: r.status,
+				durationMs: r.durationMs,
+				errorName: r.error?.name,
+				stdout: r.stdout || undefined,
+				stderr: r.stderr || undefined,
+				result: r.result,
+				errorStack: errorLines,
+			};
+			const result = { content: [{ type: "text" as const, text: text || "(no output)" }], details };
+			if (r.status === "error") {
+				pendingErrorResults.set(toolCallId, { details });
+				throw new Error(text || "(no output)");
 			}
+			return result;
+		} catch (error) {
+			if (error instanceof EngineBusyError) {
+				// --- discard the wedged engine; the next cell revives from the last snapshot ---
+				await lifecycle.discard();
+				throw new Error(
+					"The evaluator was wedged by a previously interrupted cell and has been killed. " +
+						"Run the next cell to get a fresh evaluator revived from the last snapshot; " +
+						"anything newer than that snapshot is gone, so re-verify variables before reusing them.",
+				);
+			}
+			// --- a guest that died leaves the engine shutdown; drop it so the next cell rebuilds fresh ---
+			if (m.isRunning === false) {
+				await lifecycle.discard();
+			}
+			throw error;
+		}
 		},
 	});
 }

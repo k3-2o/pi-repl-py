@@ -1,17 +1,9 @@
 /**
  * EngineManager — the host half of the evaluator.
  *
- * Owns one persistent Bun guest process, speaks the line-JSON protocol over a
+ * Owns one persistent Python guest, speaks the line-JSON protocol over a
  * private pipe, and exposes the execute / snapshot / restore API the `execute`
  * tool is built on.
- *
- * The guarantees it is responsible for:
- *   - one cell runs at a time, in submission order;
- *   - output is attributed to the cell that produced it, and stops the moment
- *     that cell is cancelled;
- *   - the namespace outlives errors, cancellation, and session resume.
- *
- * ARCHITECTURE.md explains how these are achieved and why they matter.
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
@@ -32,21 +24,17 @@ import {
 
 const GUEST_PATH = fileURLToPath(new URL("./guest.py", import.meta.url));
 
-/** Stable install-time venv created by the package's postinstall script. */
+// --- venv created by the package postinstall ---
 function installVenvPython(): string {
 	return join(homedir(), ".pi", "agent", "pi-repl-venv", "bin", "python3");
 }
 
-/** Prefer a venv that has ipykernel/jupyter_client; else PYTHON or python3. */
+// --- prefer a venv with ipykernel; else PYTHON or python3 ---
 function resolvePythonPath(cwd: string | undefined): string {
-	// 1. The repo's own venv (source checkout / dev).
 	const repoVenv = join(dirname(GUEST_PATH), "..", "..", ".venv", "bin", "python3");
 	if (existsSync(repoVenv)) return repoVenv;
-	// 2. A cwd-local venv (project dir).
 	const cwdVenv = cwd ? join(cwd, ".venv", "bin", "python3") : "";
 	if (cwdVenv && existsSync(cwdVenv)) return cwdVenv;
-	// 3. The stable per-user venv built by postinstall when this is installed as
-	//    a package (pi installs under ~/.pi/agent/npm, so no local .venv exists).
 	const installVenv = installVenvPython();
 	if (existsSync(installVenv)) return installVenv;
 	return process.env.PYTHON ?? "python3";
@@ -116,12 +104,8 @@ export interface EngineOptions {
 }
 
 /**
- * Thrown by execute() when a cancelled cell is still occupying the evaluator.
- *
- * Cancellation is cooperative, so a cell spinning in synchronous code never
- * yields and no later cell can run. The engine cannot resolve this on its own;
- * the caller recovers by killing the engine and starting a fresh one, whose
- * restoreState() brings the last snapshotted namespace back.
+ * Thrown when a cancelled cell is still occupying the evaluator. Cancellation is
+ * cooperative; the caller recovers by killing the engine and restoring.
  */
 export class EngineBusyError extends Error {
 	constructor() {
@@ -146,16 +130,16 @@ interface ActiveExecution {
 	settled: boolean;
 	/** Set on cancellation: a cancelled cell must stop contributing output at once. */
 	abortRequested: boolean;
-	/** Aborts host-side work done on this cell's behalf (bridged tool calls). */
+	/**
+	 * Aborts host-side work done on this cell's behalf.
+	 */
 	hostAbort: AbortController;
 	resolve(result: ExecuteResult): void;
 	reject(error: Error): void;
 }
 
 // ── process-wide cleanup ─────────────────────────────────────────────────────
-// Guests are killed when the host exits normally. As a backstop the guest also
-// self-exits when its stdin reaches EOF, which covers a host death abrupt
-// enough that no handler runs.
+// Guests are killed on host exit; the guest also self-exits on stdin EOF.
 
 const liveEngines = new Set<EngineManager>();
 let cleanupHandlersInstalled = false;
@@ -190,11 +174,8 @@ export class EngineManager {
 	private executionQueue: Promise<unknown> = Promise.resolve();
 	private activeExecution?: ActiveExecution;
 	private readonly pendingRequests = new Map<string, PendingRequest>();
-	/** Per-process protocol nonce; also names the guest's internal bindings. */
-	private readonly nonce = randomUUID().replaceAll("-", "");
-	/** Tail of the guest's own stderr, surfaced when it dies unexpectedly. */
-	private guestStderr = "";
-	/** Resolves when the child and all of its stdio have fully closed. */
+	private readonly nonce = randomUUID().replaceAll("-", ""); // --- per-process protocol nonce ---
+	private guestStderr = ""; // --- tail of the guest's stderr, for unexpected-death reports ---
 	private childClosed?: Promise<void>;
 	/** Held so the protocol reader is not garbage-collected mid-session, which
 	 * would close the guest's write end and kill it with EPIPE. */
@@ -222,8 +203,7 @@ export class EngineManager {
 				this.startPromise = undefined;
 				throw error;
 			});
-			// Callers await the rejection; this guard keeps a startup failure that
-			// nobody is waiting on from surfacing as an unhandled rejection.
+			// --- keep a startup failure nobody awaits from surfacing as unhandled ---
 			startup.catch(() => {});
 			this.startPromise = startup;
 		}
@@ -244,7 +224,7 @@ export class EngineManager {
 				PI_REPL_TIMEOUT_MS: String(this.timeoutMs),
 				PI_TOOLBOX_DIR: this.toolboxDir ?? "",
 			},
-			// fd 3 carries protocol traffic so stdout/stderr stay pure user output.
+			// fd 3 carries protocol; stdout/stderr stay user output.
 			stdio: ["pipe", "pipe", "pipe", "pipe"],
 		});
 		this.child = child;
@@ -281,9 +261,7 @@ export class EngineManager {
 		});
 
 		child.on("error", (error) => {
-			// pi runs on Node, but the evaluator is a Bun process. When bun is not
-			// installed the raw ENOENT names a file nobody went looking for, so say
-			// what is actually missing and how to get it.
+			// --- ENOENT names a missing python; say what to install ---
 			const message =
 				(error as NodeJS.ErrnoException).code === "ENOENT"
 					? "Engine process failed: '" +
@@ -294,9 +272,7 @@ export class EngineManager {
 			this.transitionToShutdown(message);
 		});
 		child.on("exit", (code, signal) => {
-			// A killed child's exit event arrives after teardown has already moved
-			// on. Acting on it would reject an execution nobody is waiting for any
-			// more, surfacing as an unhandled rejection in an unrelated context.
+			// --- a killed child's exit arrives after teardown already moved on ---
 			if (this.child !== child) return;
 			if (this.state !== "shutdown") {
 				const tail = this.guestStderr.trim();
@@ -309,9 +285,7 @@ export class EngineManager {
 		});
 
 		await ready;
-		// Being torn down while starting wins: without this the late assignment
-		// resurrects a killed engine as "running", and the child's own exit event
-		// then reads that as an unexpected death.
+		// --- win the shutdown race: don't resurrect a killed engine as running ---
 		if ((this.state as string) === "shutdown") throw new Error("Engine has been shut down");
 		this.state = "running";
 	}
@@ -338,11 +312,7 @@ export class EngineManager {
 	async kill(): Promise<void> {
 		const closed = this.childClosed;
 		this.killSync();
-		// Teardown is not done until the child's stdio is actually closed. A
-		// SIGKILL'd child's pipes are torn down asynchronously, and a spawn that
-		// follows too quickly recycles those descriptors while the teardown is
-		// still in flight - which can close a pipe belonging to the new engine.
-		// Observed as a fresh guest hitting EPIPE on its first protocol write.
+		// --- wait for pipes to close so a fast respawn doesn't recycle descriptors ---
 		if (closed) {
 			await Promise.race([closed, new Promise<void>((resolve) => setTimeout(resolve, 2000).unref?.())]);
 		}
@@ -376,9 +346,7 @@ export class EngineManager {
 	// ── guest messaging ────────────────────────────────────────────────────────
 
 	private sendToGuest(message: HostToGuestMessage): void {
-		// A write into a dying child's stdin can throw synchronously — a dead pipe
-		// here only ever means "engine gone", which callers already learn through
-		// the exit path.
+		// --- a write into a dying child can throw; callers learn via the exit path ---
 		try {
 			this.child?.stdin?.write(encodeMessage(message, this.nonce));
 		} catch {}
@@ -394,18 +362,13 @@ export class EngineManager {
 			this.pendingRequests.set(message.id, { resolve, reject, timer });
 			this.sendToGuest(message);
 		});
-		// Teardown rejects every outstanding request. A caller that has already
-		// moved on is no longer listening, and that rejection would otherwise
-		// escape as an unhandled rejection in whatever happens to be running.
-		// Marking it handled here does not hide anything from the real caller,
-		// which still receives the rejection through the returned promise.
+		// --- a caller that moved on isn't listening; that rejection could escape as unhandled ---
 		pending.catch(() => {});
 		return pending;
 	}
 
 	private handleGuestLine(line: string): void {
-		// fd 3 carries only protocol traffic; a line that fails to decode (wrong
-		// nonce, malformed) is discarded rather than shown as output.
+		// fd 3 is protocol-only; a line that fails to decode is discarded.
 		const message = decodeMessage<GuestToHostMessage>(line, this.nonce);
 		if (!message) return;
 		switch (message.type) {
@@ -419,8 +382,7 @@ export class EngineManager {
 			}
 			case "stream": {
 				const active = this.activeExecution;
-				// Untagged output belongs to no cell; attributing it to whichever cell
-				// is active is the same class of bug as the orphan leak.
+				// --- untagged output belongs to no cell; don't attribute it ---
 				if (!active || active.settled || message.cellId !== active.cellId) return;
 				this.appendOutput(active, message.name, message.chunk);
 				break;
@@ -487,8 +449,7 @@ export class EngineManager {
 	// ── execute ────────────────────────────────────────────────────────────────
 
 	async execute(code: string, opts: ExecuteOptions = {}): Promise<ExecuteResult> {
-		// Claim the queue slot synchronously, before the first await, so that
-		// submission order is execution order for concurrent callers.
+		// --- claim the queue slot synchronously so order == submission order ---
 		const previous = this.executionQueue;
 		let release: () => void = () => {};
 		this.executionQueue = new Promise<void>((resolve) => {
@@ -593,7 +554,7 @@ export class EngineManager {
 		active.settled = true;
 		if (this.activeExecution === active) this.activeExecution = undefined;
 
-		// A cancelled cell reports "aborted" even if it happened to finish first:
+		// A cancelled cell reports "aborted" even if it finished first:
 		// the caller withdrew interest, so the value is not theirs to consume.
 		let status = active.status;
 		if (active.opts.signal?.aborted) status = "aborted";

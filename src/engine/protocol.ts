@@ -1,19 +1,12 @@
 /**
- * Wire protocol between EngineManager (host) and the Bun guest process.
+ * Wire protocol between EngineManager (host) and the Python guest.
  *
- * Transport: line-delimited JSON on a dedicated pipe (fd 3), never on stdout.
- *
- * Two properties make the channel trustworthy, and both are load-bearing:
- *
- *   1. Separation. The guest's stdout and stderr carry only user output, so a
- *      cell that prints JSON cannot be parsed as protocol traffic. Sharing one
- *      channel would let ordinary output alter the engine's view of a cell.
- *   2. Authentication. Every envelope carries a nonce the host mints at spawn
- *      and the guest erases from its environment before running any cell. Code
- *      inside a cell cannot recover it, so even a deliberate write to fd 3
- *      cannot forge a message.
- *
- * Together they make a cell unable to report its own outcome — it can only run.
+ * Line-delimited JSON on a dedicated pipe (fd 3), never on stdout.
+ * Two load-bearing properties make the channel trustworthy:
+ *   1. Separation. stdout/stderr carry only user output, so a cell printing
+ *      JSON cannot be parsed as protocol traffic.
+ *   2. Authentication. Frames carry a nonce the host mints and the guest
+ *      cannot recover; a cell cannot forge a message.
  */
 
 export interface HostToGuest {

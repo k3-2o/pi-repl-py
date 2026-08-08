@@ -1,22 +1,11 @@
 """
 guest.py — the real IPython kernel guest evaluator for pi-repl.
 
-The TypeScript host (EngineManager) spawns this process once. It starts a real
-local ipykernel via jupyter_client (a subprocess IPython kernel, no separate
-Jupyter server), keeps it alive for the whole session, and bridges the pi-repl
-wire protocol to it:
-
-  stdin (fd 0)  = typed HostToGuest JSON lines   {"run","ping","snapshot",...}
-  fd 3          = GuestToHost JSON lines         {"ready","stream","done",...}
-
-State (variables, functions, imports) survives across calls because the same
-kernel subprocess lives for the whole process. Consecutive cells run against
-the same IPython namespace.
-
-The protocol envelope carries a nonce (PI_RLM_NONCE) the host mints and this
-process erases from its environment before any cell runs, so agent code cannot
-forge protocol traffic on fd 3. Errors surface as "done" status "error" with the
-traceback; the kernel stays alive for the next cell.
+The host spawns this once. It starts a local ipykernel subprocess via
+jupyter_client, keeps it for the session, and bridges the wire protocol to it
+(stdin = commands, fd 3 = results). State survives because the kernel process
+does. Frames carry a nonce the host mints and the guest erases, so agent code
+cannot forge protocol traffic.
 """
 
 from __future__ import annotations
@@ -36,9 +25,7 @@ os.environ.pop(NONCE_ENV, None)
 # Per-cell timeout, from the host engine config (default 60s).
 CELL_TIMEOUT_S = float(os.environ.get("PI_REPL_TIMEOUT_MS", "60000")) / 1000.0
 
-# ── fd 3 protocol writer (line-buffered) ─────────────────────────────────────
-# dup so we don't close the caller's fd 3 on process exit; line-buffered for
-# atomic JSON frames.
+# fd 3 protocol writer; dup'd so we don't close the caller's fd 3 on exit.
 _proto = os.fdopen(os.dup(PROTOCOL_FD), "w", buffering=1)
 
 
@@ -64,11 +51,8 @@ def _decode(line):
     return obj
 
 
-# ── toolbox functions, exec'd into every kernel ─────────────────────────────
-# Loaded from a directory (default: the sibling `tools/` dir shipped with the
-# repo; overridable via PI_TOOLBOX_DIR for the user's own folder). Each *.py file
-# defines one exported function. `help` and `ls` are hard-wired here, not
-# configurable, so a weak model always has a way to discover the toolbox.
+# Toolbox: one function per *.py, exec'd into every kernel (`PI_TOOLBOX_DIR`,
+# default the sibling toolbox/ dir). help/ls are hard-wired, not configurable.
 
 def _toolbox_files(directory):
     """Return {function_name: source} for each *.py in `directory`."""

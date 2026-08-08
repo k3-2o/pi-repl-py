@@ -272,11 +272,9 @@ function previewShellCommandScored(command: string): { text: string; strength: n
 		}
 	}
 	if (!best) return { text: "", strength: 0 };
-	// Trailing redirections are plumbing, not intent, and they eat descriptor
-	// budget ("bun test test/ 2…").
+	// --- trailing redirections are plumbing, not intent ---
 	const cleaned = best.text.replace(/(?:\s*(?:2>&1|[12]?>\s*\/dev\/null|&>\s*\/dev\/null))+\s*$/, "");
-	// A stripped cd prefix still matters — "bun test" somewhere else is a
-	// different fact from "bun test" here.
+	// --- a stripped cd prefix still matters ---
 	const text = cwdSuffix && !cleaned.includes(cwdSuffix) ? cleaned + " (" + cwdSuffix + ")" : cleaned;
 	return { text: descriptor(text), strength: best.score };
 }
@@ -302,9 +300,7 @@ function shellCandidates(
 	while (match) {
 		const span = scanTemplate(masked, match.index + match[0].length - 1);
 		const command = previewShellCommandScored(substituteVars(span.body, vars));
-		// The command's own strength breaks ties between several shell calls in
-		// one cell, scaled to stay inside the shell band (below agent's 100).
-		// Setup-only commands drop below file effects: they serve the real work.
+		// --- the command's own strength breaks ties; setup-only drops lower ---
 		if (command.text) {
 			const setupOnly = SHELL_SETUP_WORDS.has(shellWords(command.text)[0] ?? "");
 			const score = setupOnly ? 72 : 90 + Math.min(command.strength, 200) / 25;
@@ -343,7 +339,7 @@ function agentCandidates(
 			const identifier = rest.match(/^\s*([A-Za-z_$][\w$]*)/)?.[1];
 			task = identifier ? (vars.get(identifier) ?? identifier) : undefined;
 		}
-		// A chosen child name is identity; lead with it when present.
+		// --- a chosen child name is identity; lead with it ---
 		const name = masked.slice(argsStart).match(/name\s*:\s*(?:"([^"]*)"|'([^']*)')/);
 		const label = name?.[1] ?? name?.[2];
 		tasks.push(label && task ? label + ": " + task : (label ?? task ?? "subagent"));
@@ -441,7 +437,7 @@ function bridgedToolCandidates(source: string, vars: ReadonlyMap<string, string>
 		const argMatch = props.match(new RegExp(spec.arg + "\\s*:\\s*([^,}]+)"));
 		const target = argMatch ? resolveArgText(argMatch[1] ?? "", vars) : undefined;
 		if (!target) continue;
-		// A bridged bash call is a command like any other; show the command.
+		// --- a bridged bash call is a command like any other ---
 		const text = spec.verb ? spec.verb + " " + target : previewShellCommand(target) || target;
 		candidates.push({ kind: "ts", text: descriptor(text), score: spec.score });
 	}
@@ -487,8 +483,8 @@ function genericCandidates(masked: string): Candidate[] {
 		const score = genericLineScore(line);
 		if (score < 0) continue;
 		const text = consoleInnerCall(line) ?? line;
-		// Later lines win ties: cells read as setup-then-act, and the act is the
-		// story. The bonus stays below one point so it never crosses score bands.
+		// --- later lines win ties: cells read as setup-then-act, and the act is the story ---
+
 		candidates.push({ kind: "ts", text: descriptor(text), score: score + Math.min(index, 90) / 100 });
 	}
 	return candidates;
@@ -501,8 +497,8 @@ export function previewCell(code: string): CellPreview {
 	if (!source) return { kind: "ts", text: "" };
 	const vars = stringConsts(source);
 
-	// Order matters: a subagent prompt may contain shell syntax, so agent spans
-	// are masked before the shell scan; shell bodies are masked before the
+	// Order matters: agent spans scrub shell-looking syntax first, then
+	// the shell scan masks shell bodies before the agent scan.
 	// generic line scan so command text is never scored as TypeScript.
 	const agent = agentCandidates(source, vars);
 	const shell = shellCandidates(agent.masked, vars);
