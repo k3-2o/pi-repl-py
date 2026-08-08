@@ -42,7 +42,7 @@ function resolvePythonPath(cwd: string | undefined): string {
 	return process.env.PYTHON ?? "python3";
 }
 const DEFAULT_MAX_OUTPUT_CHARS = 65536;
-const READY_TIMEOUT_MS = 10_000;
+const READY_TIMEOUT_MS = 30_000;
 const ABORT_GRACE_MS = 500;
 const PING_TIMEOUT_MS = 5_000;
 const DEFAULT_SNAPSHOT_DEBOUNCE_MS = 1500;
@@ -632,8 +632,8 @@ export class EngineManager {
 		const stdout = truncateWithMarker(active.stdout, active.maxChars, active.stdoutTruncated);
 		const stderr = truncateWithMarker(active.stderr, active.maxChars, active.stderrTruncated);
 		let result = active.result;
-		if (result !== undefined && result.length > active.maxChars) {
-			result = truncateWithMarker(result, active.maxChars, true);
+		if (result != null && String(result).length > active.maxChars) {
+			result = truncateWithMarker(String(result), active.maxChars, true);
 		}
 
 		active.resolve({

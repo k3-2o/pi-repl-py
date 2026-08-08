@@ -35,6 +35,11 @@ test:
 	# Guest: the Python evaluator contract.
 	{{PY}} -m pytest test/guest_contract.py -q
 
+# ── integration (slow: boots a real kernel per engine) ────────────────────
+integration:
+	bun test test/engine.integration.test.ts
+	{{PY}} -m pytest test/guest_contract.py -q
+
 # ── ci (full gate) ────────────────────────────────────────────────────────
 ci: check
 

@@ -76,7 +76,7 @@ export function encodeMessage(message: HostToGuestMessage | GuestToHostMessage, 
 }
 
 export function decodeMessage<T>(line: string, nonce?: string): T | null {
-	if (!line.includes(`"${ENVELOPE_KEY}":1`)) return null;
+	if (!line.trim()) return null;
 	try {
 		const parsed = JSON.parse(line);
 		if (parsed?.[ENVELOPE_KEY] !== 1 || typeof parsed.type !== "string") return null;
