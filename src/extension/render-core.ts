@@ -35,7 +35,7 @@ export type BgKind = "toolPendingBg" | "toolSuccessBg" | "toolErrorBg";
 export interface RenderDeps {
 	fg(color: string, text: string): string;
 	getBgAnsi(bg: BgKind): string;
-	highlight(line: string): string;
+	highlight(code: string): string[];
 	keyHint(expanded: boolean): string;
 	visibleWidth(text: string): number;
 	truncateToWidth(text: string, width: number, ellipsis: string): string;
@@ -127,8 +127,15 @@ function marker(state: ExecuteRenderState, deps: RenderDeps): string {
 	}
 }
 
-function highlightLine(line: string, deps: RenderDeps): string {
-	return isShellish(line) ? deps.fg("accent", line) : deps.highlight(line);
+function highlightLines(code: string, deps: RenderDeps): string[] {
+	if (!code) return [];
+	const lines = code.split("\n");
+	if (lines.some((line) => isShellish(line))) {
+		// Cells that contain Bun.$ templates are shell-ish; paint them as accent
+		// rather than trying to syntax-highlight TypeScript/Bun syntax as Python.
+		return lines.map((line) => deps.fg("accent", line));
+	}
+	return deps.highlight(code);
 }
 
 function outputText(state: ExecuteRenderState): string {
@@ -158,7 +165,7 @@ function topLine(state: ExecuteRenderState, width: number, deps: RenderDeps): st
 	const errorName = !state.isPartial ? state.details?.errorName : undefined;
 	if (errorName) {
 		// --- the error message usually beats a bare name when it fits ---
-		const summary = state.details?.errorStack?.[0];
+		const summary = sanitizeTuiOutput(state.details?.errorStack?.[0] ?? "");
 		suffixParts.push(deps.fg("error", summary && deps.visibleWidth(summary) <= 48 ? summary : errorName));
 	}
 
@@ -182,23 +189,46 @@ function topLine(state: ExecuteRenderState, width: number, deps: RenderDeps): st
 	// Budget: total width minus leading space, prefix, suffix, separators.
 	const fixed = 1 + deps.visibleWidth(prefix) + separatorWidth + deps.visibleWidth(suffix);
 	const previewBudget = Math.max(8, width - fixed - separatorWidth);
-	// A semantic preview is not TypeScript; syntax-highlighting it would lie. Accent it.
-	const middle = preview.text
-		? deps.truncateToWidth(
-				preview.kind === "ts" ? deps.highlight(preview.text) : deps.fg("accent", preview.text),
-				previewBudget,
-				"…",
-			)
-		: !state.executionStarted
-			? deps.fg("muted", "waiting for code")
-			: "";
+	// A semantic preview is a one-line summary of the code. Highlight Python
+	// code the same way the expanded block is highlighted; shell/agent previews
+	// stay accent-colored so they read as intent, not syntax.
+	let middle = "";
+	if (preview.text) {
+		const previewText =
+			preview.kind === "ts"
+				? (deps.highlight(preview.text)[0] ?? deps.fg("accent", preview.text))
+				: deps.fg("accent", preview.text);
+		middle = deps.truncateToWidth(previewText, previewBudget, "…");
+	} else if (!state.executionStarted) {
+		middle = deps.fg("muted", "waiting for code");
+	}
 
 	return [prefix, ...(middle ? [middle] : []), suffix].join(separator);
 }
 
-function addWrapped(lines: string[], prefix: string, text: string, width: number, deps: RenderDeps): void {
+function sanitizeTuiOutput(text: string): string {
+	// Escape sequences and control characters from user code output can move the
+	// cursor, change colors, or print zero-width glyphs that break the TUI layout.
+	// This mirrors pi-fabric's escapeControlChars: keep the visible meaning of
+	// tab/newline, but neutralize everything else.
+	return text
+		.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+		.replace(/\r/g, "␍")
+		.replace(/\t/g, "    ")
+		.replace(/[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f-\x9f]/g, "�");
+}
+
+function addWrapped(
+	lines: string[],
+	prefix: string,
+	text: string,
+	width: number,
+	deps: RenderDeps,
+	options: { sanitize?: boolean } = {},
+): void {
+	const safe = options.sanitize === false ? text : sanitizeTuiOutput(text);
 	const available = Math.max(1, width - 1 - deps.visibleWidth(prefix));
-	const wrapped = deps.wrapTextWithAnsi(text, available);
+	const wrapped = deps.wrapTextWithAnsi(safe, available);
 	for (const [index, line] of (wrapped.length > 0 ? wrapped : [""]).entries()) {
 		const linePrefix = index === 0 ? prefix : " ".repeat(deps.visibleWidth(prefix));
 		lines.push(deps.truncateToWidth(` ${linePrefix}${closeOpenSgr(line)}`, width, ""));
@@ -209,9 +239,11 @@ function renderCode(state: ExecuteRenderState, lines: string[], width: number, d
 	const code = state.code.trimEnd();
 	if (!code) return false;
 	lines.push("");
+	const highlighted = highlightLines(code, deps);
 	for (const [index, rawLine] of code.split("\n").entries()) {
 		const prefix = index === 0 ? deps.fg("dim", "› ") : deps.fg("dim", "  ");
-		addWrapped(lines, prefix, highlightLine(rawLine, deps) || " ", width, deps);
+		// Code is already syntax-highlighted; don't strip its ANSI.
+		addWrapped(lines, prefix, highlighted[index] ?? rawLine, width, deps, { sanitize: false });
 	}
 	return true;
 }

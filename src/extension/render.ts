@@ -23,7 +23,7 @@ function makeDeps(theme: Theme): RenderDeps {
 	return {
 		fg: (color, text) => theme.fg(color as Parameters<Theme["fg"]>[0], text),
 		getBgAnsi: (bg: BgKind) => theme.getBgAnsi(bg),
-		highlight: (line) => highlightCode(line, "python")[0] ?? line,
+		highlight: (code) => highlightCode(code, "python"),
 		keyHint: (expanded) => {
 			const text = expanded ? "to collapse" : "to expand";
 			const key = keyText("app.tools.expand");

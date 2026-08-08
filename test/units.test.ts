@@ -139,7 +139,7 @@ function testDeps(overrides: Partial<RenderDeps> = {}): RenderDeps {
 	return {
 		fg: (_color, text) => `\x1b[31m${text}\x1b[0m`,
 		getBgAnsi: () => "\x1b[44m",
-		highlight: (line) => `\x1b[32m${line}\x1b[0m`,
+		highlight: (code) => code.split("\n").map((line) => `\x1b[32m${line}\x1b[0m`),
 		keyHint: (expanded) => (expanded ? "ctrl+o to collapse" : "ctrl+o to expand"),
 		visibleWidth: (text) => stripAnsi(text).length,
 		truncateToWidth: (text, width, ellipsis = "") => {
@@ -321,6 +321,25 @@ describe("render-core: layout", () => {
 		expect(stripAnsi(renderExecuteCell(done, 80, deps).join("\n"))).toContain("no output");
 		const running = makeState({ expanded: true, details: undefined, hasResult: false, isPartial: true });
 		expect(stripAnsi(renderExecuteCell(running, 80, deps).join("\n"))).toContain("waiting for output");
+	});
+
+	test("output ANSI escapes and control chars are sanitized", () => {
+		const deps = testDeps();
+		const state = makeState({
+			expanded: true,
+			details: {
+				status: "ok",
+				stdout: "\x1b[31mred\x1b[0m\n\x07beep\t",
+				stderr: "\r\x00\x1b[1m",
+			},
+		});
+		const rendered = stripAnsi(renderExecuteCell(state, 80, deps).join("\n"));
+		expect(rendered).toContain("red");
+		expect(rendered).toContain("beep");
+		expect(rendered).not.toContain("\x1b[");
+		expect(rendered).not.toContain("\x07");
+		expect(rendered).toContain("    "); // tab expanded
+		expect(rendered).toContain("␍"); // carriage return escaped
 	});
 
 	test("background is re-armed after inner SGR resets so it spans the row", () => {
