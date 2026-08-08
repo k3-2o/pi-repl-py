@@ -74,19 +74,6 @@ export interface ExecuteOptions {
 	maxOutputChars?: number;
 }
 
-/** Passed alongside a host request's payload. */
-export interface HostRequestContext {
-	/** Aborts when the cell that (transitively) issued the request is cancelled. */
-	signal?: AbortSignal;
-}
-
-/** Handles one typed request from guest code. Reply is sent back verbatim. */
-export type HostRequestHandler = (
-	payload: Record<string, unknown>,
-	context?: HostRequestContext,
-) => Promise<Record<string, unknown>>;
-export type HostRequestHandlers = Record<string, HostRequestHandler>;
-
 export interface SnapshotResult {
 	path: string;
 	/** Top-level names successfully serialized. */
@@ -105,14 +92,11 @@ export interface EngineOptions {
 	cwd?: string;
 	/** Python interpreter to spawn the guest with. Defaults to the repo venv. */
 	pythonPath?: string;
-	/** Standard helpers to preload into the kernel (passed as PI_REPL_HELPERS). */
-	helpers?: string[];
 	/** Directory of toolbox functions to exec into the kernel (PI_TOOLBOX_DIR). */
 	toolboxDir?: string;
 	/** Per-cell response timeout, ms. Default 60_000. */
 	timeoutMs?: number;
 	env?: Record<string, string>;
-	hostHandlers?: HostRequestHandlers;
 	/** Persist/revive the namespace across engine restarts. */
 	snapshot?: {
 		path: string;
@@ -188,7 +172,6 @@ function truncateWithMarker(text: string, maxChars: number, wasTruncated: boolea
 export class EngineManager {
 	private readonly options: EngineOptions;
 	private readonly pythonPath: string;
-	private readonly helpers: string[];
 	private readonly toolboxDir?: string;
 	private readonly timeoutMs: number;
 	private child?: ChildProcess;
@@ -206,15 +189,12 @@ export class EngineManager {
 	/** Held so the protocol reader is not garbage-collected mid-session, which
 	 * would close the guest's write end and kill it with EPIPE. */
 	private protocolReader?: ReturnType<typeof createInterface>;
-	private lastCellCode?: string;
-	/** Set when an aborted cell may still be wedging the guest's event loop. */
 	private maybeWedged = false;
 	private snapshotTimer?: ReturnType<typeof setTimeout>;
 
 	constructor(options: EngineOptions = {}) {
 		this.options = options;
 		this.pythonPath = options.pythonPath ?? resolvePythonPath(options.cwd);
-		this.helpers = options.helpers ?? [];
 		this.toolboxDir = options.toolboxDir;
 		this.timeoutMs = options.timeoutMs ?? 60_000;
 	}
@@ -251,7 +231,6 @@ export class EngineManager {
 				...process.env,
 				...(this.options.env ?? {}),
 				[NONCE_ENV]: this.nonce,
-				PI_REPL_HELPERS: this.helpers.join(","),
 				PI_REPL_TIMEOUT_MS: String(this.timeoutMs),
 				PI_TOOLBOX_DIR: this.toolboxDir ?? "",
 			},
@@ -387,10 +366,9 @@ export class EngineManager {
 	// ── guest messaging ────────────────────────────────────────────────────────
 
 	private sendToGuest(message: HostToGuestMessage): void {
-		// A write into a dying child's stdin can throw synchronously. A dead pipe
-		// here only ever means "engine gone", which every caller already learns
-		// through the exit path — a late host reply must not become an unhandled
-		// rejection inside dispatchHostRequest's own error handler.
+		// A write into a dying child's stdin can throw synchronously — a dead pipe
+		// here only ever means "engine gone", which callers already learn through
+		// the exit path.
 		try {
 			this.child?.stdin?.write(encodeMessage(message, this.nonce));
 		} catch {}
@@ -461,10 +439,6 @@ export class EngineManager {
 				this.resolveRequest(message.id, message);
 				break;
 			}
-			case "host_request": {
-				void this.dispatchHostRequest(message.id, message.requestType, message.payload);
-				break;
-			}
 		}
 	}
 
@@ -474,24 +448,6 @@ export class EngineManager {
 		this.pendingRequests.delete(id);
 		if (pending.timer) clearTimeout(pending.timer);
 		pending.resolve(message);
-	}
-
-	private async dispatchHostRequest(id: string, requestType: string, payload: Record<string, unknown>): Promise<void> {
-		try {
-			const handler = this.options.hostHandlers?.[requestType];
-			if (!handler) {
-				throw new Error(`host request type "${requestType}" is not available in this session`);
-			}
-			// Attribute the request to the cell that (transitively) issued it, and
-			// hand it that cell's abort signal so host-side work (a bridged bash
-			// call, a subprocess) stops when the cell does.
-			const cellSourceCode = this.activeExecution?.code ?? this.lastCellCode;
-			const reply = await handler({ ...payload, cellSourceCode }, { signal: this.activeExecution?.hostAbort.signal });
-			this.sendToGuest({ type: "host_reply", id, status: "ok", payload: reply });
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			this.sendToGuest({ type: "host_reply", id, status: "error", error: message });
-		}
 	}
 
 	// ── output accumulation ────────────────────────────────────────────────────
@@ -568,7 +524,6 @@ export class EngineManager {
 	private executeInner(code: string, opts: ExecuteOptions): Promise<ExecuteResult> {
 		const cellId = randomUUID();
 		const started = Date.now();
-		this.lastCellCode = code;
 
 		return new Promise<ExecuteResult>((resolve, reject) => {
 			const active: ActiveExecution = {

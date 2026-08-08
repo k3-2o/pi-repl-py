@@ -29,11 +29,11 @@ class GuestProc:
     protocol pipe.
     """
 
-    def __init__(self, helpers=("read", "write", "edit", "bash"), toolbox_dir=None):
+    def __init__(self, toolbox_dir=None):
         self.fd3 = tempfile.NamedTemporaryFile(delete=False)
         self.fd3_name = self.fd3.name
         self.fd3.close()
-        env = dict(os.environ, PI_RLM_NONCE="testnonce", PI_REPL_HELPERS=",".join(helpers))
+        env = dict(os.environ, PI_RLM_NONCE="testnonce")
         if toolbox_dir:
             env["PI_TOOLBOX_DIR"] = toolbox_dir
         # bash guarantees the child's fd 3 = the temp file
@@ -272,7 +272,7 @@ def test_custom_tool_file_loads_from_toolbox_dir():
     d = tempfile.mkdtemp()
     try:
         (pathlib.Path(d) / "double.py").write_text("def double(n):\n    return n * 2\n")
-        g = GuestProc(helpers=(), toolbox_dir=d)
+        g = GuestProc(toolbox_dir=d)
         for m in g.frames(timeout=20):
             if m.get("type") == "ready":
                 break

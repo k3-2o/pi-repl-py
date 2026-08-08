@@ -48,7 +48,14 @@ clean:
 	rm -rf node_modules .venv .pytest_cache .ruff_cache dist __pycache__
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +
 
-# ── setup (from clone to dev-ready) ───────────────────────────────────────
+# ── setup (from clone to dev-ready) ────────────────────────────────────
+# Creates a project-local venv (system python3 ≥3.11) if missing, then installs
+# deps. CI calls this before running the gate.
 setup:
 	npm install
+	# Prefer an existing repo venv; otherwise build one from a system python.
+	if [ ! -x {{PY}} ]; then \
+	  python3 -m venv .venv && \
+	  {{PY}} -m pip install --upgrade pip; \
+	fi
 	{{PY}} -m pip install pytest ruff ipykernel jupyter_client

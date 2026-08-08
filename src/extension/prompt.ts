@@ -1,22 +1,18 @@
 /**
- * The system prompt (Python evaluator edition).
+ * The system prompt (Python toolbox edition).
  *
  * Replaces pi's default coding-assistant prompt rather than appending to it.
  * The default describes read, bash, and edit *tools*, none of which are
  * registered in this configuration; leaving it in place would point the model
  * at tools it cannot call. It teaches the working style the Python evaluator
- * rewards: keep state in variables, run shell in-language via `sh()`, delegate
- * with subagents, and let each cell build on the last.
+ * rewards: keep state in variables, run shell in-language via bash(), use the
+ * toolbox functions, and let each cell build on the last.
  */
 
 export interface RlmPromptOptions {
 	cwd: string;
 	messagesPath?: string;
-	depth?: number;
-	allowRecursion?: boolean;
 	contextFiles?: Array<{ path: string; content: string }>;
-	/** One line per mounted host tool, from the bridge's own schemas. */
-	toolSummaries?: string[];
 }
 
 const EVALUATOR_CONTROL_PROMPT = [
@@ -50,30 +46,7 @@ function buildHostToolsSection(): string {
 	].join("\n");
 }
 
-function buildChildDoctrine(options: RlmPromptOptions): string | undefined {
-	const depth = options.depth ?? 0;
-	if (depth <= 0) return undefined;
-	return [
-		"You are a child agent; your task prompt comes from your parent agent.",
-		"When the task calls for an answer, your final printed answer is your reply: it is written to your output file, which your parent reads. Keep it self-contained.",
-	].join("\n");
-}
-
-const SUBAGENT_GUIDANCE = [
-	"# Delegating to sub-agents",
-	"",
-	"Spawn independent, self-contained work with `handle = rlm.run('task prompt', name='worker')`. This returns at admission, not completion; keep the handle to stop or inspect the child later.",
-	"A child's final answer is written to `handle['output_file']` when it finishes. Poll `rlm.list_subagents()['subagents']` until a child's status is no longer 'running', then read the file (`open(handle['output_file']).read()`).",
-	"Choose a stable child name with `name='api-reviewer'`; names must be unique among siblings. If omitted, the host generates a readable unique name.",
-	"Pass `model='provider/model'` only when a different model is explicitly needed.",
-	"Use `rlm.list_subagents()` to recover direct child handles. Delete a direct child explicitly with `rlm.delete_subagent(id_or_name)` when it is no longer needed.",
-	"Have children write files and read those files for fan-in.",
-	"Delegate parallel context-heavy research or independent implementation; do a single known lookup, edit, or command inline.",
-].join("\n");
-
 export function buildRlmPyPrompt(options: RlmPromptOptions): string {
-	const depth = options.depth ?? 0;
-	const allowRecursion = options.allowRecursion ?? true;
 	const now = new Date();
 	const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 
@@ -84,22 +57,9 @@ export function buildRlmPyPrompt(options: RlmPromptOptions): string {
 		"",
 		`Working directory: ${options.cwd.replace(/\\/g, "/")}`,
 		`Conversation log: ${(options.messagesPath ?? "not persisted").replace(/\\/g, "/")}`,
-		`Recursive agent depth: ${depth}`,
 		`Current date: ${date}`,
 		"The evaluator is Python. The full Python standard library is available (open, os, subprocess, pathlib, collections, math, random, json, ...). Install extra packages only when genuinely needed, via the project's own environment.",
 	];
-
-	const childDoctrine = buildChildDoctrine(options);
-	if (childDoctrine) parts.push("", childDoctrine);
-
-	if (allowRecursion) {
-		parts.push(
-			"",
-			"An `rlm` object is already in your evaluator namespace. `rlm.run('sub-task', name='x')` spawns a child agent and returns immediately after task admission with `rlm_child_id`, `name`, `session_dir`, `output_file`, and `model`; it never waits for or returns the child's answer.",
-			"Spawn independent children in separate calls; collect their results from their output files.",
-		);
-		parts.push("", SUBAGENT_GUIDANCE);
-	}
 
 	parts.push("", EVALUATOR_CONTROL_PROMPT);
 	parts.push("", buildHostToolsSection());

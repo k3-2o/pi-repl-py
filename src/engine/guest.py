@@ -33,10 +33,6 @@ PROTOCOL_FD = 3
 NONCE = os.environ.get(NONCE_ENV, "")
 os.environ.pop(NONCE_ENV, None)
 
-HELPERS = [h.strip() for h in os.environ.get("PI_REPL_HELPERS", "").split(",") if h.strip()]
-# Directory of toolbox functions, one file per function, exec'd into every kernel.
-TOOLBOX_DIR_ENV = "PI_TOOLBOX_DIR"
-TOOLBOX_DIR = os.environ.get(TOOLBOX_DIR_ENV, "").strip()
 # Per-cell timeout, from the host engine config (default 60s).
 CELL_TIMEOUT_S = float(os.environ.get("PI_REPL_TIMEOUT_MS", "60000")) / 1000.0
 
@@ -96,6 +92,7 @@ def _toolbox_files(directory):
     return names
 
 DEFAULT_TOOLBOX_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "toolbox")
+TOOLBOX_DIR = os.environ.get("PI_TOOLBOX_DIR", "").strip()
 _TOOLBOX_SRC = _toolbox_files(TOOLBOX_DIR or DEFAULT_TOOLBOX_DIR)
 
 # help/ls are part of the evaluator, not the toolbox: any kernel, even a bare
@@ -173,10 +170,10 @@ class Kernel:
         # Skip the toolbox functions and intrinsic helpers (functions don't
         # pickle anyway; excluding avoids a noisy `failed` list on every save).
         tool_names = sorted(set(_TOOLBOX_SRC) | {"ls", "help"})
-        skip_names = json.dumps([h for h in HELPERS if h.isidentifier()] + tool_names)
+        skip_names = json.dumps(tool_names)
         out, _, _, _ = self.execute(
             "import pickle as _pk, base64 as _b64, json as _js\n"
-            "__rlm_skip = set(" + skip_names + ") | {'In','Out','get_ipython','exit','quit','open','_rl_preload'}\n"
+            "__rlm_skip = set(" + skip_names + ") | {'In','Out','get_ipython','exit','quit','open'}\n"
             "__rlm_v = {}\n__rlm_f = []\n"
             "for _k, _v in list(globals().items()):\n"
             "    # skip IPython bookkeeping and names with a leading underscore\n"

@@ -1,10 +1,10 @@
 /**
- * pi-rlm: RLM engine for pi.
+ * pi-repl: Python REPL engine for pi.
  *
- * A single LLM-facing tool, `execute`, running TypeScript in a persistent Bun
- * evaluator. Everything else — shell, files, subagents, host callbacks — is
- * expressed as code inside that tool rather than as more tools, which is what
- * lets capabilities grow without changing the interface the model sees.
+ * A single LLM-facing tool, `execute`, running Python in a persistent evaluator.
+ * Everything else — shell, files, custom toolbox functions — is expressed as
+ * code inside that tool rather than as more pi tools, which is what lets
+ * capabilities grow without changing the interface the model sees.
  */
 
 import { basename, join } from "node:path";
@@ -12,15 +12,13 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 import { EngineBusyError, EngineManager } from "../engine/index.js";
 import { loadConfig } from "./config.js";
-import { createPiToolsHost, type PiToolsHost } from "./pi-tools.js";
 import { buildRlmPyPrompt } from "./prompt.js";
 import { ExecuteCellComponent, type ExecuteDetails, type ExecuteRenderState } from "./render.js";
 import { EngineLifecycle, summarizeNames } from "./session-engine.js";
-import { createSubagentHost, type SubagentHost } from "./subagents.js";
 
 const executeSchema = Type.Object({
 	code: Type.String({
-		description: "TypeScript to execute in the persistent Bun evaluator.",
+		description: "Python to execute in the persistent evaluator.",
 	}),
 });
 
@@ -53,10 +51,7 @@ function composeErrorLines(error: { name: string; message: string; stack: string
 	return stack[0]?.trim() === header ? stack : [header, ...stack];
 }
 
-const DEFAULT_SUBAGENT_MODEL = process.env.PI_RLM_SUBAGENT_MODEL ?? "anthropic/haiku";
 const CFG = loadConfig();
-const DEPTH = Number(process.env.PI_RLM_DEPTH ?? "0");
-const MAX_DEPTH = Number(process.env.PI_RLM_MAX_DEPTH ?? "2");
 
 export default function (pi: ExtensionAPI) {
 	pi.registerFlag("rlm", {
@@ -69,56 +64,35 @@ export default function (pi: ExtensionAPI) {
 	// subagent children and test rigs activate without flag plumbing.
 	const active = () => pi.getFlag("rlm") === true || process.env.PI_RLM_FORCE === "1";
 
-	let subagents: SubagentHost | undefined;
-	let piTools: PiToolsHost | undefined;
+	let location = { cwd: process.cwd(), sessionFile: undefined as string | undefined };
 	// A tool error must be thrown for pi to mark the call as failed, but pi's
 	// loop rebuilds thrown errors as bare text results, discarding details and
-	// content — and with them the collapsed header's metadata and any images a
-	// bridged tool produced before the cell failed. Stash both at throw time
-	// and re-attach them in the tool_result hook below.
-	const pendingErrorResults = new Map<
-		string,
-		{ details: ExecuteDetails; images: Array<{ type: "image"; data: string; mimeType: string }> }
-	>();
-	// Where the engine will be built from, captured by whichever event runs first.
-	let location = { cwd: process.cwd(), sessionFile: undefined as string | undefined };
+	// content — and with them the collapsed header's metadata. Recapture them at
+	// throw time and re-attach them in the tool_result hook below.
+	const pendingErrorResults = new Map<string, { details: ExecuteDetails }>();
 
 	const lifecycle = new EngineLifecycle<EngineManager>({
 		create() {
 			const { cwd, sessionFile } = location;
 			const sessionKey = sessionFile ? basename(sessionFile).replace(/\.jsonl$/, "") : undefined;
 			const stateDir = join(cwd, ".pi-rlm", sessionKey ?? "ephemeral");
-			subagents = createSubagentHost({
-				cwd,
-				subagentDir: join(stateDir, "subagents"),
-				defaultModel: DEFAULT_SUBAGENT_MODEL,
-				depth: DEPTH,
-				maxDepth: CFG.maxDepth,
-			});
-			piTools = createPiToolsHost({ cwd });
 			return new EngineManager({
 				cwd,
 				pythonPath: CFG.pythonPath,
 				timeoutMs: CFG.timeoutMs,
-				helpers: CFG.helpers,
 				toolboxDir: CFG.toolboxDir,
-				hostHandlers: { ...subagents.handlers, ...piTools.handlers },
 				// A snapshot is keyed to a session file; an ephemeral session has none
 				// to key it to, so its namespace lives and dies with the process.
 				snapshot: sessionKey ? { path: join(stateDir, "namespace.snapshot") } : undefined,
 			});
 		},
 		async dispose(engine) {
-			subagents?.killAll();
-			subagents = undefined;
 			await engine.dispose();
 		},
 		// A wedged guest cannot answer the snapshot request dispose would send
 		// (it would stall for the full request timeout, then fail anyway), so a
 		// discard kills outright and relies on the last completed snapshot.
 		async discard(engine) {
-			subagents?.killAll();
-			subagents = undefined;
 			await engine.kill();
 		},
 	});
@@ -136,12 +110,7 @@ export default function (pi: ExtensionAPI) {
 			systemPrompt: buildRlmPyPrompt({
 				cwd: ctx.cwd,
 				messagesPath: ctx.sessionManager.getSessionFile() ?? undefined,
-				depth: DEPTH,
-				allowRecursion: DEPTH < MAX_DEPTH,
 				contextFiles: options?.contextFiles,
-				// Fresh definitions for the prompt: signatures come from the same
-				// schemas the bridge validates against, so they cannot drift.
-				toolSummaries: createPiToolsHost({ cwd: ctx.cwd }).describe(),
 			}),
 		};
 	});
@@ -186,20 +155,18 @@ export default function (pi: ExtensionAPI) {
 		const stashed = pendingErrorResults.get(event.toolCallId);
 		pendingErrorResults.delete(event.toolCallId);
 		if (!stashed || !event.isError) return undefined;
-		// Images ride along: a tool that read a PNG succeeded even if the cell
-		// later threw, and the model should still see what it read.
-		return { content: [...event.content, ...stashed.images], details: stashed.details, isError: true };
+		// Re-attach the collapsed metadata (header details/stack) that pi's loop
+		// threw away, so an errored cell still shows its structure.
+		return { content: event.content, details: stashed.details, isError: true };
 	});
 
 	pi.registerTool<typeof executeSchema, ExecuteDetails, Partial<ExecuteRenderState>>({
 		name: "execute",
 		label: "execute",
 		description:
-			"Execute TypeScript in a persistent Bun evaluator. Variables, imports, and loaded data persist across calls. " +
-			"Top-level await works. Shell: const out = await Bun.$`cmd`.quiet(); out.stdout.toString(). " +
-			"pi's file tools are mounted as tools.* (tools.read, tools.edit, tools.grep, ...). " +
-			"Subagents: await rlm.run(prompt) returns an admission handle; the child's answer lands in handle.output_file. " +
-			"The final expression of the cell is returned as the result.",
+			"Execute Python in a persistent evaluator. Variables, imports, and loaded data persist across calls. " +
+			"Toolbox functions are preloaded: read(path), write(path, content), edit(path, old_text, new_text), bash(cmd). " +
+			"Use ls() / help(name) to discover them. The final expression of the cell is returned as the result.",
 		parameters: executeSchema,
 		renderShell: "self",
 		renderCall(args, theme, context) {
@@ -247,9 +214,6 @@ export default function (pi: ExtensionAPI) {
 				if (r.status === "error" && errorLines) sections.push(errorLines.join("\n"));
 				if (r.status === "aborted") sections.push("[cell aborted]");
 				const text = sections.filter((section) => section !== undefined && section !== "").join("\n");
-				// Images from bridged tool calls cross host-side: the guest saw a
-				// count, the model sees the pixels.
-				const images = piTools?.drainImages() ?? [];
 
 				const details: ExecuteDetails = {
 					status: r.status,
@@ -260,18 +224,9 @@ export default function (pi: ExtensionAPI) {
 					result: r.result,
 					errorStack: errorLines,
 				};
-				const result = {
-					content: [
-						{ type: "text" as const, text: text || "(no output)" },
-						...images.map((image) => ({ type: "image" as const, data: image.data, mimeType: image.mimeType })),
-					],
-					details,
-				};
+				const result = { content: [{ type: "text" as const, text: text || "(no output)" }], details };
 				if (r.status === "error") {
-					pendingErrorResults.set(toolCallId, {
-						details,
-						images: images.map((image) => ({ type: "image" as const, data: image.data, mimeType: image.mimeType })),
-					});
+					pendingErrorResults.set(toolCallId, { details });
 					throw new Error(text || "(no output)");
 				}
 				return result;

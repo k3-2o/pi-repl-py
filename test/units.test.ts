@@ -7,9 +7,7 @@
  * Those are tested here in isolation, where their edge cases are reachable.
  */
 
-import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { decodeMessage, encodeMessage } from "../src/engine/protocol.js";
 import { buildRlmPyPrompt } from "../src/extension/prompt.js";
@@ -24,7 +22,6 @@ import {
 	renderExecuteCell,
 	statusKind,
 } from "../src/extension/render-core.js";
-import { createSubagentHost, defaultSubagentName, MAX_SUBAGENT_NAME_LENGTH } from "../src/extension/subagents.js";
 
 describe("protocol framing", () => {
 	test("encode produces exactly one newline-terminated envelope line", () => {
@@ -51,12 +48,11 @@ describe("protocol framing", () => {
 // ── prompt ────────────────────────────────────────────────────────────────────
 
 describe("system prompt", () => {
-	test("states identity, cwd, depth, and the evaluator doctrine", () => {
-		const prompt = buildRlmPyPrompt({ cwd: "/tmp/work", messagesPath: "/tmp/s.jsonl", depth: 0 });
+	test("states identity, cwd, and the evaluator doctrine", () => {
+		const prompt = buildRlmPyPrompt({ cwd: "/tmp/work", messagesPath: "/tmp/s.jsonl" });
 		expect(prompt).toContain("general purpose agent that uses code");
 		expect(prompt).toContain("/tmp/work");
 		expect(prompt).toContain("/tmp/s.jsonl");
-		expect(prompt).toContain("Recursive agent depth: 0");
 		expect(prompt).toContain("bash()");
 		expect(prompt).toContain("Toolbox functions");
 		expect(prompt).toContain("persist");
@@ -65,23 +61,6 @@ describe("system prompt", () => {
 		expect(prompt).toContain("<rlm_engine_reset>");
 		expect(prompt).toContain("re-verify");
 		expect(prompt).toContain("shell command");
-	});
-
-	test("subagent guidance appears only when recursion is allowed", () => {
-		const withRecursion = buildRlmPyPrompt({ cwd: "/tmp", allowRecursion: true });
-		expect(withRecursion).toContain("rlm.run");
-		expect(withRecursion).toContain("Delegating to sub-agents");
-		const without = buildRlmPyPrompt({ cwd: "/tmp", allowRecursion: false });
-		expect(without).not.toContain("Delegating to sub-agents");
-	});
-
-	test("child doctrine appears only at depth > 0", () => {
-		// "child agent" alone also appears in the subagent guidance; the doctrine's
-		// identity sentence is the distinctive marker.
-		expect(buildRlmPyPrompt({ cwd: "/tmp", depth: 0 })).not.toContain("You are a child agent");
-		const child = buildRlmPyPrompt({ cwd: "/tmp", depth: 1 });
-		expect(child).toContain("You are a child agent");
-		expect(child).toContain("output file");
 	});
 
 	test("context files are appended verbatim under a project section", () => {
@@ -116,7 +95,7 @@ describe("system prompt", () => {
 	});
 
 	test("no unresolved template placeholders leak into the prompt", () => {
-		const prompt = buildRlmPyPrompt({ cwd: "/tmp", depth: 1 });
+		const prompt = buildRlmPyPrompt({ cwd: "/tmp" });
 		expect(prompt).not.toContain("undefined");
 		expect(prompt).not.toMatch(/\$\{/);
 	});
@@ -309,73 +288,5 @@ describe("render-core: layout", () => {
 		const resets = painted.split("\x1b[0m");
 		for (const segment of resets.slice(1, -1)) expect(segment.startsWith("\x1b[44m")).toBe(true);
 		expect(stripAnsi(painted)).toHaveLength(20);
-	});
-});
-
-// ── subagents: validation and defaults ────────────────────────────────────────
-
-describe("subagent host: validation", () => {
-	const dirs: string[] = [];
-	function host() {
-		const dir = mkdtempSync(join(tmpdir(), "pi-rlm-units-"));
-		dirs.push(dir);
-		return createSubagentHost({
-			cwd: dir,
-			subagentDir: dir,
-			defaultModel: "anthropic/haiku",
-			depth: 0,
-			maxDepth: 2,
-			spawnCommand: () => ({ command: "sh", args: ["-c", "true"] }),
-		});
-	}
-
-	test("rejects a missing or empty prompt", async () => {
-		const h = host();
-		await expect(h.handlers["rlm.run"]({})).rejects.toThrow(/prompt/i);
-		await expect(h.handlers["rlm.run"]({ prompt: "   " })).rejects.toThrow(/prompt/i);
-	});
-
-	test("rejects a non-string name and an oversized name", async () => {
-		const h = host();
-		await expect(h.handlers["rlm.run"]({ prompt: "t", kwargs: { name: 42 } })).rejects.toThrow(/name/i);
-		await expect(
-			h.handlers["rlm.run"]({ prompt: "t", kwargs: { name: "x".repeat(MAX_SUBAGENT_NAME_LENGTH + 1) } }),
-		).rejects.toThrow(new RegExp(String(MAX_SUBAGENT_NAME_LENGTH)));
-	});
-
-	test("falls back to the default model and reports it on the handle", async () => {
-		const h = host();
-		const handle = await h.handlers["rlm.run"]({ prompt: "task" });
-		expect(handle.model).toBe("anthropic/haiku");
-		const explicit = await h.handlers["rlm.run"]({ prompt: "task", kwargs: { model: "anthropic/opus-5" } });
-		expect(explicit.model).toBe("anthropic/opus-5");
-	});
-
-	test("delete rejects an unknown target and requires a non-empty one", async () => {
-		const h = host();
-		await expect(h.handlers["rlm.delete_subagent"]({ target: "nope" })).rejects.toThrow(/no subagent/i);
-		await expect(h.handlers["rlm.delete_subagent"]({ target: "  " })).rejects.toThrow(/non-empty/i);
-	});
-
-	test("delete accepts the session name as well as the id", async () => {
-		const h = host();
-		const handle = await h.handlers["rlm.run"]({ prompt: "task", kwargs: { name: "by-name" } });
-		const deleted = await h.handlers["rlm.delete_subagent"]({ target: "by-name" });
-		expect((deleted.subagent as { rlm_child_id: string }).rlm_child_id).toBe(handle.rlm_child_id as string);
-	});
-
-	test("default names are slugged, bounded, and collision-resistant", () => {
-		const name = defaultSubagentName("Fix the PARSER bug!! (urgent)", "sub-abcdef123456");
-		expect(name.startsWith("subagent-fix-the-parser-bug")).toBe(true);
-		expect(name.length).toBeLessThanOrEqual(MAX_SUBAGENT_NAME_LENGTH);
-		expect(defaultSubagentName("x".repeat(500), "sub-1").length).toBeLessThanOrEqual(MAX_SUBAGENT_NAME_LENGTH);
-		expect(defaultSubagentName("", "sub-99999999")).toContain("worker");
-		const a = defaultSubagentName("same prompt", "sub-aaaaaaaa");
-		const b = defaultSubagentName("same prompt", "sub-bbbbbbbb");
-		expect(a).not.toBe(b);
-	});
-
-	afterAll(() => {
-		for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
 	});
 });

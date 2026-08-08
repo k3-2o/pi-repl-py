@@ -2,7 +2,7 @@
 	"name": "pi-repl",
 	"version": "0.1.0",
 	"type": "module",
-	"description": "A pi extension with a single tool: execute, running TypeScript host with a persistent Python evaluator",
+	"description": "A pi extension with a single tool: execute, running a TypeScript host with a persistent Python (ipykernel) evaluator and a user-configurable toolbox of functions.",
 	"keywords": [
 		"pi-package",
 		"pi",
@@ -31,7 +31,8 @@
 		"lint": "biome check .",
 		"check": "tsc --noEmit && biome check . && npm run test:ts && npm run test:py",
 		"test:ts": "bun test test/units.test.ts test/preview-core.test.ts",
-		"test:py": ".venv/bin/python -m pytest test/guest_contract.py -q"
+		"test:py": ".venv/bin/python -m pytest test/guest_contract.py -q",
+		"test:integ": "bun test test/engine.integration.test.ts"
 	},
 	"dependencies": {},
 	"peerDependencies": {
