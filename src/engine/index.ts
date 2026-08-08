@@ -103,6 +103,12 @@ export interface RestoreResult {
 
 export interface EngineOptions {
 	cwd?: string;
+	/** Python interpreter to spawn the guest with. Defaults to the repo venv. */
+	pythonPath?: string;
+	/** Standard helpers to preload into the kernel (passed as PI_REPL_HELPERS). */
+	helpers?: string[];
+	/** Per-cell response timeout, ms. Default 60_000. */
+	timeoutMs?: number;
 	env?: Record<string, string>;
 	hostHandlers?: HostRequestHandlers;
 	/** Persist/revive the namespace across engine restarts. */
@@ -179,6 +185,9 @@ function truncateWithMarker(text: string, maxChars: number, wasTruncated: boolea
 
 export class EngineManager {
 	private readonly options: EngineOptions;
+	private readonly pythonPath: string;
+	private readonly helpers: string[];
+	private readonly timeoutMs: number;
 	private child?: ChildProcess;
 	private state: "idle" | "starting" | "running" | "shutdown" = "idle";
 	private startPromise?: Promise<void>;
@@ -201,6 +210,9 @@ export class EngineManager {
 
 	constructor(options: EngineOptions = {}) {
 		this.options = options;
+		this.pythonPath = options.pythonPath ?? resolvePythonPath(options.cwd);
+		this.helpers = options.helpers ?? [];
+		this.timeoutMs = options.timeoutMs ?? 60_000;
 	}
 
 	get isRunning(): boolean {
@@ -228,13 +240,15 @@ export class EngineManager {
 		this.state = "starting";
 		installProcessCleanupOnce();
 		liveEngines.add(this);
-		const pythonPath = resolvePythonPath(this.options.cwd);
+		const pythonPath = this.pythonPath;
 		const child = spawn(pythonPath, [GUEST_PATH], {
 			cwd: this.options.cwd,
 			env: {
 				...process.env,
 				...(this.options.env ?? {}),
 				[NONCE_ENV]: this.nonce,
+				PI_REPL_HELPERS: this.helpers.join(","),
+				PI_REPL_TIMEOUT_MS: String(this.timeoutMs),
 			},
 			// fd 3 carries protocol traffic so stdout/stderr stay pure user output.
 			stdio: ["pipe", "pipe", "pipe", "pipe"],

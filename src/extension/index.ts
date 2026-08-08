@@ -11,8 +11,9 @@ import { basename, join } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 import { EngineBusyError, EngineManager } from "../engine/index.js";
+import { loadConfig } from "./config.js";
 import { createPiToolsHost, type PiToolsHost } from "./pi-tools.js";
-import { buildRlmTsPrompt } from "./prompt.js";
+import { buildRlmPyPrompt } from "./prompt.js";
 import { ExecuteCellComponent, type ExecuteDetails, type ExecuteRenderState } from "./render.js";
 import { EngineLifecycle, summarizeNames } from "./session-engine.js";
 import { createSubagentHost, type SubagentHost } from "./subagents.js";
@@ -53,6 +54,7 @@ function composeErrorLines(error: { name: string; message: string; stack: string
 }
 
 const DEFAULT_SUBAGENT_MODEL = process.env.PI_RLM_SUBAGENT_MODEL ?? "anthropic/haiku";
+const CFG = loadConfig();
 const DEPTH = Number(process.env.PI_RLM_DEPTH ?? "0");
 const MAX_DEPTH = Number(process.env.PI_RLM_MAX_DEPTH ?? "2");
 
@@ -91,11 +93,14 @@ export default function (pi: ExtensionAPI) {
 				subagentDir: join(stateDir, "subagents"),
 				defaultModel: DEFAULT_SUBAGENT_MODEL,
 				depth: DEPTH,
-				maxDepth: MAX_DEPTH,
+				maxDepth: CFG.maxDepth,
 			});
 			piTools = createPiToolsHost({ cwd });
 			return new EngineManager({
 				cwd,
+				pythonPath: CFG.pythonPath,
+				timeoutMs: CFG.timeoutMs,
+				helpers: CFG.helpers,
 				hostHandlers: { ...subagents.handlers, ...piTools.handlers },
 				// A snapshot is keyed to a session file; an ephemeral session has none
 				// to key it to, so its namespace lives and dies with the process.
@@ -127,7 +132,7 @@ export default function (pi: ExtensionAPI) {
 		const options = (event as { systemPromptOptions?: { contextFiles?: Array<{ path: string; content: string }> } })
 			.systemPromptOptions;
 		return {
-			systemPrompt: buildRlmTsPrompt({
+			systemPrompt: buildRlmPyPrompt({
 				cwd: ctx.cwd,
 				messagesPath: ctx.sessionManager.getSessionFile() ?? undefined,
 				depth: DEPTH,

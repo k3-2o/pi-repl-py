@@ -35,6 +35,8 @@ NONCE = os.environ.get(NONCE_ENV, "")
 os.environ.pop(NONCE_ENV, None)
 
 HELPERS = [h.strip() for h in os.environ.get("PI_REPL_HELPERS", "").split(",") if h.strip()]
+# Per-cell timeout, from the host engine config (default 60s).
+CELL_TIMEOUT_S = float(os.environ.get("PI_REPL_TIMEOUT_MS", "60000")) / 1000.0
 
 # ── fd 3 protocol writer (line-buffered) ─────────────────────────────────────
 # dup so we don't close the caller's fd 3 on process exit; line-buffered for
@@ -143,7 +145,7 @@ class Kernel:
         out, err, error, result = [], [], None, None
         while True:
             try:
-                m = self.kc.get_iopub_msg(timeout=5)
+                m = self.kc.get_iopub_msg(timeout=CELL_TIMEOUT_S)
             except Exception:
                 break
             if m.get("parent_header", {}).get("msg_id") != msg_id:

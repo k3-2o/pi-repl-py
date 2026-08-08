@@ -12,7 +12,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decodeMessage, encodeMessage } from "../src/engine/protocol.js";
-import { buildRlmTsPrompt } from "../src/extension/prompt.js";
+import { buildRlmPyPrompt } from "../src/extension/prompt.js";
 import {
 	backgroundFor,
 	closeOpenSgr,
@@ -52,12 +52,12 @@ describe("protocol framing", () => {
 
 describe("system prompt", () => {
 	test("states identity, cwd, depth, and the evaluator doctrine", () => {
-		const prompt = buildRlmTsPrompt({ cwd: "/tmp/work", messagesPath: "/tmp/s.jsonl", depth: 0 });
+		const prompt = buildRlmPyPrompt({ cwd: "/tmp/work", messagesPath: "/tmp/s.jsonl", depth: 0 });
 		expect(prompt).toContain("general purpose agent that uses code");
 		expect(prompt).toContain("/tmp/work");
 		expect(prompt).toContain("/tmp/s.jsonl");
 		expect(prompt).toContain("Recursive agent depth: 0");
-		expect(prompt).toContain("Bun.$");
+		expect(prompt).toContain("sh()");
 		expect(prompt).toContain("persist");
 		// The reset notice is only useful if the model knows what to do with it:
 		// re-verify before reuse, and above all before shell interpolation.
@@ -67,24 +67,24 @@ describe("system prompt", () => {
 	});
 
 	test("subagent guidance appears only when recursion is allowed", () => {
-		const withRecursion = buildRlmTsPrompt({ cwd: "/tmp", allowRecursion: true });
+		const withRecursion = buildRlmPyPrompt({ cwd: "/tmp", allowRecursion: true });
 		expect(withRecursion).toContain("rlm.run");
 		expect(withRecursion).toContain("Delegating to sub-agents");
-		const without = buildRlmTsPrompt({ cwd: "/tmp", allowRecursion: false });
+		const without = buildRlmPyPrompt({ cwd: "/tmp", allowRecursion: false });
 		expect(without).not.toContain("Delegating to sub-agents");
 	});
 
 	test("child doctrine appears only at depth > 0", () => {
 		// "child agent" alone also appears in the subagent guidance; the doctrine's
 		// identity sentence is the distinctive marker.
-		expect(buildRlmTsPrompt({ cwd: "/tmp", depth: 0 })).not.toContain("You are a child agent");
-		const child = buildRlmTsPrompt({ cwd: "/tmp", depth: 1 });
+		expect(buildRlmPyPrompt({ cwd: "/tmp", depth: 0 })).not.toContain("You are a child agent");
+		const child = buildRlmPyPrompt({ cwd: "/tmp", depth: 1 });
 		expect(child).toContain("You are a child agent");
 		expect(child).toContain("output file");
 	});
 
 	test("context files are appended verbatim under a project section", () => {
-		const prompt = buildRlmTsPrompt({
+		const prompt = buildRlmPyPrompt({
 			cwd: "/tmp",
 			contextFiles: [{ path: "AGENTS.md", content: "PROJECT_RULE_MARKER" }],
 		});
@@ -94,7 +94,7 @@ describe("system prompt", () => {
 	});
 
 	test("reads-are-full doctrine is stated", () => {
-		const prompt = buildRlmTsPrompt({ cwd: "/tmp" });
+		const prompt = buildRlmPyPrompt({ cwd: "/tmp" });
 		expect(prompt).toContain("Writes are surgical; reads are full");
 		expect(prompt).toContain("read it start to finish");
 		// The re-check shortcut dies with the first edit: an edited file must be
@@ -103,7 +103,7 @@ describe("system prompt", () => {
 	});
 
 	test("host tools section appears only when summaries are supplied, with doctrine", () => {
-		const withTools = buildRlmTsPrompt({
+		const withTools = buildRlmPyPrompt({
 			cwd: "/tmp",
 			toolSummaries: ["tools.read({ path: string }) — Read the contents of a file."],
 		});
@@ -112,12 +112,12 @@ describe("system prompt", () => {
 		// The doctrine: edits over rewrites, tools.read for source/images, Bun.$ for shell.
 		expect(withTools).toContain("tools.edit");
 		expect(withTools).toContain("fails loudly");
-		expect(withTools).toContain("Bun.$` remains the way to run shell commands");
-		expect(buildRlmTsPrompt({ cwd: "/tmp" })).not.toContain("# Host tools");
+		expect(withTools).toContain("remains the way to run shell commands");
+		expect(buildRlmPyPrompt({ cwd: "/tmp" })).not.toContain("# Host tools");
 	});
 
 	test("no unresolved template placeholders leak into the prompt", () => {
-		const prompt = buildRlmTsPrompt({ cwd: "/tmp", depth: 1 });
+		const prompt = buildRlmPyPrompt({ cwd: "/tmp", depth: 1 });
 		expect(prompt).not.toContain("undefined");
 		expect(prompt).not.toMatch(/\$\{/);
 	});
