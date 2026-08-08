@@ -94,12 +94,17 @@ unserialisable value costs only itself. Restore unpickles into a fresh kernel, p
 `{restored, failed}` reported. `open handles` / some modules / functions can't pickle — the
 reset notice names them instead of pretending.
 
-### Subagents return handles, not answers
+### The toolbox is a directory of functions, loaded per kernel
 
-`rlm.run` resolves at admission. A parent that blocked until its child finished couldn't
-supervise it. Children write their final output to a file; the registry reports running /
-completed / errored so the parent decides when to read. (Host logic present; end-to-end child
-`pi` spawning is exercised in the smoke test.)
+The model's stable working set is pure-Python functions, one file each under
+`src/engine/toolbox/`, exec'd into every kernel at boot (`guest.py` reads `PI_TOOLBOX_DIR`,
+defaulting to that directory). Only the user's own folder if they set `toolboxDir`. This is
+the source of truth for the model's capabilities — there is no separate `helpers` preload and
+no `tools.*` bridge (the guest never sends a `host_request`, so that relay was removed).
+
+`help`/`ls` are hard-wired (not configurable) so any kernel, even a bare one, has a way to
+discover what's loaded. Edit is the only function that trades forgiveness for corruption-
+avoidance: a stale `old_text` fails loudly rather than silently mangling a changed file.
 
 ## Failure modes
 
@@ -114,13 +119,14 @@ completed / errored so the parent decides when to read. (Host logic present; end
 ## Testing
 
 - **Host (TypeScript, `bun test`):** `test/units.test.ts` (protocol framing, prompt assembly,
-  render core, subagent-host registry) + `test/preview-core.test.ts` (pure cell preview).
-  These are host-logic; they don't embed a JavaScript evaluator.
+  render core) + `test/preview-core.test.ts` (pure cell preview). These are host-logic; they
+  don't embed a JavaScript evaluator.
 - **Evaluator (Python, `pytest`):** `test/guest_contract.py` drives a real guest over the wire
   protocol and asserts persistence, error-survival, output attribution, snapshot/restore,
-  `list_names`, and injected helpers. This is the specification of the evaluator.
-- **Gate:** `just check` = biome format+lint, then `bun test` (host) + `pytest` (guest).
+  `list_names`, and the toolbox functions. This is the specification of the evaluator.
+- **Integration (slow):** `test/engine.integration.test.ts` boots a real engine + guest and
+  proves a variable survives across an engine restart via the snapshot file.
+- **Gate:** `just check` = biome format+lint, then `bun test` (host) + `pytest` (guest);
+  `just integration` adds the real-engine seam.
 
-The vendored pi-rlm engine/pi-tools/lifecycle/subagent suites executed *JavaScript cells* for
-the old Bun guest and are not part of the gate; the Python evaluator contract replaces them.
-The `tools.*` in-cell bridge and a live `pi --repl` harness are tracked follow-ups.
+A live `pi --repl` interactive harness is a tracked follow-up.

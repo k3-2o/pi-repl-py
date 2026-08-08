@@ -20,16 +20,32 @@ because the evaluator is still alive.
 ## Why one tool, why Python
 
 A fixed tool menu is a fixed vocabulary. Here the vocabulary is Python: capabilities arrive as
-functions and helpers in the evaluator's namespace rather than as new tool entries, so the
-surface the model sees never changes while what it can do keeps growing.
+functions in the evaluator's namespace rather than as new tool entries, so the surface the
+model sees never changes while what it can do keeps growing.
 
-Python is the evaluator language because:
+Python is the evaluator language because it keeps **variables and functions** hot with no AST
+rewrite (the old TS/Bun `with(proxy)` + transform dance is unnecessary), models are fluent and
+efficient in it, and the data/math ecosystem (pandas, numpy, the stdlib) is what agents reach
+for.
 
-- models are most-fluent and, per the `mame/ai-coding-lang-bench` family, most *efficient* in
-  dynamic languages like Python (fewer type-annotation tokens, more training data);
-- `exec(namespace)` / a real IPython kernel keeps **variables and functions** hot with no AST
-  rewrite (the JS `with(proxy)` + transform dance is unnecessary);
-- the data/math ecosystem (pandas, numpy, the stdlib) is what agents actually reach for.
+## The toolbox — configurable functions, tailored to small models
+
+The model's stable working set is a **toolbox**: pure-Python functions loaded into *every*
+kernel at boot. A weak model can use them like standard tools without recalling exact
+signatures, because introspection is built in:
+
+- `read(path)` — bounded file read.
+- `write(path, content)` — write a file (unconditional).
+- `edit(path, old_text, new_text)` — targeted replacement; **fails loudly** when `old_text` is
+  stale instead of silently mangling an unseen file.
+- `bash(cmd)` — run a shell command, return a `CompletedProcess` (`.stdout`/`.stderr`/
+  `.returncode`). This is also the escape hatch for spawning processes.
+- `ls()` and `help(name)` — **hard-wired** into the evaluator (not configurable) so the model
+  can discover what's loaded and how to call it.
+
+Each function lives in its own file under `src/engine/toolbox/`. Set `toolboxDir` in the
+config (or `$PI_TOOLBOX_DIR`) to point at **your own folder** and replace the shipped set —
+a one-file custom function loads identically into every kernel.
 
 ## What the agent gets
 
@@ -38,26 +54,22 @@ Python is the evaluator language because:
   serialised is reported by name rather than dropped silently.
 - **A real IPython kernel**, not a hand-rolled `exec` loop: rich tracebacks, safe partial
   state, the standard library, and last-expression result capture.
-- **Shell as values.** `sh("git log --oneline")` returns a `CompletedProcess` — access
+- **Shell as values.** `bash("git log --oneline")` returns a `CompletedProcess` — access
   `.stdout`, `.stderr`, `.returncode` and branch on them, no transcript parsing.
 - **Error survival.** A cell that throws reports the traceback and the *kernel keeps going* —
   the next cell can still read what was defined before the error.
 - **Snapshots.** After each successful cell, the namespace is pickled (debounced) so a crash or
-  killed process loses little; a fresh evaluator revives the last snapshot.
+  a killed process loses little; a fresh evaluator revives the last snapshot.
 - **Honest reset reporting.** If the evaluator restarts, a `<rlm_engine_reset>` block names
   exactly what was revived and what was lost, so the model never assumes state that isn't there.
 
 ## Install & run
 
-Requires [Pi](https://pi.dev), [Bun](https://bun.sh) (the extension host runs store is still
-the pi/tui JS side, even though the evaluator is Python), and a Python 3.13+ with
-`ipykernel` + `jupyter_client`.
+Requires [Pi](https://pi.dev) and [Bun](https://bun.sh) (the extension host) and Python 3.11+
+with `ipykernel` + `jupyter_client`.
 
 ```bash
-# from this clone
-npm install
-# prepare the Python evaluator venv (project-local)
-.venv/bin/python -m pip install ipykernel jupyter_client
+just setup    # npm install + a project-local .venv with the guest deps
 ```
 
 Launch — the extension is **dormant** until the flag is passed (a plain `pi` session is
@@ -73,55 +85,56 @@ pi --repl
 
 ```json
 {
-  "helpers": ["sh", "read", "write", "glob"],
+  "toolboxDir": "pi-repl-functions",
   "pythonPath": ".venv/bin/python3",
   "timeoutMs": 60000,
-  "snapshotDebounceMs": 1500,
-  "maxDepth": 2
+  "snapshotDebounceMs": 1500
 }
 ```
 
-`helpers: []` (an explicit empty list) = a bare kernel, no injected helpers.
+`toolboxDir` points at a folder of one-function-per-`*.py` files that replaces the shipped
+defaults (paths resolve relative to `~/.pi/agent`, so the above means
+`~/.pi/agent/pi-repl-functions/`).
 
 ## Development
 
-The gate is:
+The repository gate is:
 
 ```bash
-just check      # biome format+lint, bun test (host), pytest (guest)
-just test       # the same suites
+just setup     # one-time (builds .venv)
+just check     # biome format+lint, bun test (host), pytest (guest)
+just integration  # also runs the real host x Python-guest seam
 ```
 
-- `bun test test/units.* test/preview-core.*` — host logic (protocol framing, prompt, render
-  core, subagent host registry).
-- `pytest test/guest_contract.py` — the Python evaluator contract (persistence,
-  error-survival, output attribution, snapshot/restore, helpers).
-
-The *host* is TypeScript and runs tests under **bun** (matching its vendored roots); the
-*guest* is Python and runs under **pytest**. See [ARCHITECTURE.md](ARCHITECTURE.md).
+- Host logic (protocol framing, prompt, render, config) is TypeScript under **bun**.
+- The Python evaluator contract (`test/guest_contract.py`) is Python under **pytest**.
 
 ## Layout
 
 ```
 src/engine/
   index.ts      EngineManager — host side: spawn the guest, queue, snapshots, teardown
-  protocol.ts   authenticated fd3 line-JSON wire (nonce)
   guest.py      THE PYTHON EVALUATOR — a real ipykernel behind the protocol
+  protocol.ts   authenticated fd3 line-JSON wire (nonce)
+  toolbox/      one file per function: read.py, write.py, edit.py, bash.py
 src/extension/
   index.ts      registers `execute`, dormant until `--repl`
-  pi-tools.ts   mounts pi's real tool defs behind a host bridge
-  prompt.ts     buildRlmPyPrompt — the injected Python-idiom guidance
+  prompt.ts     buildRlmPyPrompt — the system prompt (toolbox doctrine etc.)
   config.ts     ~/.pi/agent/pi-repl.json loader
+  session-engine.ts  rebuild/restore an engine from the last snapshot
 test/
-  units.test.ts        host-logic (protocol, prompt, render, subagent host)
-  preview-core.test.ts pure cell-preview
-  guest_contract.py    Python evaluator contract (pytest)
+  units.test.ts         host-logic (protocol, prompt, render)
+  preview-core.test.ts  cell-preview
+  engine.integration.test.ts   real host x Python-guest snapshot/restore
+  guest_contract.py     Python evaluator contract (pytest)
 ```
 
 ## Scope & limits
 
 - **Not** a sandbox beyond process isolation — the kernel runs with your user's permissions.
-- **Not** a huge agent framework (mesh, councils, dashboards, durable actors) — that's
-  pi-fabric's territory. This is the minimal focused "one persistent Python workspace."
-- The `tools.*` bridge (calling pi's real file/edit tools from inside a cell) and a live
-  `pi --repl` interactive harness are tracked follow-ups.
+  The toolbox trusts the user.
+- **No subagents, no `tools.*` bridge** — subagents aren't first-class; the model can spawn a
+  process with `bash()`. The `tools.*` host bridge was removed.
+- **Not** a huge agent framework (mesh, councils, dashboards). This is a focused "one
+  persistent Python workspace."
+- A live `pi --repl` interactive harness is a tracked follow-up.

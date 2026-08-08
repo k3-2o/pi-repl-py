@@ -24,8 +24,8 @@ updated to explain the new one. Never weaken a case to make a change pass.
 
 **The host and guest are two languages, two test runners.** Host = TypeScript, tests under
 `bun test`. Guest = Python, tests under `pytest`. A host test must not embed JavaScript cells
-(the vendored engine contract/pi-tools/lifecycle/subagent suites executed JS cells for the old
-Bun guest and are superseded by `test/guest_contract.py`).
+(the vendored engine-contract suites executed JS cells for the old Bun guest; the Python
+contract in `test/guest_contract.py` supersedes them).
 
 **Verify against reality, not against your own summary.** The evaluator behaviour is proven by a
 green pytest run against a real kernel, not by reading guest.py. Run the suite.
