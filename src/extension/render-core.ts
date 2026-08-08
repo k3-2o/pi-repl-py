@@ -149,7 +149,21 @@ function topLine(state: ExecuteRenderState, width: number, deps: RenderDeps): st
 
 	// Fixed metadata after the preview must always survive; the preview
 	// absorbs all truncation. Counts settle-only: live updates jitter the header.
+	// Suffix order is by priority: the expand hint must survive first, then the
+	// error, then duration, then counts. Truncation happens from the right, so
+	// low-priority items are elided before the user loses the expand keybinding.
 	const suffixParts: string[] = [];
+	suffixParts.push(deps.keyHint(state.expanded));
+
+	const errorName = !state.isPartial ? state.details?.errorName : undefined;
+	if (errorName) {
+		// --- the error message usually beats a bare name when it fits ---
+		const summary = state.details?.errorStack?.[0];
+		suffixParts.push(deps.fg("error", summary && deps.visibleWidth(summary) <= 48 ? summary : errorName));
+	}
+
+	const duration = formatDuration(state.details?.durationMs);
+	if (duration) suffixParts.push(deps.fg("muted", duration));
 
 	// --- counts settle-only: live-updating them mid-stream jitters the header ---
 	if (!state.isPartial && statusKind(state) !== "running") {
@@ -161,18 +175,6 @@ function topLine(state: ExecuteRenderState, width: number, deps: RenderDeps): st
 		if (outputLines > 0) counts.push(`↓ ${outputLines}`);
 		if (counts.length > 0) suffixParts.push(deps.fg("muted", `${counts.join(" ")} lines`));
 	}
-
-	const duration = formatDuration(state.details?.durationMs);
-	if (duration) suffixParts.push(deps.fg("muted", duration));
-
-	const errorName = !state.isPartial ? state.details?.errorName : undefined;
-	if (errorName) {
-		// --- the error message usually beats a bare name when it fits ---
-		const summary = state.details?.errorStack?.[0];
-		suffixParts.push(deps.fg("error", summary && deps.visibleWidth(summary) <= 48 ? summary : errorName));
-	}
-
-	suffixParts.push(deps.keyHint(state.expanded));
 
 	const separator = deps.fg("dim", " · ");
 	const separatorWidth = deps.visibleWidth(separator);
