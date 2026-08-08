@@ -287,6 +287,12 @@ export default function (pi: ExtensionAPI) {
 							"anything newer than that snapshot is gone, so re-verify variables before reusing them.",
 					);
 				}
+				// A guest that died under this cell (process crash, kernel gone)
+				// leaves the engine in shutdown. Drop it so the next acquire rebuilds a
+				// fresh one from the last snapshot instead of failing forever.
+				if (m.isRunning === false) {
+					await lifecycle.discard();
+				}
 				throw error;
 			}
 		},
