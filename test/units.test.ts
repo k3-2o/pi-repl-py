@@ -2,7 +2,7 @@
  * Unit coverage for the pieces the contract suite cannot reach directly.
  *
  * engine.contract.test.ts exercises behaviour end to end, which leaves gaps:
- * the cell transform runs inside the guest process, and protocol framing,
+ * protocol framing,
  * prompt assembly, and cell layout are only observed through their effects.
  * Those are tested here in isolation, where their edge cases are reachable.
  */
@@ -12,7 +12,6 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decodeMessage, encodeMessage } from "../src/engine/protocol.js";
-import { transformCell } from "../src/engine/transform.js";
 import { buildRlmTsPrompt } from "../src/extension/prompt.js";
 import {
 	backgroundFor,
@@ -26,117 +25,6 @@ import {
 	statusKind,
 } from "../src/extension/render-core.js";
 import { createSubagentHost, defaultSubagentName, MAX_SUBAGENT_NAME_LENGTH } from "../src/extension/subagents.js";
-
-// ── transform ─────────────────────────────────────────────────────────────────
-
-describe("transform: types and declarations", () => {
-	test("strips TypeScript annotations", () => {
-		const { body } = transformCell("const x: number = 1; function f(a: string): string { return a; }");
-		expect(body).not.toContain(": number");
-		expect(body).not.toContain(": string");
-	});
-
-	test("collects names from every top-level declaration form", () => {
-		const { declaredNames } = transformCell(
-			"let a = 1, b = 2;\nconst c = 3;\nvar d = 4;\nfunction fn() {}\nclass Cls {}",
-		);
-		expect(declaredNames.sort()).toEqual(["Cls", "a", "b", "c", "d", "fn"]);
-	});
-
-	test("collects destructured names: object, array, rest, default, nested", () => {
-		const { declaredNames } = transformCell(
-			"const { p, q: renamed, ...restObj } = o;\nconst [first, , third = 9, ...restArr] = arr;\nconst { deep: { inner } } = o2;",
-		);
-		expect(declaredNames.sort()).toEqual(["first", "inner", "p", "renamed", "restArr", "restObj", "third"].sort());
-	});
-
-	test("deduplicates repeated names", () => {
-		// `var` may legally redeclare; the name must appear once in the manifest.
-		const { declaredNames } = transformCell("var dup = 1;\nvar dup = 2;");
-		expect(declaredNames).toEqual(["dup"]);
-	});
-});
-
-describe("transform: imports", () => {
-	test("named imports become an awaited dynamic import", () => {
-		const { body, declaredNames } = transformCell('import { join, resolve } from "node:path";');
-		expect(body).toContain('await import("node:path")');
-		expect(body).toContain("join");
-		expect(declaredNames.sort()).toEqual(["join", "resolve"]);
-	});
-
-	test("default and aliased imports are destructured correctly", () => {
-		const { body } = transformCell('import fsDefault from "node:fs";');
-		expect(body).toContain("default: fsDefault");
-		const aliased = transformCell('import { join as pathJoin } from "node:path";');
-		expect(aliased.body).toContain('"join": pathJoin');
-		expect(aliased.declaredNames).toEqual(["pathJoin"]);
-	});
-
-	test("namespace import binds the whole module", () => {
-		const { body, declaredNames } = transformCell('import * as path from "node:path";');
-		expect(body).toContain('path = await import("node:path")');
-		expect(declaredNames).toEqual(["path"]);
-	});
-
-	test("side-effect-only import still awaits the module", () => {
-		const { body, declaredNames } = transformCell('import "node:path";');
-		expect(body).toContain('await import("node:path")');
-		expect(declaredNames).toEqual([]);
-	});
-
-	test("export statements are rejected with a clear SyntaxError", () => {
-		expect(() => transformCell("export const nope = 1;")).toThrow(/export/i);
-		expect(() => transformCell("export default 1;")).toThrow(/export/i);
-	});
-});
-
-describe("transform: result capture", () => {
-	test("a trailing expression is captured as the cell result", () => {
-		const { body } = transformCell("const a = 1;\na + 1");
-		expect(body).toContain("__ctx.setResult(");
-	});
-
-	test("a statement-only cell captures no result", () => {
-		expect(transformCell("let q = 5;")).toMatchObject({ body: expect.not.stringContaining("setResult") });
-		expect(transformCell("function f() { return 1; }").body).not.toContain("setResult");
-		expect(transformCell("if (true) { 1; }").body).not.toContain("setResult");
-	});
-
-	test("side-effect-free trailing expressions are not dead-code eliminated", () => {
-		// The transpiler's dead-code elimination would delete these as pointless;
-		// they are the cell's result, so it stays off.
-		expect(transformCell('"just-a-string"').body).toContain("setResult");
-		expect(transformCell("({ a: 1 })").body).toContain("setResult");
-		expect(transformCell("[1, 2, 3]").body).toContain("setResult");
-	});
-});
-
-describe("transform: syntax edge cases", () => {
-	const cases: Array<[string, string]> = [
-		["regex vs division", 'const s = "aXbXc"; s.split(/X/).length'],
-		["template with braces", "const k = 2; `v=${ { a: 1 }.a + k }`"],
-		["template containing the word import", "`this mentions import { x } from 'y' inside a string`"],
-		["trailing comment", "1 + 1 // trailing comment"],
-		["comment-only cell", "// nothing but a comment"],
-		["no semicolons", "const p = 1\nconst q = 2\np + q"],
-		["labeled statement", 'outer: for (const i of [1, 2]) { break outer; }\n"labeled-ok"'],
-		["generator and async fn", "function* gen() { yield 1; }\nasync function ay() { return 1; }\n1"],
-		["optional chaining and nullish", "const o = {}; o?.a?.b ?? 'fallback'"],
-		["class with private field", "class P { #hidden = 1; get v() { return this.#hidden; } }\n1"],
-	];
-	for (const [label, code] of cases) {
-		test(`parses: ${label}`, () => {
-			expect(() => transformCell(code)).not.toThrow();
-		});
-	}
-
-	test("a genuine syntax error still throws", () => {
-		expect(() => transformCell("let let let")).toThrow();
-	});
-});
-
-// ── protocol ──────────────────────────────────────────────────────────────────
 
 describe("protocol framing", () => {
 	test("encode produces exactly one newline-terminated envelope line", () => {

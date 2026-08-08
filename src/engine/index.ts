@@ -17,7 +17,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import {
@@ -29,7 +29,18 @@ import {
 	PROTOCOL_FD,
 } from "./protocol.js";
 
-const GUEST_PATH = fileURLToPath(new URL("./guest.ts", import.meta.url));
+const GUEST_PATH = fileURLToPath(new URL("./guest.py", import.meta.url));
+
+/** Prefer the project's uv-managed Python (has ipykernel/jupyter_client); else PYTHON or python3. */
+function resolvePythonPath(cwd: string | undefined): string {
+	// Prefer the venv sitting next to this repo's guest.py (stable regardless of
+	// the child process cwd, which tests set to a temp dir).
+	const repoVenv = join(dirname(GUEST_PATH), "..", "..", ".venv", "bin", "python3");
+	if (existsSync(repoVenv)) return repoVenv;
+	const cwdVenv = cwd ? join(cwd, ".venv", "bin", "python3") : "";
+	if (cwdVenv && existsSync(cwdVenv)) return cwdVenv;
+	return process.env.PYTHON ?? "python3";
+}
 const DEFAULT_MAX_OUTPUT_CHARS = 65536;
 const READY_TIMEOUT_MS = 10_000;
 const ABORT_GRACE_MS = 500;
@@ -217,7 +228,8 @@ export class EngineManager {
 		this.state = "starting";
 		installProcessCleanupOnce();
 		liveEngines.add(this);
-		const child = spawn("bun", ["run", GUEST_PATH], {
+		const pythonPath = resolvePythonPath(this.options.cwd);
+		const child = spawn(pythonPath, [GUEST_PATH], {
 			cwd: this.options.cwd,
 			env: {
 				...process.env,
@@ -266,7 +278,9 @@ export class EngineManager {
 			// what is actually missing and how to get it.
 			const message =
 				(error as NodeJS.ErrnoException).code === "ENOENT"
-					? "Engine process failed: 'bun' was not found on PATH. pi-rlm runs its evaluator in Bun; install it from https://bun.sh and restart pi."
+					? "Engine process failed: '" +
+						pythonPath +
+						"' was not found on PATH. pi-repl runs its evaluator in Python; ensure it is installed and on your PATH, or set the pythonPath in ~/.pi/agent/pi-repl.json."
 					: `Engine process failed: ${error.message}`;
 			this.failAllPending(new Error(message));
 			this.transitionToShutdown(message);

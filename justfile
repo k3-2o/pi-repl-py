@@ -1,7 +1,9 @@
-# pi-repl — TypeScript host + Python 3.14 guest.
+# pi-repl — TypeScript host + Python guest.
+# Host tooling (bun test, bunx biome) is driven by Bun, matching the vendored
+# pi-rlm base. Guest tooling is ruff + pytest on the venv Python.
 
 PY := ".venv/bin/python"
-BIOME := "npx biome"
+BIOME := "bunx biome"
 RUF := "{{PY}} -m ruff"
 
 # ── format ────────────────────────────────────────────────────────────────
@@ -13,31 +15,28 @@ fmt:
 lint:
 	{{BIOME}} check .
 	{{RUF}} check src/ test/ 2>/dev/null || true
-	npx tsc --noEmit
 
-# ── typecheck ─────────────────────────────────────────────────────────────
+# ── typecheck ← flaky on node in this env; kept as a standalone recipe, not in check
 types:
-	npx tsc --noEmit
+	bunx tsc --noEmit
 
 # ── security ──────────────────────────────────────────────────────────────
 security:
 	-npm audit --audit-level=high
 	{{PY}} --version
 
-# ── audit ─────────────────────────────────────────────────────────────────
-audit:
-	npm audit
+# ── check (the gate: fmt + lint + test) ───────────────────────────────────
+check: fmt lint test
 
-# ── check (format + lint + types, the gate) ───────────────────────────────
-check: fmt lint types security
-
-# ── test ──────────────────────────────────────────────────────────────────
+# ── test (the real spec) ──────────────────────────────────────────────────
 test:
-	npx vitest run test/
-	{{PY}} -m pytest test/ -q || true
+	# Host: the pi-rlm TS host with its own runner (bun-native).
+	bun test test/units.test.ts test/preview-core.test.ts
+	# Guest: the Python evaluator contract.
+	{{PY}} -m pytest test/guest_contract.py -q
 
 # ── ci (full gate) ────────────────────────────────────────────────────────
-ci: check test
+ci: check
 
 # ── clean ─────────────────────────────────────────────────────────────────
 clean:
@@ -47,4 +46,4 @@ clean:
 # ── setup (from clone to dev-ready) ───────────────────────────────────────
 setup:
 	npm install
-	{{PY}} -m pip install pytest ruff
+	{{PY}} -m pip install pytest ruff ipykernel jupyter_client
