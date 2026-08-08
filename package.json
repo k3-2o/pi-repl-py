@@ -19,6 +19,7 @@
 	"files": [
 		"src",
 		"scripts",
+		"docs",
 		"index.ts",
 		"README.md",
 		"ARCHITECTURE.md",

@@ -13,7 +13,6 @@ import { join } from "node:path";
 
 export interface RlmPromptOptions {
 	cwd: string;
-	messagesPath?: string;
 	contextFiles?: Array<{ path: string; content: string }>;
 	/** Explicit toolbox directory; defaults to the repo's src/engine/toolbox. */
 	toolboxDir?: string;
@@ -25,22 +24,29 @@ interface ToolEntry {
 	description: string; // e.g. "return the text of a file"
 }
 
-/** Parse a toolbox file's opening docstring: "signature — what it does". */
-function parseDocstringLead(source: string): { call: string; description: string } | null {
-	const lead = source.match(/^"""\s*([^\n]+)/)?.[1];
-	if (!lead) return null;
-	const line = lead.trim().replace(/"""$/, "").trim();
-	if (!line) return null;
-	// Split on the em-dash (or " - ") common to our toolbox docstrings.
-	const i = line.search(/\s+[—\-]\s+/);
-	if (i === -1) return { call: line, description: "" };
-	return {
-		call: line.slice(0, i).trim(),
-		description: line
-			.slice(i)
-			.replace(/^\s*[—\-]\s+/, "")
-			.trim(),
-	};
+/**
+ * Contract for a toolbox file:
+ *   - a named `function_description = """<prose>"""` at the top (optional), and
+ *   - a `def <name>(<args>):` whose signature is authoritative.
+ * The loader finds the named description and regexes the call from the def line,
+ * so arguments always come from real code (no docstring-to-code drift) and a
+ * file with no description still advertises its signature.
+ */
+
+/** Read a `function_description = """..."""` value; keep its first line (concise). */
+function parseDescription(source: string): string {
+	const m = source.match(/function_description\s*=\s*"""\s*([^\n]*)/);
+	if (!m) return "";
+	return m[1].replace(/"""\s*$/, "").trim();
+}
+
+/** Regex the call signature from `def name(args):`. */
+function parseDefCall(source: string): string | null {
+	const m = source.match(/def\s+([A-Za-z_]\w*)\s*\(([^)]*)\)/);
+	if (!m) return null;
+	const name = m[1];
+	const args = m[2].trim();
+	return args ? `${name}(${args})` : `${name}()`;
 }
 
 /** Load toolbox entries from a directory of one-function-per-*.py files. */
@@ -52,9 +58,15 @@ function loadToolboxEntries(dir?: string): ToolEntry[] {
 		if (!file.endsWith(".py")) continue;
 		const name = file.slice(0, -3);
 		if (!/^[A-Za-z_]\w*$/.test(name)) continue;
+		// Match the guest loader: an underscore-prefixed file is intentionally not
+		// loaded into the kernel, so it must never be advertised in the prompt.
+		if (name.startsWith("_")) continue;
 		try {
-			const parsed = parseDocstringLead(readFileSync(join(d, file), "utf8"));
-			if (parsed) entries.push({ name, ...parsed });
+			const source = readFileSync(join(d, file), "utf8");
+			const call = parseDefCall(source);
+			if (!call) continue;
+			// The description is optional; the function is still advertised without it.
+			entries.push({ name, call, description: parseDescription(source) });
 		} catch {
 			continue;
 		}
@@ -62,7 +74,7 @@ function loadToolboxEntries(dir?: string): ToolEntry[] {
 	return entries;
 }
 
-/** Build a short, comma-joined "call(...)" listing for the tool description. */
+/* Build a short, comma-joined "call(...)" listing for the tool description. */
 export function buildToolboxListing(dir?: string): string {
 	return loadToolboxEntries(dir)
 		.map((t) => t.call)
@@ -81,7 +93,7 @@ function renderToolbox(tools: ToolEntry[]): string {
 	const list = tools.map((t) => (t.description ? `      ${t.call.padEnd(width)}${t.description}` : `      ${t.call}`));
 	return [
 		"TOOLBOX",
-		"- A set of functions is already imported and ready to call — reading, writing,",
+		"- A set of functions is already imported and ready to call: reading, writing,",
 		"  and editing files, running commands. They return ordinary Python values you",
 		"  can assign, combine, and reuse.",
 		"",
@@ -89,23 +101,27 @@ function renderToolbox(tools: ToolEntry[]): string {
 		"",
 		...EXAMPLES,
 		"",
-		"- This set is a foundation, not a ceiling. When it helps, define your own helpers",
-		"  and compose these functions into reusable routines, so a job is done once",
-		"  instead of repeated.",
-		"- ls() lists what is available here; help(name) shows any function's exact call.",
+		"- This set is a foundation, not a ceiling. You can create your own functions and",
+		"  helpers to fit the task at hand, and you can combine the ones already here into",
+		"  new composed routines.",
+		"- Prefer reusing a helper over rewriting it: define once, then build on it.",
+		"- ls() lists what foundation functions are available; help(name) shows a",
+		"  function's exact call, description, and full usage notes.",
 	].join("\n");
 }
 
 const ENVIRONMENT = [
 	"ENVIRONMENT",
-	"- The evaluator is your working memory. Keep intermediate results in variables",
-	"  and build on them rather than recomputing or re-reading.",
+	"- The evaluator is your working memory. Assign results to named top-level",
+	"  variables so you can revisit, filter, and slice them without re-reading.",
 	"- Do the smallest amount of work that gives a correct answer. Batch related steps,",
 	"  reuse what you already hold, and prefer one composed operation over several",
 	"  scattered ones. Fewer round-trips is faster and cheaper.",
+	"- Before editing a file, read it in full. A partial read can miss what a bad edit",
+	"  destroys; once you edit a file, reread it before editing again.",
 	"- bash(command) runs a shell in a fresh subshell and returns a CompletedProcess;",
 	"  branch on its .returncode and read its .stdout/.stderr. State does not carry",
-	"  between shell calls — hold it in Python variables instead.",
+	"  between shell calls. Hold it in Python variables instead.",
 	"- The standard library is always available. Do not install packages into the",
 	"  evaluator; run out-of-tree projects through their own environment and treat that",
 	"  environment's results and failures as authoritative.",
@@ -118,13 +134,13 @@ const TRANSPARENCY = [
 	"- If output begins with <rlm_engine_reset>, the environment was restored from a",
 	"  snapshot and may be behind: re-verify any variable before you trust it.",
 	"- External systems are reviewed through their own interface; the evaluator",
-	"  coordinates and analyzes — it is not the home for their state.",
+	"  coordinates and analyzes. It is not the home for their state.",
 ].join("\n");
 
 export function buildRlmPyPrompt(options: RlmPromptOptions): string {
 	const tools = loadToolboxEntries(options.toolboxDir);
 	const parts = [
-		"You are a Technical AI Assistant. Your only interface is execute — a persistent",
+		"You are a Technical AI Agent. Your only interface is execute, a persistent",
 		"Python environment that keeps your variables, functions, imports, and data alive",
 		"across every call. Work as a rigorous engineer: write code, run it, read the result,",
 		"correct, and stop when the task is genuinely done.",

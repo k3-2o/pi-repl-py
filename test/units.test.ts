@@ -8,6 +8,8 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decodeMessage, encodeMessage } from "../src/engine/protocol.js";
 import { buildRlmPyPrompt } from "../src/extension/prompt.js";
@@ -50,10 +52,11 @@ describe("protocol framing", () => {
 describe("system prompt", () => {
 	test("states identity, cwd, and the evaluator doctrine", () => {
 		const prompt = buildRlmPyPrompt({ cwd: "/tmp/work" });
-		expect(prompt).toContain("Technical AI Assistant");
+		expect(prompt).toContain("Technical AI Agent");
 		expect(prompt).toContain("Current working directory: /tmp/work");
 		expect(prompt).toContain("ENVIRONMENT");
-		expect(prompt).toContain("working memory");
+		expect(prompt).toContain("named top-level");
+		expect(prompt).toContain("read it in full");
 		expect(prompt).toContain("CompletedProcess");
 		expect(prompt).toContain("persist");
 		// The reset notice is only useful if the model knows what to do with it:
@@ -76,12 +79,46 @@ describe("system prompt", () => {
 		const prompt = buildRlmPyPrompt({ cwd: "/tmp" });
 		expect(prompt).toContain("TOOLBOX");
 		// Loaded from the toolbox docstrings (one source of truth):
-		expect(prompt).toContain("read(path)");
+		expect(prompt).toContain("read(path, offset=1, limit=None)");
 		expect(prompt).toContain("write(path, content)");
 		expect(prompt).toContain("edit(path, old_text, new_text)");
 		expect(prompt).toContain("bash(command, cwd=None)");
 		expect(prompt).toContain("help(name)");
 		expect(prompt).toContain("foundation, not a ceiling");
+	});
+
+	test("function_description is read for the description and def is authoritative for args", () => {
+		const d = mkdtempSync(join(tmpdir(), "pi-repl-tb-"));
+		writeFileSync(
+			join(d, "sample.py"),
+			'function_description = """Concise one-liner.\n\nLonger prose.\n"""\n\ndef sample(a, b=1):\n    return a\n',
+		);
+		const prompt = buildRlmPyPrompt({ cwd: "/tmp", toolboxDir: d });
+		// Signature comes from the def (authoritative), description from the first
+		// line of function_description (concise).
+		expect(prompt).toContain("sample(a, b=1)");
+		expect(prompt).toContain("Concise one-liner");
+		expect(prompt).not.toContain("Longer prose");
+	});
+
+	test("a toolbox file without function_description still advertises its signature", () => {
+		const d = mkdtempSync(join(tmpdir(), "pi-repl-tb-"));
+		writeFileSync(join(d, "bare.py"), "def bare(x, y=2):\n    return x + y\n");
+		const prompt = buildRlmPyPrompt({ cwd: "/tmp", toolboxDir: d });
+		// The signature comes from the def; no description is fine.
+		expect(prompt).toContain("bare(x, y=2)");
+	});
+
+	test("an underscore-prefixed toolbox file is not advertised", () => {
+		const d = mkdtempSync(join(tmpdir(), "pi-repl-tb-"));
+		writeFileSync(join(d, "deprecated.py"), "def deprecated(x):\n    return x\n");
+		// An underscore-prefixed file is intentionally not loaded into the kernel
+		// and must not be advertised (the guest loader also skips it).
+		writeFileSync(join(d, "_helper.py"), "def _private(y):\n    return y\n");
+		const prompt = buildRlmPyPrompt({ cwd: "/tmp", toolboxDir: d });
+		expect(prompt).toContain("deprecated(x)");
+		expect(prompt).not.toContain("_helper");
+		expect(prompt).not.toContain("private(y)");
 	});
 
 	test("no unresolved template placeholders leak into the prompt", () => {

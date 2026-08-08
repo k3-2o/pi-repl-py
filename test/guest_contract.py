@@ -184,6 +184,17 @@ def test_snapshot_and_restore(guest):
     guest2.close()
 
 
+def test_snapshot_excludes_toolbox_metadata(guest):
+    # function_description (and other toolbox metadata) is exec'd into the kernel
+    # namespace but is NOT user state; it must not appear in a snapshot.
+    run_cell(guest, "data = {'count': 42}", "c1")
+    guest.send({"type": "snapshot", "id": "s1"})
+    snap = guest.recv_type("snapshot_result", timeout=20)
+    assert "data" in snap["vars"]
+    assert "function_description" not in snap["vars"]
+    assert "read" not in snap["vars"]
+
+
 # ── list_names ─────────────────────────────────────────────────────────────────
 def test_list_names(guest):
     run_cell(guest, "alpha = 1; beta = 2", "c1")

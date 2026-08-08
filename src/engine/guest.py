@@ -169,7 +169,10 @@ class Kernel:
     def snapshot_globals(self):
         # Skip the toolbox functions and intrinsic helpers (functions don't
         # pickle anyway; excluding avoids a noisy `failed` list on every save).
-        tool_names = sorted(set(_TOOLBOX_SRC) | {"ls", "help"})
+        # Skip the toolbox/intrinsic functions, plus the toolbox metadata globals
+        # (function_description) which are exec'd into the namespace but are not
+        # user state and must not be snapshotted as such.
+        tool_names = sorted(set(_TOOLBOX_SRC) | {"ls", "help", "function_description"})
         skip_names = json.dumps(tool_names)
         out, _, _, _ = self.execute(
             "import pickle as _pk, base64 as _b64, json as _js\n"

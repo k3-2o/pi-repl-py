@@ -109,7 +109,6 @@ export default function (pi: ExtensionAPI) {
 		return {
 			systemPrompt: buildRlmPyPrompt({
 				cwd: ctx.cwd,
-				messagesPath: ctx.sessionManager.getSessionFile() ?? undefined,
 				contextFiles: options?.contextFiles,
 				toolboxDir: CFG.toolboxDir,
 			}),
