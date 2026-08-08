@@ -1,74 +1,150 @@
 /**
- * The system prompt (Python toolbox edition).
+ * The system prompt (minimal spine + dynamic toolbox).
  *
  * Replaces pi's default coding-assistant prompt rather than appending to it.
- * The default describes read, bash, and edit *tools*, none of which are
- * registered in this configuration; leaving it in place would point the model
- * at tools it cannot call. It teaches the working style the Python evaluator
- * rewards: keep state in variables, run shell in-language via bash(), use the
- * toolbox functions, and let each cell build on the last.
+ * It is deliberately lean: identity + environment + transparency, with the
+ * toolbox surface assembled at session start from each function's own
+ * docstring (one source of truth), so the list the model sees always matches
+ * the code loaded into the kernel — nothing static to drift.
  */
+
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 export interface RlmPromptOptions {
 	cwd: string;
 	messagesPath?: string;
 	contextFiles?: Array<{ path: string; content: string }>;
+	/** Explicit toolbox directory; defaults to the repo's src/engine/toolbox. */
+	toolboxDir?: string;
 }
 
-const EVALUATOR_CONTROL_PROMPT = [
-	"The execute tool is your long-lived notebook: a persistent Python environment for reasoning, context management, state, tool orchestration, and recursive subcalls. Use it to keep intermediate variables, inspect and transform outputs, write small helper functions, and preserve useful state across turns.",
-	"",
-	"Do not assume the evaluator is the native runtime of the external thing being investigated. A repository, package, service, dataset, paper, website, benchmark, or API may have its own environment and normal interface. Evaluate external systems through their own interface, then use the evaluator to coordinate the process and analyze what comes back.",
-	"",
-	"Run shell commands in-language with bash(): `out = bash('cmd args')` — then `out.stdout`, `out.stderr`, and `out.returncode` are ordinary values you can assign, slice, and branch on. The result is a CompletedProcess (like subprocess.run with capture_output=True, text=True). Each bash() call is a fresh subshell: shell-level state (cd, export, shell variables) does NOT carry between calls. Use Python's os.chdir() and os.environ['VAR'] = ... for state that must persist, or chain dependent shell steps inside one shell command string.",
-	"",
-	"Do not install dependencies into the evaluator just to make an external project import or run there. If a project import, test, script, CLI, or dependency check is needed, run it through that project's own environment and normal command interface (its documented commands, package scripts, venv, etc.) and treat failures from that native environment as the relevant result.",
-	"",
-	"Use code for reading, searching, and editing files (read(path), bash('grep ...'), open(), Path.read_text()). Always assign read/search results to named top-level variables so you can revisit, filter, and slice them later without re-reading.",
-	"",
-	"Writes are surgical; reads are full. grep, ls, and head are for locating — before editing a file or reasoning broadly about it, read it start to finish. Partial reads (match windows, head, offset slices) miss imports, types, helpers, and the file's shape, and a bad edit from missing context costs more than any full read. Scope a read only when the file is genuinely too large, or to re-check one region of a file you already read in full and have not edited since — once you edit a file, the next read of it must again be start to finish.",
-	"",
-	"Evaluator state persists across cells and tool calls: top-level variables, functions, classes, imports, notes, parsed outputs, and helper data structures all remain available in every later turn, and are revived on a best-effort basis when a session resumes. Tool calls are their own expressions, so their return values can be bound to variables and composed into program logic like any other call.",
-	"",
-	"If a cell result begins with an `<rlm_engine_reset>` block, the evaluator restarted and its namespace was rebuilt from a snapshot: re-verify any variable named there before reusing it, and never interpolate one into a shell command until you have confirmed it still holds what you expect.",
-	"",
-	"The final expression of a cell is rendered as its result. Prefer many small cells over one large cell: execute, observe, then continue.",
-].join("\n");
+interface ToolEntry {
+	name: string;
+	call: string; // e.g. "read(path)"
+	description: string; // e.g. "return the text of a file"
+}
 
-function buildHostToolsSection(): string {
+/** Parse a toolbox file's opening docstring: "signature — what it does". */
+function parseDocstringLead(source: string): { call: string; description: string } | null {
+	const lead = source.match(/^"""\s*([^\n]+)/)?.[1];
+	if (!lead) return null;
+	const line = lead.trim().replace(/"""$/, "").trim();
+	if (!line) return null;
+	// Split on the em-dash (or " - ") common to our toolbox docstrings.
+	const i = line.search(/\s+[—\-]\s+/);
+	if (i === -1) return { call: line, description: "" };
+	return {
+		call: line.slice(0, i).trim(),
+		description: line
+			.slice(i)
+			.replace(/^\s*[—\-]\s+/, "")
+			.trim(),
+	};
+}
+
+/** Load toolbox entries from a directory of one-function-per-*.py files. */
+function loadToolboxEntries(dir?: string): ToolEntry[] {
+	const d = dir && dir.length > 0 ? dir : join(import.meta.dirname, "..", "..", "src", "engine", "toolbox");
+	if (!existsSync(d)) return [];
+	const entries: ToolEntry[] = [];
+	for (const file of readdirSync(d).sort()) {
+		if (!file.endsWith(".py")) continue;
+		const name = file.slice(0, -3);
+		if (!/^[A-Za-z_]\w*$/.test(name)) continue;
+		try {
+			const parsed = parseDocstringLead(readFileSync(join(d, file), "utf8"));
+			if (parsed) entries.push({ name, ...parsed });
+		} catch {
+			continue;
+		}
+	}
+	return entries;
+}
+
+/** Build a short, comma-joined "call(...)" listing for the tool description. */
+export function buildToolboxListing(dir?: string): string {
+	return loadToolboxEntries(dir)
+		.map((t) => t.call)
+		.join(", ");
+}
+
+const EXAMPLES = [
+	'      content = read("config.yaml")',
+	'      result  = bash("pytest -q")',
+	"      if result.returncode == 0:",
+	'          write("test/summary.txt", result.stdout)',
+];
+
+function renderToolbox(tools: ToolEntry[]): string {
+	const width = Math.max(...tools.map((t) => t.call.length), 0) + 2;
+	const list = tools.map((t) => (t.description ? `      ${t.call.padEnd(width)}${t.description}` : `      ${t.call}`));
 	return [
-		"# Toolbox functions",
+		"TOOLBOX",
+		"- A set of functions is already imported and ready to call — reading, writing,",
+		"  and editing files, running commands. They return ordinary Python values you",
+		"  can assign, combine, and reuse.",
 		"",
-		"Loaded into the kernel at boot: read(path), write(path, content), edit(path, old_text, new_text), and bash(cmd). Use help(name) / ls() to discover them or their exact signatures.",
+		...list,
 		"",
-		"Prefer edit() over rewriting files with open('w') / write(): it fails loudly when old_text is stale instead of silently reverting content you have not seen.",
-		"read() is bounded so a huge file can't melt context; pass it the file path and it returns text.",
+		...EXAMPLES,
+		"",
+		"- This set is a foundation, not a ceiling. When it helps, define your own helpers",
+		"  and compose these functions into reusable routines, so a job is done once",
+		"  instead of repeated.",
+		"- ls() lists what is available here; help(name) shows any function's exact call.",
 	].join("\n");
 }
 
-export function buildRlmPyPrompt(options: RlmPromptOptions): string {
-	const now = new Date();
-	const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+const ENVIRONMENT = [
+	"ENVIRONMENT",
+	"- The evaluator is your working memory. Keep intermediate results in variables",
+	"  and build on them rather than recomputing or re-reading.",
+	"- Do the smallest amount of work that gives a correct answer. Batch related steps,",
+	"  reuse what you already hold, and prefer one composed operation over several",
+	"  scattered ones. Fewer round-trips is faster and cheaper.",
+	"- bash(command) runs a shell in a fresh subshell and returns a CompletedProcess;",
+	"  branch on its .returncode and read its .stdout/.stderr. State does not carry",
+	"  between shell calls — hold it in Python variables instead.",
+	"- The standard library is always available. Do not install packages into the",
+	"  evaluator; run out-of-tree projects through their own environment and treat that",
+	"  environment's results and failures as authoritative.",
+].join("\n");
 
+const TRANSPARENCY = [
+	"TRANSPARENCY",
+	"- A cell shows nothing unless you print or return it. Keep large values in variables",
+	"  rather than flooding output.",
+	"- If output begins with <rlm_engine_reset>, the environment was restored from a",
+	"  snapshot and may be behind: re-verify any variable before you trust it.",
+	"- External systems are reviewed through their own interface; the evaluator",
+	"  coordinates and analyzes — it is not the home for their state.",
+].join("\n");
+
+export function buildRlmPyPrompt(options: RlmPromptOptions): string {
+	const tools = loadToolboxEntries(options.toolboxDir);
 	const parts = [
-		"You are a general purpose agent that uses code to solve tasks.",
-		"You solve tasks by breaking down problems into sub-tasks, writing and executing code, observing results, and iterating one step at a time.",
-		"When you are done, stop calling tools and state your final answer.",
+		"You are a Technical AI Assistant. Your only interface is execute — a persistent",
+		"Python environment that keeps your variables, functions, imports, and data alive",
+		"across every call. Work as a rigorous engineer: write code, run it, read the result,",
+		"correct, and stop when the task is genuinely done.",
 		"",
-		`Working directory: ${options.cwd.replace(/\\/g, "/")}`,
-		`Conversation log: ${(options.messagesPath ?? "not persisted").replace(/\\/g, "/")}`,
-		`Current date: ${date}`,
-		"The evaluator is Python. The full Python standard library is available (open, os, subprocess, pathlib, collections, math, random, json, ...). Install extra packages only when genuinely needed, via the project's own environment.",
+		ENVIRONMENT,
+		"",
+		renderToolbox(tools),
+		"",
+		TRANSPARENCY,
 	];
 
-	parts.push("", EVALUATOR_CONTROL_PROMPT);
-	parts.push("", buildHostToolsSection());
-
+	// Footer facts change with the session; keeping them last preserves prompt-cache
+	// stability for the constant spine above.
+	parts.push("", `Current working directory: ${options.cwd.replace(/\\/g, "/")}`);
 	if (options.contextFiles && options.contextFiles.length > 0) {
-		parts.push("", "# Project Context", "", "Project-specific instructions and guidelines:", "");
+		parts.push("", "<project_context>", "", "Project-specific instructions and guidelines:", "");
 		for (const { path, content } of options.contextFiles) {
-			parts.push(`## ${path}`, "", content, "");
+			parts.push(`<project_instructions path="${path}">`, content, "</project_instructions>", "");
 		}
+		parts.push("</project_context>");
 	}
 
 	return parts.join("\n");

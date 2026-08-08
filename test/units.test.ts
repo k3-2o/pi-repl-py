@@ -49,49 +49,39 @@ describe("protocol framing", () => {
 
 describe("system prompt", () => {
 	test("states identity, cwd, and the evaluator doctrine", () => {
-		const prompt = buildRlmPyPrompt({ cwd: "/tmp/work", messagesPath: "/tmp/s.jsonl" });
-		expect(prompt).toContain("general purpose agent that uses code");
-		expect(prompt).toContain("/tmp/work");
-		expect(prompt).toContain("/tmp/s.jsonl");
-		expect(prompt).toContain("bash()");
-		expect(prompt).toContain("Toolbox functions");
+		const prompt = buildRlmPyPrompt({ cwd: "/tmp/work" });
+		expect(prompt).toContain("Technical AI Assistant");
+		expect(prompt).toContain("Current working directory: /tmp/work");
+		expect(prompt).toContain("ENVIRONMENT");
+		expect(prompt).toContain("working memory");
+		expect(prompt).toContain("CompletedProcess");
 		expect(prompt).toContain("persist");
 		// The reset notice is only useful if the model knows what to do with it:
 		// re-verify before reuse, and above all before shell interpolation.
 		expect(prompt).toContain("<rlm_engine_reset>");
 		expect(prompt).toContain("re-verify");
-		expect(prompt).toContain("shell command");
 	});
 
-	test("context files are appended verbatim under a project section", () => {
+	test("context files are appended under a project section", () => {
 		const prompt = buildRlmPyPrompt({
 			cwd: "/tmp",
 			contextFiles: [{ path: "AGENTS.md", content: "PROJECT_RULE_MARKER" }],
 		});
-		expect(prompt).toContain("# Project Context");
+		expect(prompt).toContain("<project_context>");
 		expect(prompt).toContain("AGENTS.md");
 		expect(prompt).toContain("PROJECT_RULE_MARKER");
 	});
 
-	test("reads-are-full doctrine is stated", () => {
+	test("toolbox section is always present and lists the load functions", () => {
 		const prompt = buildRlmPyPrompt({ cwd: "/tmp" });
-		expect(prompt).toContain("Writes are surgical; reads are full");
-		expect(prompt).toContain("read it start to finish");
-		// The re-check shortcut dies with the first edit: an edited file must be
-		// reread whole, because memory of edited files drifts fastest.
-		expect(prompt).toContain("have not edited since");
-	});
-
-	test("toolbox section is always present and names the functions", () => {
-		const prompt = buildRlmPyPrompt({ cwd: "/tmp" });
-		expect(prompt).toContain("# Toolbox functions");
+		expect(prompt).toContain("TOOLBOX");
+		// Loaded from the toolbox docstrings (one source of truth):
 		expect(prompt).toContain("read(path)");
-		expect(prompt).toContain("write(path");
-		expect(prompt).toContain("edit(path");
-		expect(prompt).toContain("bash(cmd)");
+		expect(prompt).toContain("write(path, content)");
+		expect(prompt).toContain("edit(path, old_text, new_text)");
+		expect(prompt).toContain("bash(command, cwd=None)");
 		expect(prompt).toContain("help(name)");
-		// The doctrine: edits over rewrites, loud stale-anchor failure.
-		expect(prompt).toContain("fails loudly");
+		expect(prompt).toContain("foundation, not a ceiling");
 	});
 
 	test("no unresolved template placeholders leak into the prompt", () => {

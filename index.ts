@@ -12,7 +12,7 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 import { EngineBusyError, EngineManager } from "./src/engine/index.js";
 import { loadConfig } from "./src/extension/config.js";
-import { buildRlmPyPrompt } from "./src/extension/prompt.js";
+import { buildRlmPyPrompt, buildToolboxListing } from "./src/extension/prompt.js";
 import { ExecuteCellComponent, type ExecuteDetails, type ExecuteRenderState } from "./src/extension/render.js";
 import { EngineLifecycle, summarizeNames } from "./src/extension/session-engine.js";
 
@@ -111,6 +111,7 @@ export default function (pi: ExtensionAPI) {
 				cwd: ctx.cwd,
 				messagesPath: ctx.sessionManager.getSessionFile() ?? undefined,
 				contextFiles: options?.contextFiles,
+				toolboxDir: CFG.toolboxDir,
 			}),
 		};
 	});
@@ -165,7 +166,7 @@ export default function (pi: ExtensionAPI) {
 		label: "execute",
 		description:
 			"Execute Python in a persistent evaluator. Variables, imports, and loaded data persist across calls. " +
-			"Toolbox functions are preloaded: read(path), write(path, content), edit(path, old_text, new_text), bash(cmd). " +
+			`Toolbox functions are preloaded: ${buildToolboxListing(CFG.toolboxDir)}. ` +
 			"Use ls() / help(name) to discover them. The final expression of the cell is returned as the result.",
 		parameters: executeSchema,
 		renderShell: "self",
