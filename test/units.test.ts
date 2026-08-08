@@ -21,7 +21,9 @@ import {
 	isShellish,
 	paintBackground,
 	type RenderDeps,
+	renderExecuteBody,
 	renderExecuteCell,
+	renderExecuteHeader,
 	statusKind,
 } from "../src/extension/render-core.js";
 
@@ -234,6 +236,21 @@ describe("render-core: layout", () => {
 		const joined = stripAnsi(expanded.join("\n"));
 		expect(joined).toContain("const a = 1;");
 		expect(joined).toContain("hello");
+	});
+
+	test("header and body split reconstructs the full cell", () => {
+		const deps = testDeps();
+		const state = makeState({ expanded: true });
+		const full = renderExecuteCell(state, 80, deps);
+		const header = renderExecuteHeader(state, 80, deps);
+		const body = renderExecuteBody(state, 80, deps);
+		expect(header).toHaveLength(1);
+		expect(stripAnsi(header[0])).toBe(stripAnsi(full[0]));
+		expect([...header, ...body]).toHaveLength(full.length);
+		expect(stripAnsi([...header, ...body].join("\n"))).toBe(stripAnsi(full.join("\n")));
+
+		const collapsedBody = renderExecuteBody(makeState({ expanded: false }), 80, deps);
+		expect(collapsedBody).toHaveLength(0);
 	});
 
 	test("every rendered line fits the pane width, at any width", () => {
