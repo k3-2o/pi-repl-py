@@ -1,136 +1,127 @@
-# pi-rlm
+# pi-repl
 
-A [pi](https://pi.dev) extension that replaces the usual toolbox with a single
-tool: **`execute`**, which runs TypeScript in a persistent Bun evaluator.
+A [pi](https://pi.dev) extension that gives the agent a single `execute` tool backed by a
+**persistent Python evaluator** — a real IPython kernel that keeps variables, functions, and
+imports alive across calls and turns.
 
-Everything an agent would normally reach for a separate tool to do — reading
-files, running shell commands, editing, searching, delegating to subagents — is
-expressed as code inside that one tool.
+Unlike a human REPL, there is no terminal or live prompt: the agent batches code into a
+long-lived Python workspace and only the printed result comes back. That is the "REPL parts
+that matter to an agent" — lasting state and code-as-a-workspace — without the interactive loop.
 
 ```
- ✓ rlm · shell · const files = (await Bun.$`ls -1`.text()).split("\n") · ↑ 2 ↓ 7 lines · 41ms
- ✓ rlm · const tests = files.filter((f) => f.includes("test")) · ↑ 1 ↓ 1 lines · 3ms
+✓ repl · data = load_json("records.json")        · done
+✓ repl · avg = sum(v["score"] for v in data)/len(data)
+✓ repl · print("mean score:", round(avg, 2))     · mean score: 41.7
 ```
 
-The second cell reuses the first cell's variable. Nothing was re-read, and
-nothing was re-parsed from text — because the evaluator is still there.
+`data` is still there in cell three. Nothing was re-read, nothing was re-derived from output —
+because the evaluator is still alive.
 
-## Why one tool
+## Why one tool, why Python
 
-A fixed set of tools is a fixed vocabulary. Every new capability means a new
-tool, a new schema, and a model that has to be taught when to reach for it.
+A fixed tool menu is a fixed vocabulary. Here the vocabulary is Python: capabilities arrive as
+functions and helpers in the evaluator's namespace rather than as new tool entries, so the
+surface the model sees never changes while what it can do keeps growing.
 
-Here the vocabulary is a programming language. Capabilities arrive as functions
-in the evaluator's namespace rather than as entries in a tool list, so the
-interface the model sees never changes while what it can do keeps growing. It
-also changes how an agent works: intermediate results live in variables instead
-of being re-derived from earlier output, so a long task compounds rather than
-repeating itself.
+Python is the evaluator language because:
+
+- models are most-fluent and, per the `mame/ai-coding-lang-bench` family, most *efficient* in
+  dynamic languages like Python (fewer type-annotation tokens, more training data);
+- `exec(namespace)` / a real IPython kernel keeps **variables and functions** hot with no AST
+  rewrite (the JS `with(proxy)` + transform dance is unnecessary);
+- the data/math ecosystem (pandas, numpy, the stdlib) is what agents actually reach for.
 
 ## What the agent gets
 
-**A namespace that persists.** Variables, functions, classes, and imports stay
-available across calls, across turns, and — on a best-effort basis — across
-session resumes. Whatever cannot be serialised is named in the restore report
-rather than silently dropped.
+- **A persistent namespace.** Variables, functions, classes, and imports survive across cells,
+  turns, and — via snapshots — a best-effort basis across engine restarts. Whatever cannot be
+  serialised is reported by name rather than dropped silently.
+- **A real IPython kernel**, not a hand-rolled `exec` loop: rich tracebacks, safe partial
+  state, the standard library, and last-expression result capture.
+- **Shell as values.** `sh("git log --oneline")` returns a `CompletedProcess` — access
+  `.stdout`, `.stderr`, `.returncode` and branch on them, no transcript parsing.
+- **Error survival.** A cell that throws reports the traceback and the *kernel keeps going* —
+  the next cell can still read what was defined before the error.
+- **Snapshots.** After each successful cell, the namespace is pickled (debounced) so a crash or
+  killed process loses little; a fresh evaluator revives the last snapshot.
+- **Honest reset reporting.** If the evaluator restarts, a `<rlm_engine_reset>` block names
+  exactly what was revived and what was lost, so the model never assumes state that isn't there.
 
-**Shell as values, not text.** `await Bun.$`git log --oneline`.quiet()` returns an
-object with an exit code and captured output, ready to be assigned and filtered.
-No parsing a transcript to recover what a command said.
+## Install & run
 
-**Subagents as function calls.** `await rlm.run("task")` spawns a real child
-agent and returns a handle at admission. Children write their answers to files;
-the parent polls the registry and reads them when it wants. Delegation happens
-mid-computation instead of as a separate mode.
-
-**Cancellation that costs one cell.** Interrupting a running cell leaves the
-namespace intact, and the cancelled cell cannot keep writing to it afterwards.
-
-## Install
+Requires [Pi](https://pi.dev), [Bun](https://bun.sh) (the extension host runs store is still
+the pi/tui JS side, even though the evaluator is Python), and a Python 3.13+ with
+`ipykernel` + `jupyter_client`.
 
 ```bash
-pi install npm:@shift-labs/pi-rlm
+# from this clone
+npm install
+# prepare the Python evaluator venv (project-local)
+.venv/bin/python -m pip install ipykernel jupyter_client
 ```
 
-**[Bun](https://bun.sh) is required.** pi itself runs on Node, but the evaluator
-is a Bun process — without it on your PATH the engine will tell you so and stop.
+Launch — the extension is **dormant** until the flag is passed (a plain `pi` session is
+untouched):
 
 ```bash
-curl -fsSL https://bun.sh/install | bash
-```
-
-## Launch
-
-The extension is dormant until asked for. A plain `pi` session is untouched —
-default prompt, default tools, no evaluator. Activation is one flag:
-
-```bash
-pi --rlm
-```
-
-That collapses the tool surface to `execute` and replaces the system prompt;
-no other pi flags are needed. To verify the two worlds:
-
-```bash
-pi -p "what tools do you have?"          # stock pi: read, bash, edit, ...
-pi -p --rlm "what tools do you have?"    # one tool: execute
-```
-
-To run from a clone (development), load the extension explicitly — the flag
-works the same, or set `PI_RLM_FORCE=1` where flag plumbing is awkward:
-
-```bash
-git clone https://github.com/shift-labs-ai/pi-rlm && cd pi-rlm
-bun install
-pi --rlm -e ./src/extension/index.ts
+pi --repl
 ```
 
 ### Configuration
 
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `PI_RLM_SUBAGENT_MODEL` | `anthropic/haiku` | Model children are spawned with |
-| `PI_RLM_MAX_DEPTH` | `2` | How deep recursive delegation may go |
-| `PI_RLM_DEPTH` | `0` | Depth of the current agent; set on children automatically |
+`~/.pi/agent/pi-repl.json` (or `$PI_REPL_CONFIG`):
 
-Session state lives in `.pi-rlm/<session>/`: the namespace snapshot and each
-subagent's session file and output.
+```json
+{
+  "helpers": ["sh", "read", "write", "glob"],
+  "pythonPath": ".venv/bin/python3",
+  "timeoutMs": 60000,
+  "snapshotDebounceMs": 1500,
+  "maxDepth": 2
+}
+```
 
-## How it works
-
-The extension runs a Bun child process that owns the namespace. Cells are
-transformed so their top-level declarations become namespace assignments, then
-executed inside a `with` block over a proxy. Host and guest talk over a private
-pipe with authenticated framing, which is what stops a cell from being able to
-report its own outcome.
-
-[ARCHITECTURE.md](ARCHITECTURE.md) covers the design and the reasoning behind it.
+`helpers: []` (an explicit empty list) = a bare kernel, no injected helpers.
 
 ## Development
 
+The gate is:
+
 ```bash
-bun run check      # typecheck, lint, and the full suite — the gate
-bun test           # tests only
-bun run typecheck  # tsc --noEmit
-bun run format     # biome
+just check      # biome format+lint, bun test (host), pytest (guest)
+just test       # the same suites
 ```
 
-The test suite is the specification. `test/engine.contract.test.ts` states each
-guarantee the evaluator makes and why it exists; read it before changing engine
-behaviour, and never weaken a case to make a change pass.
+- `bun test test/units.* test/preview-core.*` — host logic (protocol framing, prompt, render
+  core, subagent host registry).
+- `pytest test/guest_contract.py` — the Python evaluator contract (persistence,
+  error-survival, output attribution, snapshot/restore, helpers).
+
+The *host* is TypeScript and runs tests under **bun** (matching its vendored roots); the
+*guest* is Python and runs under **pytest**. See [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Layout
 
 ```
-src/engine/      the evaluator
-  index.ts       EngineManager — host side: lifecycle, queueing, output, snapshots
-  guest.ts       the Bun process that owns the namespace and runs cells
-  protocol.ts    typed, authenticated framing between the two
-  transform.ts   cell source → executable body
-src/extension/   the pi integration
-  index.ts       tool registration, session wiring
-  prompt.ts      the system prompt
-  subagents.ts   spawning, registry, file-based results
-  render-core.ts cell layout (pure)
-  render.ts      binds pi's theme and width primitives to it
+src/engine/
+  index.ts      EngineManager — host side: spawn the guest, queue, snapshots, teardown
+  protocol.ts   authenticated fd3 line-JSON wire (nonce)
+  guest.py      THE PYTHON EVALUATOR — a real ipykernel behind the protocol
+src/extension/
+  index.ts      registers `execute`, dormant until `--repl`
+  pi-tools.ts   mounts pi's real tool defs behind a host bridge
+  prompt.ts     buildRlmPyPrompt — the injected Python-idiom guidance
+  config.ts     ~/.pi/agent/pi-repl.json loader
+test/
+  units.test.ts        host-logic (protocol, prompt, render, subagent host)
+  preview-core.test.ts pure cell-preview
+  guest_contract.py    Python evaluator contract (pytest)
 ```
+
+## Scope & limits
+
+- **Not** a sandbox beyond process isolation — the kernel runs with your user's permissions.
+- **Not** a huge agent framework (mesh, councils, dashboards, durable actors) — that's
+  pi-fabric's territory. This is the minimal focused "one persistent Python workspace."
+- The `tools.*` bridge (calling pi's real file/edit tools from inside a cell) and a live
+  `pi --repl` interactive harness are tracked follow-ups.
