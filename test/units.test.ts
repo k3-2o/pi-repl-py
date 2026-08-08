@@ -84,7 +84,7 @@ describe("system prompt", () => {
 		expect(prompt).toContain("read(path, offset=1, limit=None)");
 		expect(prompt).toContain("write(path, content)");
 		expect(prompt).toContain("edit(path, old_text, new_text)");
-		expect(prompt).toContain("bash(command, cwd=None)");
+		expect(prompt).toContain("bash(command, cwd=None, env=None, input=None, timeout=None)");
 		expect(prompt).toContain("help(name)");
 		expect(prompt).toContain("foundation, not a ceiling");
 	});
