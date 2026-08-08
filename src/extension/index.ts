@@ -54,15 +54,15 @@ function composeErrorLines(error: { name: string; message: string; stack: string
 const CFG = loadConfig();
 
 export default function (pi: ExtensionAPI) {
-	pi.registerFlag("rlm", {
+	pi.registerFlag("repl", {
 		type: "boolean",
-		description: "Single execute tool backed by a persistent TypeScript evaluator; replaces the default tool surface",
+		description: "Single execute tool backed by a persistent Python evaluator; replaces the default tool surface",
 	});
 	// CLI flag values are injected after extension factories run (verified by
 	// probe: getFlag is undefined here, true in every event), so activation is
-	// decided per event, never at load. PI_RLM_FORCE is the dev escape hatch:
-	// subagent children and test rigs activate without flag plumbing.
-	const active = () => pi.getFlag("rlm") === true || process.env.PI_RLM_FORCE === "1";
+	// decided per event, never at load. PI_REPL_FORCE is the dev escape hatch:
+	// test rigs activate without flag plumbing.
+	const active = () => pi.getFlag("repl") === true || process.env.PI_REPL_FORCE === "1";
 
 	let location = { cwd: process.cwd(), sessionFile: undefined as string | undefined };
 	// A tool error must be thrown for pi to mark the call as failed, but pi's
@@ -75,7 +75,7 @@ export default function (pi: ExtensionAPI) {
 		create() {
 			const { cwd, sessionFile } = location;
 			const sessionKey = sessionFile ? basename(sessionFile).replace(/\.jsonl$/, "") : undefined;
-			const stateDir = join(cwd, ".pi-rlm", sessionKey ?? "ephemeral");
+			const stateDir = join(cwd, ".pi-repl", sessionKey ?? "ephemeral");
 			return new EngineManager({
 				cwd,
 				pythonPath: CFG.pythonPath,
@@ -132,7 +132,7 @@ export default function (pi: ExtensionAPI) {
 		const { restore } = await lifecycle.acquire("startup");
 		if (restore && restore.restored.length > 0) {
 			pi.sendMessage({
-				customType: "pi-rlm-restore",
+				customType: "pi-repl-restore",
 				content: `Revived ${restore.restored.length} variable(s) from the previous run: ${summarizeNames(restore.restored, 8)}${
 					restore.failed.length > 0
 						? `. Failed: ${summarizeNames(
@@ -188,7 +188,7 @@ export default function (pi: ExtensionAPI) {
 		},
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			if (!active()) {
-				throw new Error("pi-rlm is dormant in this session. Start pi with --rlm (or PI_RLM_FORCE=1) to use execute.");
+				throw new Error("pi-repl is dormant in this session. Start pi with --repl (or PI_REPL_FORCE=1) to use execute.");
 			}
 			if (ctx?.cwd) location = { cwd: ctx.cwd, sessionFile: ctx.sessionManager?.getSessionFile?.() ?? undefined };
 			// Building the engine here means the previous one went away mid-session;

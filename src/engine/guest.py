@@ -3,7 +3,7 @@ guest.py — the real IPython kernel guest evaluator for pi-repl.
 
 The TypeScript host (EngineManager) spawns this process once. It starts a real
 local ipykernel via jupyter_client (a subprocess IPython kernel, no separate
-Jupyter server), keeps it alive for the whole session, and bridges the pi-rlm
+Jupyter server), keeps it alive for the whole session, and bridges the pi-repl
 wire protocol to it:
 
   stdin (fd 0)  = typed HostToGuest JSON lines   {"run","ping","snapshot",...}

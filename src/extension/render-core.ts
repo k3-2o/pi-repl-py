@@ -144,7 +144,7 @@ function outputText(state: ExecuteRenderState): string {
 function topLine(state: ExecuteRenderState, width: number, deps: RenderDeps): string {
 	const code = state.code.trimEnd();
 	const preview = previewCell(code);
-	const language = preview.kind === "shell" ? "rlm · shell" : preview.kind === "agent" ? "rlm · agent" : "rlm";
+	const language = preview.kind === "shell" ? "repl · shell" : preview.kind === "agent" ? "repl · agent" : "repl";
 	const prefix = `${marker(state, deps)} ${deps.fg("muted", language)}`;
 
 	// Fixed metadata after the preview — these must always survive; the preview
