@@ -1,149 +1,151 @@
 # pi-repl
 
-A [pi](https://pi.dev) extension that gives the agent a single `execute` tool backed by a
-**persistent Python evaluator** — a real IPython kernel that keeps variables, functions, and
-imports alive across calls and turns.
+A [pi](https://pi.dev) extension that hands the agent a single `execute` tool backed by a
+**persistent Python evaluator**: a real `ipython` kernel that keeps variables, functions, imports,
+and data alive across every call and every turn.
 
-Unlike a human REPL, there is no terminal or live prompt: the agent batches code into a
-long-lived Python workspace and only the printed result comes back. That is the "REPL parts
-that matter to an agent" — lasting state and code-as-a-workspace — without the interactive loop.
+Unlike a shell you type into, there is no interactive prompt. The agent batches code into a
+Python workspace that lives for the whole session, and only the printed result comes back. That
+is the part of a REPL that matters to an agent: lasting state and code-as-a-workspace, with the
+interactive loop out of the way.
 
 ```
-✓ repl · data = load_json("records.json")        · done
+✓ repl · data = load_json("records.json")      · done
 ✓ repl · avg = sum(v["score"] for v in data)/len(data)
-✓ repl · print("mean score:", round(avg, 2))     · mean score: 41.7
+✓ repl · print("mean score:", round(avg, 2))   · mean score: 41.7
 ```
 
-`data` is still there in cell three. Nothing was re-read, nothing was re-derived from output —
-because the evaluator is still alive.
+`data` is still there in cell three. Nothing was re-read, nothing re-derived from output, because
+the kernel is still alive.
 
-## Why one tool, why Python
+## What problem it solves
 
-A fixed tool menu is a fixed vocabulary. Here the vocabulary is Python: capabilities arrive as
-functions in the evaluator's namespace rather than as new tool entries, so the surface the
-model sees never changes while what it can do keeps growing.
+An agent normally has a fixed menu of point tools (a read tool, a bash tool, an edit tool), and
+it juggles between them, re-parsing text output and passing results by hand. Here the model works
+in **one Python workspace**: state persists, functions compose, and capability grows by writing
+better code instead of bolting on another tool. The interface the model sees never changes.
 
-Python is the evaluator language because it keeps **variables and functions** hot with no AST
-rewrite (the old TS/Bun `with(proxy)` + transform dance is unnecessary), models are fluent and
-efficient in it, and the data/math ecosystem (pandas, numpy, the stdlib) is what agents reach
-for.
+This is built for **weak and small models** first. The toolbox is discovered through `help()` and
+`ls()`, and every function carries its own one-line description that is loaded into the prompt
+automatically. The model never has to recall a signature from memory.
 
-## The toolbox — configurable functions, tailored to small models
-
-The model's stable working set is a **toolbox**: pure-Python functions loaded into *every*
-kernel at boot. A weak model can use them like standard tools without recalling exact
-signatures, because introspection is built in:
-
-- `read(path)` — bounded file read.
-- `write(path, content)` — write a file (unconditional).
-- `edit(path, old_text, new_text)` — targeted replacement; **fails loudly** when `old_text` is
-  stale instead of silently mangling an unseen file.
-- `bash(cmd)` — run a shell command, return a `CompletedProcess` (`.stdout`/`.stderr`/
-  `.returncode`). This is also the escape hatch for spawning processes.
-- `ls()` and `help(name)` — **hard-wired** into the evaluator (not configurable) so the model
-  can discover what's loaded and how to call it.
-
-Each function lives in its own file under `src/engine/toolbox/`. Set `toolboxDir` in the
-config (or `$PI_TOOLBOX_DIR`) to point at **your own folder** and replace the shipped set —
-a one-file custom function loads identically into every kernel.
-
-## What the agent gets
-
-- **A persistent namespace.** Variables, functions, classes, and imports survive across cells,
-  turns, and — via snapshots — a best-effort basis across engine restarts. Whatever cannot be
-  serialised is reported by name rather than dropped silently.
-- **A real IPython kernel**, not a hand-rolled `exec` loop: rich tracebacks, safe partial
-  state, the standard library, and last-expression result capture.
-- **Shell as values.** `bash("git log --oneline")` returns a `CompletedProcess` — access
-  `.stdout`, `.stderr`, `.returncode` and branch on them, no transcript parsing.
-- **Error survival.** A cell that throws reports the traceback and the *kernel keeps going* —
-  the next cell can still read what was defined before the error.
-- **Snapshots.** After each successful cell, the namespace is pickled (debounced) so a crash or
-  a killed process loses little; a fresh evaluator revives the last snapshot.
-- **Honest reset reporting.** If the evaluator restarts, a `<rlm_engine_reset>` block names
-  exactly what was revived and what was lost, so the model never assumes state that isn't there.
-
-## Install & run
-
-Requires [Pi](https://pi.dev) and [Bun](https://bun.sh) (the extension host) and Python 3.11+
-with `ipykernel` + `jupyter_client`.
-
-**As a pi package** (`pi install` / `npm install` of the tarball): the package's `postinstall`
-creates a stable per-user venv at `~/.pi/agent/pi-repl-venv` with `ipykernel` + `jupyter_client`
-automatically, so it runs out of the box (it needs a working `python3` and network on the machine).
-
-The engine resolves the interpreter in this order: repo `.venv` → project `.venv` →
-`~/.pi/agent/pi-repl-venv` (package install) → `$PYTHON`/`python3`.
-
-**From this repo (development):**
+## Quick start
 
 ```bash
-just setup    # npm install + a project-local .venv with the guest deps
-```
+# dev (from this clone)
+just setup            # npm install + a project-local .venv with the guest deps
 
-Launch — the extension is **dormant** until the flag is passed (a plain `pi` session is
-untouched):
-
-```bash
+# activate in a session
 pi --repl
 ```
 
-### Configuration
+There is no other setup. A plain `pi` session is untouched; the extension stays dormant until
+`--repl` is passed (or `PI_REPL_FORCE=1`).
+
+## Install as a pi package
+
+`npm install`-ing the tarball runs a `postinstall` step that creates the Python venv the
+evaluator depends on, at a **stable per-user path**:
+
+```
+~/.pi/agent/pi-repl-venv/bin/python3
+```
+
+So a package install just works: `ipykernel` + `jupyter_client` live in that venv, not in the
+ephemeral package dir where they'd vanish on update. If `python3` or the network is missing at
+install time, it prints a clear notice and leaves you a path to fix it.
+
+The interpreter is resolved in this order at runtime:
+
+1. the repo's `.venv` (development)
+2. a cwd-local `.venv` (project)
+3. `~/.pi/agent/pi-repl-venv` (package install)
+4. `$PYTHON` or `python3`
+
+## What the agent gets
+
+- **A persistent namespace.** Variables, functions, classes, imports, and data survive across
+  cells and turns; snapshots carry them across a best-effort basis on restart.
+- **A real `ipython` kernel**, not a hand-rolled `exec` loop. Rich tracebacks, the standard
+  library, last-expression capture.
+- **Shell as values.** `bash("git log --oneline")` returns a `CompletedProcess` you read
+  `.stdout`/`.stderr`/`.returncode` on.
+- **Error survival.** A cell that throws reports the traceback and the kernel keeps going.
+- **Honest resets.** If the evaluator restarts, a `<rlm_engine_reset>` block names exactly what
+  was revived and what was lost.
+
+## The toolbox (configurable functions)
+
+A small set of Python functions is **preloaded into every kernel** and listed in the prompt:
+
+```
+read(path, offset=1, limit=None)   Read a file, optionally a slice.
+write(path, content)               Write a file wholesale.
+edit(path, old_text, new_text)     Replace text; fails if old_text is stale.
+bash(command, cwd=None)            Run a shell command; returns CompletedProcess.
+```
+
+Each lives in its own file under `src/engine/toolbox/`. Set `toolboxDir` in the config to point
+at **your own folder** and the files there load identically. A one-file function appears in the
+kernel and the prompt automatically.
+
+- How to add a function (the file contract, docstrings, disabling):
+  [docs/how-to-functions.md](docs/how-to-functions.md)
+- Why a persistent Python workspace, the venv, and the tool's limits:
+  [docs/philosophy.md](docs/philosophy.md)
+
+## Configuration
 
 `~/.pi/agent/pi-repl.json` (or `$PI_REPL_CONFIG`):
 
 ```json
 {
-  "toolboxDir": "pi-repl-functions",
+  "toolboxDir": "~/.pi/agent/pi-repl-functions",
   "pythonPath": ".venv/bin/python3",
   "timeoutMs": 60000,
   "snapshotDebounceMs": 1500
 }
 ```
 
-`toolboxDir` points at a folder of one-function-per-`*.py` files that replaces the shipped
-defaults (paths resolve relative to `~/.pi/agent`, so the above means
-`~/.pi/agent/pi-repl-functions/`).
-
-## Development
-
-The repository gate is:
-
-```bash
-just setup     # one-time (builds .venv)
-just check     # biome format+lint, bun test (host), pytest (guest)
-just integration  # also runs the real host x Python-guest seam
-```
-
-- Host logic (protocol framing, prompt, render, config) is TypeScript under **bun**.
-- The Python evaluator contract (`test/guest_contract.py`) is Python under **pytest**.
+`toolboxDir` points at a folder of one-function-per-`.py` files that replaces the shipped
+defaults. Use an absolute path, or a `~`-prefixed path (`~` is expanded). A bare relative
+path is resolved from the process working directory, which is not reliable, so prefer an
+absolute one for a stable, per-user folder.
 
 ## Layout
 
 ```
+index.ts                extension entry (loaded by pi)
 src/engine/
-  index.ts      EngineManager — host side: spawn the guest, queue, snapshots, teardown
-  guest.py      THE PYTHON EVALUATOR — a real ipykernel behind the protocol
-  protocol.ts   authenticated fd3 line-JSON wire (nonce)
-  toolbox/      one file per function: read.py, write.py, edit.py, bash.py
+  guest.py               the ipython-kernel evaluator behind the wire protocol
+  index.ts               host: spawn the guest, snapshots, teardown
+  toolbox/               one file per function: read/write/edit/bash
 src/extension/
-  index.ts      registers `execute`, dormant until `--repl`
-  prompt.ts     buildRlmPyPrompt — the system prompt (toolbox doctrine etc.)
-  config.ts     ~/.pi/agent/pi-repl.json loader
-  session-engine.ts  rebuild/restore an engine from the last snapshot
+  prompt.ts              the system prompt + dynamic toolbox loader
+  config.ts              ~/.pi/agent/pi-repl.json loader
 test/
-  units.test.ts         host-logic (protocol, prompt, render)
-  preview-core.test.ts  cell-preview
-  engine.integration.test.ts   real host x Python-guest snapshot/restore
-  guest_contract.py     Python evaluator contract (pytest)
+  units.test.ts          host-logic
+  guest_contract.py      Python evaluator contract (pytest)
+  engine.integration.test.ts  real host x Python-guest seam
 ```
 
-## Scope & limits
+## Development
 
-- **Not** a sandbox beyond process isolation — the kernel runs with your user's permissions.
-  The toolbox trusts the user.
-- **No subagents, no `tools.*` bridge** — subagents aren't first-class; the model can spawn a
-  process with `bash()`. The `tools.*` host bridge was removed.
-- **Not** a huge agent framework (mesh, councils, dashboards). This is a focused "one
-  persistent Python workspace."
-- A live `pi --repl` interactive harness is a tracked follow-up.
+The gate is one command:
+
+```bash
+just check      # biome + bun test (host) + pytest (guest)
+just integration  # adds the real host x python seam
+```
+
+The host is TypeScript under `bun`. The evaluator contract is Python under `pytest`.
+
+## It is not
+
+- A sandbox. The kernel runs with your user's permissions. The toolbox trusts you.
+- A subagent framework. There are no `rlm.run` subagents; spawn a process with `bash()`.
+- A mount-that-replaces-your-tools pi tool. It is one `execute` tool with functions inside.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

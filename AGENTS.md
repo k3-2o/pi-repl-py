@@ -3,8 +3,9 @@
 You may well be running inside the thing this repo builds: a pi extension whose single tool,
 `execute`, runs Python in a persistent `ipykernel` evaluator behind the TypeScript host.
 
-Start with [README.md](README.md) for what it is and [ARCHITECTURE.md](ARCHITECTURE.md) for how
-it works and why.
+Start with [README.md](README.md) for what it is, [ARCHITECTURE.md](ARCHITECTURE.md) for how it
+works and why, [docs/philosophy.md](docs/philosophy.md) for the design rationale, and
+[docs/how-to-functions.md](docs/how-to-functions.md) for adding toolbox functions.
 
 ## The gate
 
@@ -36,8 +37,10 @@ commits. Read before restructuring.
 **Comments explain why.** What the code does is visible; say what breaks if written the obvious
 way (the fd3+nonce protocol, the timeout-kill-restore cancellation, the separate process).
 
-**The Python runtime is project-local, not in /tmp.** The venv lives in `.venv/` on a stable
-path (`~/.local/share/python-runtime`), not a `/tmp` download — `/tmp` is volatile.
+**The Python runtime is project-local, not the system interpreter.** Dev uses `.venv/` (built by
+`just setup`); a package install creates `~/.pi/agent/pi-repl-venv` via `postinstall`. The host
+resolves in a fixed order (repo venv → cwd venv → install venv → `$PYTHON`/`python3`). Never rely
+on system `python3` having ipykernel.
 
 ## Conventions
 

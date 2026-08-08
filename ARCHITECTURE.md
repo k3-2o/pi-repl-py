@@ -1,132 +1,124 @@
 # Architecture
 
-## Shape
-
-Two processes. The host lives inside pi; the guest owns the Python evaluator.
+Two processes: the host lives inside pi, the guest owns the Python workspace.
 
 ```
 pi
- └─ extension            registers the `execute` tool, waits for `--repl`
-     └─ EngineManager    lifecycle, execution queue, output accounting, snapshots
-         │  stdin   ──▶  commands (run / snapshot / restore / ping / list_names)
-         │  fd 3    ◀──  protocol: ready / stream / done / snapshot_result / ...
-         │  stdout  ◀──  subprocess output only
-         └─ guest (python)   a real ipykernel behind the wire protocol
-             └─ ipykernel    the persistent Python namespace cells execute in
+ └─ extension (index.ts)        registers `execute`, dormant until --repl
+     └─ EngineManager (src/engine/index.ts)  spawn host: snapshots, teardown
+         │  stdin  ──▶  protocol commands (run / snapshot / restore / ping)
+         │  fd 3   ◀──  stream, done, snapshot_result, ...
+         └─ guest.py ▶ jupyter_client ▶ a real ipython kernel (subprocess)
 ```
 
-The host is TypeScript (Node/bun); the evaluator is Python. Splitting them is what makes the
-workspace survivable: a cell can wedge, exhaust, or kill the guest (or the kernel it owns)
-without taking pi down, and the host always survives to report what happened.
+The host is TypeScript; the evaluator is Python in its own process. Splitting
+them is what makes a bad cell survivable: a cell can raise, leak memory, or
+wedge the guest without taking pi down, and the host, being not the thing
+that failed, always gets to report what happened.
 
-## A cell, end to end
+## The Python environment (the venv)
 
-1. The tool hands `EngineManager.execute` the cell source over stdin.
-2. The manager claims the execution slot **synchronously** before its first await, so
-   concurrent callers run in submission order, never by timing.
-3. The guest starts a real `ipykernel` via `jupyter_client` (a subprocess IPython kernel — no
-   separate Jupyter server) on first use and keeps it for the session.
-4. `kernel.execute(code)` runs the cell in that persistent kernel. **The kernel namespace
-   already persists variables, functions, and imports** — no AST transform or `with(proxy)`
-   is needed (Python `exec` into the IPython namespace is native REPL semantics).
-5. Output is attributed to the cell and streamed back: stdout/stderr sent as `stream` frames,
-   a final expression surfaced via `done.result`, and errors as a `done` with the traceback.
-6. The host applies output caps, decides status, and (on `ok`) schedules a debounced snapshot.
+The evaluator is a real `ipython` kernel, so it needs a Python environment with
+`ipykernel` + `jupyter_client`. You cannot fake that with a script; it is a
+hard runtime dependency.
 
-## Invariants
+When installed as a pi package, `npm install` runs `postinstall`
+(`scripts/setup-venv.mjs`), which creates a stable per-user venv:
 
-These are the guarantees the engine makes. The evaluator-side ones are pinned in
-`test/guest_contract.py`; host-side protocol logic in `test/units.test.ts` + preview-core.
+```
+~/.pi/agent/pi-repl-venv/bin/python3
+```
 
-**One cell at a time, in submission order.** One kernel; interleaved cells would make results
-depend on timing rather than the program.
+That path is stable across updates because it sits outside the ephemeral
+package dir under `~/.pi/agent/npm`. If `python3` or the network is missing at
+install time, postinstall prints a clear notice and the host falls back at
+runtime.
 
-**Output belongs to its cell.** Every frame is tagged with the cell that produced it.
+At spawn, `resolvePythonPath` chooses the interpreter in order:
 
-**A cell cannot report its own outcome.** Status/result/errors reach the host only through the
-authenticated `fd 3` channel. A cell's output can never be parsed as protocol traffic.
+1. the repo's own `.venv` (development)
+2. a cwd-local `.venv` (project)
+3. `~/.pi/agent/pi-repl-venv` (package install)
+4. `$PYTHON` or `python3`
 
-**State outlives errors.** A cell that throws returns a `done` with the traceback; the kernel
-keeps running, so names bound before the error remain for later cells.
+The first existing one wins. The model is told (via `help()`) that it runs in a
+project-local venv, not the system interpreter, so it does not leak the wrong
+assumption into commands.
 
-**Durability is automatic and honest.** Successful cells schedule a `pickle` snapshot
-(debounced). Values that cannot be pickled (live handles, some objects) are reported by name;
-functions are redefined after a restore, and the reset notice says so.
+## The guest
 
-**Teardown fails loudly.** Calls against a stopped engine reject immediately.
+`src/engine/guest.py` uses `jupyter_client.KernelManager` to start a real
+`ipykernel` subprocess (`python -m ipykernel`), keeps a blocking client
+attached, and stays alive for the whole session. Cells run in that kernel via
+`kc.execute(code)`, so state persists because the kernel process does.
 
-## Decisions
+The wire protocol rides two channels, both load-bearing:
 
-### Guest = a real `ipykernel` subprocess (not subinterpreters)
+*Separation.* Protocol traffic uses a dedicated pipe (fd 3). The guest's real
+stdout/stderr carry only user output, so a cell printing JSON cannot be parsed
+as a protocol message.
 
-The evaluator is a real IPython kernel managed by `jupyter_client`. This gives a persistent
-namespace, rich tracebacks, IPython idioms, and the stdlib — and it runs in its **own
-process**, so a bad cell cannot corrupt the host.
+*Authentication.* Every frame carries a nonce the host mints at spawn and the
+guest erases from its environment before any cell runs. Code inside a cell
+cannot recover it. Without this, a cell could announce its own completion and
+claim success while failing — an agent that cannot trust its own results has
+nothing.
 
-We deliberately do **not** use Python 3.14's `concurrent.interpreters` subinterpreters for cell
-isolation: the docs state in-process interpreters "can never be strictly isolated" and are not
-a security boundary, `Interpreter.exec()` blocks the host thread, and state is *copied via
-pickle, not shared*. The ecosystem (mcp-repl, repl-mcp, ipybox, RLM's `IPythonREPL`) converges
-on a subprocess `ipykernel` — which is what we use.
+## Toolbox loading
 
-### Cancellation = timeout → kill the kernel → restore from snapshot
+At boot the guest and the host both read the toolbox directory (default
+`src/engine/toolbox`, overridden by config `toolboxDir` → env `PI_TOOLBOX_DIR`).
 
-A cell spinning in synchronous code can't be cooperatively interrupted in pure Python. So a
-stuck cell costs the kernel: kill it, spawn a fresh one, and `restore` from the last completed
-pickle snapshot. This is process-hard and simple. Durable state survives; the in-flight cell is
-lost and named in a reset notice.
+- **guest** execs each `*.py` into the kernel namespace, making functions
+  callable.
+- **host** reads the same files to build the `TOOLBOX` section of the system
+  prompt and the `execute` tool description.
 
-### The protocol is separated and authenticated
+The loader reads each file's `def (...)`: signature (authoritative) and its
+`function_description = """..."""` (one-line summary, optional). Since both
+sides read the same directory, function appearing in the prompt also exists in
+the kernel. A file renamed with a `_` prefix is skipped by both, so a disabled
+function is never advertised where it does not load. See
+`docs/how-to-functions.md`.
 
-*Separation.* Protocol uses a dedicated pipe (fd 3); the guest's stdout carries only user-visible
-output, so a cell printing JSON can't be mistaken for a protocol message.
+`ls()` and `help(name)` are built into the kernel (not toolbox files), so a
+bare kernel still lets the model discover what is loaded.
 
-*Authentication.* Every frame carries a nonce the host mints at spawn and the guest erases
-from its environment before any cell runs, so agent code cannot forge a status or result.
+## Snapshots & honest resets
 
-Without both, a cell could announce its own completion — claiming success while failing.
-An agent that can't trust its own results has nothing left to reason with.
+After each successful cell the host schedules a debounced snapshot: it asks
+the guest to pickle the kernel's globals (entry-by-entry so one bad value
+costs only itself), and stores that as `namespace.snapshot` keyed to the
+session file. On a fresh engine it restores, and whatever cannot be pickled
+(live handles, some objects) is reported by name.
 
-### Snapshots are per-variable and best-effort
-
-The kernel's globals are pickled entry-by-entry in one cell and returned base64; one
-unserialisable value costs only itself. Restore unpickles into a fresh kernel, per-name, with
-`{restored, failed}` reported. `open handles` / some modules / functions can't pickle — the
-reset notice names them instead of pretending.
-
-### The toolbox is a directory of functions, loaded per kernel
-
-The model's stable working set is pure-Python functions, one file each under
-`src/engine/toolbox/`, exec'd into every kernel at boot (`guest.py` reads `PI_TOOLBOX_DIR`,
-defaulting to that directory). Only the user's own folder if they set `toolboxDir`. This is
-the source of truth for the model's capabilities — there is no separate `helpers` preload and
-no `tools.*` bridge (the guest never sends a `host_request`, so that relay was removed).
-
-`help`/`ls` are hard-wired (not configurable) so any kernel, even a bare one, has a way to
-discover what's loaded. Edit is the only function that trades forgiveness for corruption-
-avoidance: a stale `old_text` fails loudly rather than silently mangling a changed file.
+If the evaluator restarts, the result is prefixed with a `<rlm_engine_reset>`
+block naming what was revived and what was lost, so the model re-verifies
+before reuse rather than trusting state that is gone.
 
 ## Failure modes
 
 | Failure | Behaviour |
 | --- | --- |
 | Cell throws | `done { status: "error" }` with traceback; kernel namespace intact |
-| Kernel process wedged | timeout → kill kernel subprocess → respawn fresh + restore snapshot |
+| Kernel wedged | timeout → kill kernel subprocess → spawn fresh → restore snapshot |
 | Guest process dies | pending calls settle; engine reports itself down; later calls reject |
-| Host exits | guest is killed; on abrupt death the guest self-exits on stdin EOF |
+| Host exits | guest is killed; on abrupt death it self-exits on stdin EOF |
 | Output flood | capped per channel, truncation announced |
 
 ## Testing
 
-- **Host (TypeScript, `bun test`):** `test/units.test.ts` (protocol framing, prompt assembly,
-  render core) + `test/preview-core.test.ts` (pure cell preview). These are host-logic; they
-  don't embed a JavaScript evaluator.
-- **Evaluator (Python, `pytest`):** `test/guest_contract.py` drives a real guest over the wire
-  protocol and asserts persistence, error-survival, output attribution, snapshot/restore,
-  `list_names`, and the toolbox functions. This is the specification of the evaluator.
-- **Integration (slow):** `test/engine.integration.test.ts` boots a real engine + guest and
-  proves a variable survives across an engine restart via the snapshot file.
-- **Gate:** `just check` = biome format+lint, then `bun test` (host) + `pytest` (guest);
-  `just integration` adds the real-engine seam.
+- **Host (bun):** `test/units.test.ts` (protocol, prompt, render, config) +
+  `test/preview-core.test.ts`.
+- **Evaluator (pytest):** `test/guest_contract.py` drives a real guest and
+  asserts persistence, error-survival, output attribution, snapshots, ls/help.
+- **Integration (slow):** `test/engine.integration.test.ts` boots a real
+  engine + guest and proves a variable survives an engine restart.
 
-A live `pi --repl` interactive harness is a tracked follow-up.
+Gate: `just check` = biome + bun test (host) + pytest (guest).
+`just integration` adds the real-host seam.
+
+## Reference documentation
+
+- Philosophy and design rationale: [docs/philosophy.md](docs/philosophy.md)
+- Adding a toolbox function: [docs/how-to-functions.md](docs/how-to-functions.md)
