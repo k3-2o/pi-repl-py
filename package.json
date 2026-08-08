@@ -13,12 +13,13 @@
 	"license": "MIT",
 	"pi": {
 		"extensions": [
-			"./src/extension/index.ts"
+			"./index.ts"
 		]
 	},
 	"files": [
 		"src",
 		"scripts",
+		"index.ts",
 		"README.md",
 		"ARCHITECTURE.md",
 		"LICENSE"

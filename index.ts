@@ -10,11 +10,11 @@
 import { basename, join } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
-import { EngineBusyError, EngineManager } from "../engine/index.js";
-import { loadConfig } from "./config.js";
-import { buildRlmPyPrompt } from "./prompt.js";
-import { ExecuteCellComponent, type ExecuteDetails, type ExecuteRenderState } from "./render.js";
-import { EngineLifecycle, summarizeNames } from "./session-engine.js";
+import { EngineBusyError, EngineManager } from "./src/engine/index.js";
+import { loadConfig } from "./src/extension/config.js";
+import { buildRlmPyPrompt } from "./src/extension/prompt.js";
+import { ExecuteCellComponent, type ExecuteDetails, type ExecuteRenderState } from "./src/extension/render.js";
+import { EngineLifecycle, summarizeNames } from "./src/extension/session-engine.js";
 
 const executeSchema = Type.Object({
 	code: Type.String({

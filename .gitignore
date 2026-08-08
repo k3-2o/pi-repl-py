@@ -2,6 +2,7 @@ node_modules/
 *.log
 .DS_Store
 .pi-rlm/
+.pi-repl/
 dist/
 
 # Local experiment artifacts (session transcripts, A/B runs)
