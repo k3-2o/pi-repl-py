@@ -35,8 +35,8 @@ os.environ.pop(NONCE_ENV, None)
 
 HELPERS = [h.strip() for h in os.environ.get("PI_REPL_HELPERS", "").split(",") if h.strip()]
 # Directory of toolbox functions, one file per function, exec'd into every kernel.
-TOOLS_DIR_ENV = "PI_TOOLS_DIR"
-TOOLS_DIR = os.environ.get(TOOLS_DIR_ENV, "").strip()
+TOOLBOX_DIR_ENV = "PI_TOOLBOX_DIR"
+TOOLBOX_DIR = os.environ.get(TOOLBOX_DIR_ENV, "").strip()
 # Per-cell timeout, from the host engine config (default 60s).
 CELL_TIMEOUT_S = float(os.environ.get("PI_REPL_TIMEOUT_MS", "60000")) / 1000.0
 
@@ -70,7 +70,7 @@ def _decode(line):
 
 # ── toolbox functions, exec'd into every kernel ─────────────────────────────
 # Loaded from a directory (default: the sibling `tools/` dir shipped with the
-# repo; overridable via PI_TOOLS_DIR for the user's own folder). Each *.py file
+# repo; overridable via PI_TOOLBOX_DIR for the user's own folder). Each *.py file
 # defines one exported function. `help` and `ls` are hard-wired here, not
 # configurable, so a weak model always has a way to discover the toolbox.
 
@@ -95,8 +95,8 @@ def _toolbox_files(directory):
             continue
     return names
 
-DEFAULT_TOOLS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools")
-_TOOLS_SRC = _toolbox_files(TOOLS_DIR or DEFAULT_TOOLS_DIR)
+DEFAULT_TOOLBOX_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "toolbox")
+_TOOLBOX_SRC = _toolbox_files(TOOLBOX_DIR or DEFAULT_TOOLBOX_DIR)
 
 # help/ls are part of the evaluator, not the toolbox: any kernel, even a bare
 # one, gets a way to discover what is loaded.
@@ -131,7 +131,7 @@ class Kernel:
     def _preload(self):
         """Exec every toolbox function + the intrinsic help/ls into the kernel ns."""
         code = INTRINSIC + "\n"
-        for src in _TOOLS_SRC.values():
+        for src in _TOOLBOX_SRC.values():
             code += src + "\n"
         if code.strip():
             self.kc.execute(code)
@@ -172,7 +172,7 @@ class Kernel:
     def snapshot_globals(self):
         # Skip the toolbox functions and intrinsic helpers (functions don't
         # pickle anyway; excluding avoids a noisy `failed` list on every save).
-        tool_names = sorted(set(_TOOLS_SRC) | {"ls", "help"})
+        tool_names = sorted(set(_TOOLBOX_SRC) | {"ls", "help"})
         skip_names = json.dumps([h for h in HELPERS if h.isidentifier()] + tool_names)
         out, _, _, _ = self.execute(
             "import pickle as _pk, base64 as _b64, json as _js\n"

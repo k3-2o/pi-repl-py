@@ -24,7 +24,7 @@ export interface ReplConfig {
 	/** Python interpreter used to spawn the guest. Defaults to the venv / PATH. */
 	pythonPath?: string;
 	/** Directory of toolbox function files, exec'd into every kernel. */
-	toolsDir?: string;
+	toolboxDir?: string;
 	/** Per-cell execution timeout, ms. Default 60_000. */
 	timeoutMs: number;
 	/** Debounce for the auto-snapshot after an ok cell, ms. Default 1500. */
@@ -69,7 +69,7 @@ export function loadConfig(): ReplConfig {
 			return {
 				helpers,
 				pythonPath: typeof raw.pythonPath === "string" && raw.pythonPath.length > 0 ? raw.pythonPath : undefined,
-				toolsDir: typeof raw.toolsDir === "string" && raw.toolsDir.length > 0 ? raw.toolsDir : undefined,
+				toolboxDir: typeof raw.toolboxDir === "string" && raw.toolboxDir.length > 0 ? raw.toolboxDir : undefined,
 				timeoutMs: num(raw.timeoutMs, DEFAULT_CONFIG.timeoutMs),
 				snapshotDebounceMs: num(raw.snapshotDebounceMs, DEFAULT_CONFIG.snapshotDebounceMs),
 				maxDepth: num(raw.maxDepth, DEFAULT_CONFIG.maxDepth),

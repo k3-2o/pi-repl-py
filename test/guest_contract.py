@@ -29,13 +29,13 @@ class GuestProc:
     protocol pipe.
     """
 
-    def __init__(self, helpers=("read", "write", "edit", "bash"), tools_dir=None):
+    def __init__(self, helpers=("read", "write", "edit", "bash"), toolbox_dir=None):
         self.fd3 = tempfile.NamedTemporaryFile(delete=False)
         self.fd3_name = self.fd3.name
         self.fd3.close()
         env = dict(os.environ, PI_RLM_NONCE="testnonce", PI_REPL_HELPERS=",".join(helpers))
-        if tools_dir:
-            env["PI_TOOLS_DIR"] = tools_dir
+        if toolbox_dir:
+            env["PI_TOOLBOX_DIR"] = toolbox_dir
         # bash guarantees the child's fd 3 = the temp file
         self.proc = subprocess.Popen(
             ["bash", "-c", f"exec 3> {self.fd3_name}; exec {PYTHON} {GUEST}"],
@@ -263,16 +263,16 @@ def test_restore_reports_failed_values_without_crashing(guest):
     assert d["status"] == "ok"
 
 
-def test_custom_tool_file_loads_from_tools_dir():
-    # A user folder in PI_TOOLS_DIR is loaded into the kernel; a one-file custom
-    # function appears alongside. Setting PI_TOOLS_DIR replaces the shipped
+def test_custom_tool_file_loads_from_toolbox_dir():
+    # A user folder in PI_TOOLBOX_DIR is loaded into the kernel; a one-file custom
+    # function appears alongside. Setting PI_TOOLBOX_DIR replaces the shipped
     # default set rather than merging, so only the custom function is present.
     import pathlib
     import shutil
     d = tempfile.mkdtemp()
     try:
         (pathlib.Path(d) / "double.py").write_text("def double(n):\n    return n * 2\n")
-        g = GuestProc(helpers=(), tools_dir=d)
+        g = GuestProc(helpers=(), toolbox_dir=d)
         for m in g.frames(timeout=20):
             if m.get("type") == "ready":
                 break

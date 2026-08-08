@@ -107,8 +107,8 @@ export interface EngineOptions {
 	pythonPath?: string;
 	/** Standard helpers to preload into the kernel (passed as PI_REPL_HELPERS). */
 	helpers?: string[];
-	/** Directory of toolbox functions to exec into the kernel (PI_TOOLS_DIR). */
-	toolsDir?: string;
+	/** Directory of toolbox functions to exec into the kernel (PI_TOOLBOX_DIR). */
+	toolboxDir?: string;
 	/** Per-cell response timeout, ms. Default 60_000. */
 	timeoutMs?: number;
 	env?: Record<string, string>;
@@ -189,7 +189,7 @@ export class EngineManager {
 	private readonly options: EngineOptions;
 	private readonly pythonPath: string;
 	private readonly helpers: string[];
-	private readonly toolsDir?: string;
+	private readonly toolboxDir?: string;
 	private readonly timeoutMs: number;
 	private child?: ChildProcess;
 	private state: "idle" | "starting" | "running" | "shutdown" = "idle";
@@ -215,7 +215,7 @@ export class EngineManager {
 		this.options = options;
 		this.pythonPath = options.pythonPath ?? resolvePythonPath(options.cwd);
 		this.helpers = options.helpers ?? [];
-		this.toolsDir = options.toolsDir;
+		this.toolboxDir = options.toolboxDir;
 		this.timeoutMs = options.timeoutMs ?? 60_000;
 	}
 
@@ -253,7 +253,7 @@ export class EngineManager {
 				[NONCE_ENV]: this.nonce,
 				PI_REPL_HELPERS: this.helpers.join(","),
 				PI_REPL_TIMEOUT_MS: String(this.timeoutMs),
-				PI_TOOLS_DIR: this.toolsDir ?? "",
+				PI_TOOLBOX_DIR: this.toolboxDir ?? "",
 			},
 			// fd 3 carries protocol traffic so stdout/stderr stay pure user output.
 			stdio: ["pipe", "pipe", "pipe", "pipe"],
