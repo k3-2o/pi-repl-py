@@ -196,3 +196,20 @@ def test_sh_helper_configured(guest):
     d, streams = run_cell(guest, "print(sh('echo hi').stdout.strip())", "c1")
     assert d["status"] == "ok"
     assert any("hi" in m["chunk"] for m in streams)
+
+def test_restore_reports_failed_values_without_crashing(guest):
+    # Restoring garbage must be reported in `failed`, never crash the evaluator.
+    # "good" is a real pickle of 42; "junk" is not valid pickle.
+    guest.send({
+        "type": "restore", "id": "r1",
+        "vars": {
+            "good": "gAVLKi4=",
+            "junk": "not-valid-pickle-base64!!!",
+        },
+    })
+    res = guest.recv_type("restore_result", timeout=10)
+    assert "good" in res["restored"]
+    assert any(f["name"] == "junk" for f in res["failed"])
+    # the guest is still responsive afterwards
+    d, _ = run_cell(guest, "print('still alive')", "c2")
+    assert d["status"] == "ok"
