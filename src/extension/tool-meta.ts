@@ -51,6 +51,7 @@ export function buildExecutePromptGuidelines(toolboxDir?: string): string[] {
 		"Use functions proportionally: build one when it will be reused, otherwise run it in a plain cell. Don't wrap a one-off and don't over-engineer.",
 		"Never narrate your mechanism to the user (don't say 'I defined a function' or 'I built a tool'). Do the job, then answer with the result.",
 		"Be token efficient: everything a cell prints is context for the rest of the turn. When reading or searching, print slices, matches, or counts rather than whole files, and keep large values in variables.",
+		"For whole-filesystem or large-dir scans, use the kernel's tools via bash, not a Python walk: find, du, fd, grep. Chain them (find -xdev -type f -size +100M | sort -rn | head; du -x | sort -h | tail) and prune descent by skipping node_modules, .git, caches, venvs. A Python os.walk + lstat loop pays a slow syscall per file and runs minutes to 10+ min on a big tree; reserve Python for analysing the results, not for enumerating the disk.",
 		"If the output starts with <rlm_engine_reset>, the kernel was rebuilt: only data is restored, your functions are gone. Recreate any helper you need and re-verify a variable before trusting it.",
 		"Don't install packages into the evaluator; the standard library is available. Run out-of-tree projects through their own environment.",
 	];
