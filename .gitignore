@@ -23,3 +23,6 @@ AGENTS.md
 
 # local audit working artifact (see AGENTS/adversarial-audit)
 AUDIT-FINDINGS.md
+
+# GitHub Actions (not used; releases are manual)
+.github/
