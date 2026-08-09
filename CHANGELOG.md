@@ -5,6 +5,12 @@ All notable changes to pi-repl, grouped by day and by type.
 ## 2026-08-09 — Description is the truth
 
 ### Changed / docs
+- Reframed the `execute` tool's description + snippet as a **persistent notebook-style REPL** and
+dropped the static function enumeration (it can't know config-loaded helpers like
+`web_search`); the description now points at `ls()`/`help()` and the dynamic toolbox bullets
+- Advertised the real kernel's notebook conveniences in the prompt: `!cmd` runs shell,
+`%%bash`/`%timeit` magics work, with the division of labour — use `bash(cmd)` when output
+must come back as a Python variable (it returns the CompletedProcess)
 - Toolbox loader stops deriving signatures from `def` lines (the regex grabbed
 a private helper like `_get_env(key)` as the advertised call for `bash`/
 `web_search`); the model-facing surface is now `function_description` only,

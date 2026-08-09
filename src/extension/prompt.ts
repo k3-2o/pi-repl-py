@@ -2,15 +2,17 @@
 // --- mirrors pi-robust-edit's schema/domain split: content lives here; the thin adapter in tool-meta wires it in ---
 
 export const executeToolDescription =
-	"Execute Python in a persistent evaluator — the session's working memory. Variables, imports, " +
-	"functions, and data survive across every call. read, write, edit, and bash are Python functions " +
-	"available in every cell, not separate tools. A cell returns its final expression; anything else " +
-	"prints. Runs in the project-local venv, so a command that starts python or pip must target that venv.";
+	"Execute Python in a persistent REPL — the session's working memory, notebook-style. Variables, imports, " +
+	"defs, and data survive across cells. Standard notebook conveniences work: `!cmd` runs shell, " +
+	"`%timeit`/`%%bash` and friends are live. Preloaded helpers for files, shell, and search are in every " +
+	"cell — not separate tools; `ls()` lists them, `help(name)` shows the real signature. A cell returns its " +
+	"final expression; anything else prints. Runs in the project-local venv, so a command that starts " +
+	"python or pip must target that venv.";
 
 export const executePromptSnippet =
-	"Execute Python in a persistent evaluator whose variables, imports, and functions survive across " +
-	"calls; read/write/edit/bash are Python functions in every cell, plus anything you define and reuse; " +
-	"ls() lists them, help(name) shows usage";
+	"Execute Python in a persistent REPL (notebook): state survives across cells, `!` runs shell, " +
+	"magics work, and preloaded helpers are in every cell — `ls()` lists them, `help(name)` shows the " +
+	"real signature";
 
 // --- the function doctrine riding the execute tool; sections keep every rule findable and rankable as hard or soft ---
 export function buildPromptGuidelines(preloaded: string[]): string[] {
@@ -23,6 +25,9 @@ export function buildPromptGuidelines(preloaded: string[]): string[] {
 		"These are your file and shell tools — call them. Don't reimplement read/write/edit/bash in Python, " +
 			"and don't fork a near-copy under a new name; a new def overwrites an old one by name, so extend " +
 			"the existing function instead.",
+		"This is a real IPython kernel: `!cmd` runs a shell command (fire-and-forget, output prints), `%%bash` " +
+			"is the block form, and `%timeit`/other magics work. Use `bash(cmd)` when you need the output back " +
+			"in a Python variable — it returns the CompletedProcess with `.stdout`/`.stderr`/`.returncode`.",
 		"Define a new function only to reuse it: if you'll run this shape again with different inputs, write " +
 			"it once as def and call it by arguments — otherwise just run the cell.",
 		"Do the job, then answer with the result. Don't tell the user you 'defined a function' or 'built a " +
