@@ -1,4 +1,6 @@
-function_description = """Write content to a file, creating it or overwriting its entire contents."""
+function_description = """write(path, content) — Write a file wholesale (create, or full replace); the file
+is real on disk and visible to the host and all other processes.
+Instead of: open(path, 'w').write(content). Use edit() for a surgical change inside a file."""
 
 
 def write(path, content):

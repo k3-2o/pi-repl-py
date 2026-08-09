@@ -1,4 +1,7 @@
-function_description = """Replace old_text with new_text in a file; fails if old_text is not found exactly once."""
+function_description = """edit(path, old_text, new_text) — One exact, unique replacement in a file.
+Instead of: content.replace(old, new) — which silently replaces every occurrence. edit() fails loudly
+unless old_text matches exactly once, and leaves the file untouched on error; if it errors, re-read
+the file and retry."""
 
 
 def edit(path, old_text, new_text):

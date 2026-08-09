@@ -2,8 +2,8 @@
 
 A toolbox function is one `.py` file that pi-repl loads into every kernel and
 surfaces to the model through the `execute` tool's prompt guidance (its
-signature + one-line summary appears in `promptGuidelines`). Add a file, and it
-shows up wherever the toolbox is read.
+`function_description` appears verbatim in `promptGuidelines`). Add a file, and
+it shows up wherever the toolbox is read.
 
 > **When a change shows up.** The kernel loads the toolbox at boot, and the
 > `execute` tool builds its function list at registration (module load), so a
@@ -32,15 +32,17 @@ version wins and the built-in is ignored for that name.
 
 Every toolbox file must:
 
-1. have a `def` whose signature is the real call an agent would use, and
-2. may declare `function_description` (a short one-line summary shown in the
-   prompt).
+1. have a `def` that actually implements the function, and
+2. declare `function_description` — the whole model-facing text: call shape
+   first, then what it does, then an `Instead of:` line naming the stdlib
+   call it replaces.
 
 A minimal, valid file:
 
 ```python
 # pi-repl/functions/summarize.py
-function_description = """Return a first-sentence summary of a text."""
+function_description = """summarize(text, limit=1) — Return a first-sentence summary of a text.
+Instead of: text.split('. ') slicing done by hand."""
 
 __all__ = ["summarize"]
 
@@ -48,36 +50,56 @@ def summarize(text, limit=1):
     return ". ".join(text.split(". ")[:limit]) + "."
 ```
 
-That is everything. `summarize` loads into the kernel and the `execute` tool's
-prompt guidance shows `summarize(text, limit=1)` after the next session restart.
+That is everything. `summarize` loads into the kernel, and the `execute` tool's
+prompt guidance shows the `function_description` text verbatim after the next
+session restart.
 
-## The two pieces the loader reads
+## The pieces the loader reads
 
-**1. The signature comes from the `def`, not the description.**
-Arguments are read from the actual `def` line rather than hand-copied into a
-docstring, so the signature the model sees tracks the code for a normal
-single-line signature. Change `def summarize(text,
-limit=1):` to `limit=200`, and after the next session restart the prompt
-updates to match.
+**The function name comes from the filename.** `web_search.py` loads as
+`web_search`. The `def` inside does not need to match anything the prompt shows.
 
-**2. The description, from `function_description`, optional.**
-Used as the one-line summary in the `execute` tool's prompt guidance. If you
-omit it, the function is still advertised (by signature), just without a
-one-liner.
+**Everything the model is told comes from `function_description` — rendered
+verbatim, nothing parsed.** No signature is derived from the `def` line: parse
+garbage was a real failure mode (the loader once advertised a private helper
+like `_get_env(key)` as the public function), so the author's prose is the
+only allowed source of truth for the prompt.
 
-Each file should also give the function a real docstring (the text under
-`def`). That docstring is shown by `help(name)` in the kernel and carries the
-deeper usage and gotchas. It does not go into the execute tool's prompt
-guidance (only the one-line `function_description` does). Keep it for
-details, the venv note, and edge cases.
+**Convention: the description's first line starts with the call shape.** Write
+`name(args)` as the first thing, so the bullet the model sees reads like a
+signature even though nothing parses it:
+
+```python
+function_description = """web_search(query, intent="fact") — Unified web search with silent
+failover across Serper, Exa, Firecrawl, and Tavily; returns content + references.
+Instead of: hand-rolling urllib/requests against one provider and hoping the key is set."""
+```
+
+That whole string becomes the `execute` tool's prompt bullet, verbatim
+(continuation lines indented two spaces). The made-up call shape only drifts
+if you forget to update it — soft failure, recoverable: the model calls with
+the stale shape, and `help()` shows the real one.
+
+**Prefer an "Instead of:" line.** State the stdlib call your function stands
+in for — `Instead of: open(path).read()...` — so a model about to hand-roll
+the same thing sees it already exists, strictly better. That kills the
+reimplement instinct in one line.
+
+**The `def` docstring is the kernel-side truth.** `help(name)` in the kernel
+now leads with the REAL signature from the live function
+(`inspect.signature`), then prints the docstring. Keep deep detail —
+arguments, return value, venv notes, non-obvious behavior — in the docstring.
+It never goes into the prompt; it is the on-demand backstop when the model
+wants to verify.
 
 ## How much to document
 
-`function_description` is the summary; the `def` docstring is the detail. A
-good `function_description` is one line ("Run a shell command and return its
-result."). A good docstring explains arguments, return value, and any
-non-obvious behavior, including environment facts the model needs
-("the evaluator runs in a project-local venv, not the system python").
+`function_description` is the whole prompt surface: call shape first, then
+the one- to three-line "what it is, and what it replaces". The docstring is
+the detail: full argument notes, return value, and any non-obvious behavior,
+including environment facts the model needs ("the evaluator runs in a
+project-local venv, not the system python"). `help()` shows it under the real
+signature.
 
 ## Disabling a file without deleting it
 
@@ -88,9 +110,10 @@ helpers.
 
 ## Good practice
 
-- One function per file, name matches the function.
-- Keep `function_description` one line. Everything else goes in the docstring.
-- Let the signature carry the truth; the description says what it's *for*.
+- One function per file, name matches the filename.
+- `function_description` starts with the call shape, then says what it's for,
+  then an `Instead of:` line naming the stdlib call it replaces.
+- Keep the description tight; move everything else into the docstring.
 - A function that can hang (a shell call, network) should say so in its
   docstring so the model knows the trade-off.
 
@@ -100,9 +123,10 @@ At a `pi --repl` prompt, run a cell:
 
 ```python
 print(ls())           # list what's loaded
-print(help('summarize'))  # signature + full docstring details
+print(help('summarize'))  # REAL signature (from the live function) + full docstring
 ```
 
-If `summarize` shows up in `ls()` and `help`, it loaded. The `execute` tool's
-prompt guidance also lists it (same first-line summary) after the next session
-restart.
+If `summarize` shows up in `ls()` and `help` shows its true signature, it
+loaded. The `execute` tool's prompt guidance also shows its
+`function_description` verbatim (same call shape + summary) after the next
+session restart.

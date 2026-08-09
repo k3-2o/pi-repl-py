@@ -102,7 +102,12 @@ def help(name=None):
     fn = globals().get(name)
     if fn is None or not callable(fn):
         return f"no such function: {name!r}"
-    return fn.__doc__ or f"{name} (no docstring)"
+    try:
+        import inspect
+        sig = f"{name}{inspect.signature(fn)}"
+    except Exception:
+        sig = name
+    return sig + chr(10) + (fn.__doc__ or f"{name} (no docstring)")
 """
 
 

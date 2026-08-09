@@ -1,4 +1,7 @@
-function_description = """Return the text of a file, optionally a slice of its lines."""
+function_description = """read(path, offset=1, limit=None) — Read a file's UTF-8 text, optionally a slice
+of its lines.
+Instead of: open(path).read().splitlines()[start:stop] — which can crash on binary files and floods
+context; offset/limit keep huge files out of the transcript."""
 
 
 def read(path, offset=1, limit=None):

@@ -278,7 +278,11 @@ def test_help_and_ls_are_always_available(guest):
         assert noise not in joined, f"ls() leaked {noise}: {joined}"
     d2, streams2 = run_cell(guest, "print(help('edit'))", "c2")
     assert d2["status"] == "ok"
-    assert any("edit" in m["chunk"] for m in streams2)
+    joined2 = " ".join(m["chunk"] for m in streams2)
+    assert "edit" in joined2
+    # help() leads with the REAL signature from the live function, so the
+    # prompt can carry prose without ever being the last word on the shape.
+    assert "edit(path, old_text, new_text)" in joined2, joined2
 
 def test_restore_reports_failed_values_without_crashing(guest):
     # Restoring garbage must be reported in `failed`, never crash the evaluator.

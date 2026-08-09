@@ -1,11 +1,13 @@
 /**
  * Loads the toolbox functions from the toolbox directory.
  *
- * The prompt-facing function map is derived from the real source, never
- * hard-coded: each function's `def <name>(<args>)` line supplies the signature
- * (authoritative) and the `function_description = """..."""` docstring supplies
- * the one-line "what it does". Same contract the guest's `ls()`/`help()` uses,
- * so what the prompt advertises always matches what the kernel loaded.
+ * The prompt-facing function map comes straight from each file's
+ * `function_description = """..."""` value, rendered verbatim — no signature
+ * parsing, so nothing machine-derived can ever lie about a function. The
+ * convention: the description's first line starts with the call shape
+ * (`name(args)`), the rest is the summary and the "Instead of" equivalence.
+ * The kernel's help() shows the REAL signature from the live function via
+ * inspect.signature, so drift in the description is recoverable.
  */
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -14,24 +16,17 @@ import { join } from "node:path";
 
 interface ToolEntry {
 	name: string;
-	call: string; // e.g. "read(path, offset=1, limit=None)"
-	description: string; // first line of function_description, "" if absent
+	description: string; // full function_description body, "" if absent
 }
 
-/** Read a `function_description = """..."""` value; keep its first line. */
+/**
+ * Read the whole `function_description = """..."""` value (or the `'''` form).
+ * Content extraction, not signature parsing: the author's prose is the truth.
+ */
 function parseDescription(source: string): string {
-	const m = source.match(/function_description\s*=\s*"""\s*([^\n]*)/);
+	const m = source.match(/function_description\s*=\s*("""|''')([\s\S]*?)\1/);
 	if (!m) return "";
-	return m[1].replace(/"""\s*$/, "").trim();
-}
-
-/** Regex the call signature from `def name(args):`. */
-function parseDefCall(source: string): string | null {
-	const m = source.match(/def\s+([A-Za-z_]\w*)\s*\(([^)]*)\)/);
-	if (!m) return null;
-	const name = m[1];
-	const args = m[2].trim();
-	return args ? `${name}(${args})` : `${name}()`;
+	return m[2].trim();
 }
 
 /**
@@ -68,9 +63,7 @@ function loadToolboxEntries(dir: string | undefined): ToolEntry[] {
 		if (name.startsWith("_")) continue;
 		try {
 			const source = readFileSync(join(d, file), "utf8");
-			const call = parseDefCall(source);
-			if (!call) continue;
-			entries.push({ name, call, description: parseDescription(source) });
+			entries.push({ name, description: parseDescription(source) });
 		} catch {}
 	}
 	return entries;
@@ -94,5 +87,9 @@ export function buildToolboxMap(dir: string | undefined): string[] {
 	if (dir && dir.trim().length > 0 && toolboxDir(dir) !== defaultToolboxDir()) {
 		for (const e of loadToolboxEntries(dir)) byName.set(e.name, e);
 	}
-	return [...byName.values()].map((t) => (t.description ? `- ${t.call}: ${t.description}` : `- ${t.call}`));
+	return [...byName.values()].map((t) =>
+		t.description
+			? `- ${t.description.replace(/\n/g, "\n  ")}`
+			: `- ${t.name} (no description — call help('${t.name}') for the real signature)`,
+	);
 }

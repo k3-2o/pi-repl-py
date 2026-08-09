@@ -2,6 +2,24 @@
 
 All notable changes to pi-repl, grouped by day and by type.
 
+## 2026-08-09 — Description is the truth
+
+### Changed / docs
+- Toolbox loader stops deriving signatures from `def` lines (the regex grabbed
+a private helper like `_get_env(key)` as the advertised call for `bash`/
+`web_search`); the model-facing surface is now `function_description` only,
+rendered verbatim with no parsing
+- `function_description` convention: first line is the call shape, then what
+it does, then an `Instead of:` line naming the stdlib call it replaces, so a
+model about to hand-roll the same thing sees a better version already exists
+- Updated the shipped `read`/`write`/`edit`/`bash` descriptions to the new
+convention (call shape + `Instead of:` equivalence)
+- `help(name)` now leads with the REAL signature from the live function via
+`inspect.signature`, making the kernel channel mechanically truthful even if
+a description drifts
+- Rewrote the toolbox file contract in `docs/how-to-functions.md`;
+`how-to-functions.md` documents the first-line call-shape convention
+
 ## 2026-08-08 — Port & foundation
 
 ### Added

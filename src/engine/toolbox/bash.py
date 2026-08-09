@@ -1,4 +1,8 @@
-function_description = """Run a shell command in a fresh subshell and return its result."""
+function_description = """bash(command, cwd=None, env=None, input=None, timeout=None) — Run a shell
+command in a fresh subshell and return the CompletedProcess (read .stdout/.stderr/.returncode).
+Instead of: subprocess.run(command, shell=True, capture_output=True, text=True). bash() also takes
+a timeout that kills the whole process group (no orphaned children), and cd/export do not carry
+across calls, so hold state in Python variables."""
 
 import os as _os
 import signal as _sig

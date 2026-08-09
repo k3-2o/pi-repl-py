@@ -23,6 +23,52 @@ import {
 	renderExecuteHeader,
 	statusKind,
 } from "../src/extension/render-core.js";
+import { buildToolboxMap } from "../src/extension/toolbox.js";
+
+describe("toolbox loader: description is the truth", () => {
+	test("function_description renders verbatim, including the call shape", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-repl-tbx-"));
+		// First def is a private helper; only the description may define the surface.
+		writeFileSync(
+			join(dir, "web_search.py"),
+			[
+				'function_description = """web_search(query, intent="fact") — Unified web search.',
+				'Instead of: hand-rolling urllib/requests against one provider and hoping the key is set."""',
+				"",
+				"def _get_env(key):",
+				"    return ''",
+				"",
+				'def web_search(query, intent="fact"):',
+				"    ...",
+			].join("\n"),
+		);
+		const bullets = buildToolboxMap(dir);
+		const bullet = bullets.find((b) => b.includes("web_search"));
+		expect(bullet).toBeDefined();
+		expect(bullet).toContain('web_search(query, intent="fact") — Unified web search.');
+		expect(bullet).toContain("Instead of: hand-rolling urllib/requests");
+		// The private helper must never leak into the advertised surface.
+		expect(bullet).not.toContain("_get_env");
+	});
+
+	test("a file without a description falls back to a help() pointer", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-repl-tbx-"));
+		writeFileSync(join(dir, "bare.py"), "def bare(x):\n    return x\n");
+		const bullet = buildToolboxMap(dir).find((b) => b.includes("bare"));
+		expect(bullet).toContain("call help('bare')");
+	});
+
+	test("config toolbox overrides a shipped built-in by name", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-repl-tbx-"));
+		writeFileSync(
+			join(dir, "read.py"),
+			'function_description = """read(path) — custom read overrides the built-in."""\ndef read(path):\n    return path\n',
+		);
+		const bullets = buildToolboxMap(dir);
+		expect(bullets.filter((b) => b.startsWith("- read("))).toHaveLength(1);
+		expect(bullets.find((b) => b.startsWith("- read("))).toContain("custom read");
+	});
+});
 
 describe("protocol framing", () => {
 	test("encode produces exactly one newline-terminated envelope line", () => {
