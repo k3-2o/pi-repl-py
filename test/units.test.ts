@@ -2,8 +2,7 @@
  * Unit coverage for the pieces the contract suite cannot reach directly.
  *
  * engine.contract.test.ts exercises behaviour end to end, which leaves gaps:
- * protocol framing,
- * prompt assembly, and cell layout are only observed through their effects.
+ * protocol framing and cell layout are only observed through their effects.
  * Those are tested here in isolation, where their edge cases are reachable.
  */
 
