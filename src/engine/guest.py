@@ -25,6 +25,11 @@ os.environ.pop(NONCE_ENV, None)
 # Per-cell timeout, from the host engine config (default 60s).
 CELL_TIMEOUT_S = float(os.environ.get("PI_REPL_TIMEOUT_MS", "60000")) / 1000.0
 
+# Snapshot/restore are internal bookkeeping, not user work: a huge namespace can
+# legitimately take longer than a cell, so they get a separate (fixed) window
+# instead of being throttled by the per-cell timeout and silently losing state.
+SNAPSHOT_TIMEOUT_S = 30.0
+
 # fd 3 protocol writer; dup'd so we don't close the caller's fd 3 on exit.
 _proto = os.fdopen(os.dup(PROTOCOL_FD), "w", buffering=1)
 
@@ -127,14 +132,21 @@ class Kernel:
         except Exception:
             pass
 
-    def execute(self, code):
-        """Run `code`; return (stdout, stderr, error_text, result)."""
+    def _drain_execution(self, code, timeout):
+        """Run `code`; return (stdout, stderr, error_text, result, timed_out).
+
+        `timed_out` is set when no completion arrived within `timeout` seconds,
+        so the caller can distinguish a wedged cell from an ordinary error
+        instead of silently reporting it as success.
+        """
         msg_id = self.kc.execute(code)
         out, err, error, result = [], [], None, None
+        timed_out = False
         while True:
             try:
-                m = self.kc.get_iopub_msg(timeout=CELL_TIMEOUT_S)
+                m = self.kc.get_iopub_msg(timeout=timeout)
             except Exception:
+                timed_out = True
                 break
             if m.get("parent_header", {}).get("msg_id") != msg_id:
                 continue
@@ -148,7 +160,16 @@ class Kernel:
                 error = "\n".join(c.get("traceback", ["(no traceback)"]))
             elif mt == "status" and c.get("execution_state") == "idle":
                 break
-        return "".join(out), "".join(err), error, result
+        return "".join(out), "".join(err), error, result, timed_out
+
+    def execute(self, code):
+        """Idle-sync path used by snapshot/restore; not a user cell."""
+        return self._drain_execution(code, SNAPSHOT_TIMEOUT_S)[:4]
+
+    def run_cell(self, code):
+        """Run a user cell under the per-cell timeout, so the model learns
+        when work did not finish."""
+        return self._drain_execution(code, CELL_TIMEOUT_S)
 
     def snapshot_globals(self):
         # Skip the toolbox functions and intrinsic helpers (functions don't
@@ -237,12 +258,19 @@ def main():
             _send({"type": "names_result", "id": msg["id"], "names": names})
         elif t == "run":
             cell_id = msg.get("cellId")
-            stdout, stderr, error, result = kernel.execute(msg.get("code", ""))
+            stdout, stderr, error, result, timed_out = kernel.run_cell(msg.get("code", ""))
             if stdout:
                 _send({"type": "stream", "cellId": cell_id, "name": "stdout", "chunk": stdout})
             if stderr:
                 _send({"type": "stream", "cellId": cell_id, "name": "stderr", "chunk": stderr})
-            if error:
+            if timed_out:
+                tmsg = {
+                    "name": "Timeout",
+                    "message": f"cell did not finish within {CELL_TIMEOUT_S:g}s and may still be running",
+                    "stack": ["[cell timed out]"],
+                }
+                _send({"type": "done", "cellId": cell_id, "status": "error", "error": tmsg})
+            elif error:
                 _send({"type": "done", "cellId": cell_id, "status": "error", "error": _line_error(error)})
             else:
                 _send({"type": "done", "cellId": cell_id, "status": "ok", "result": result})

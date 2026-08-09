@@ -29,13 +29,15 @@ class GuestProc:
     protocol pipe.
     """
 
-    def __init__(self, toolbox_dir=None):
+    def __init__(self, toolbox_dir=None, timeout_ms=None):
         self.fd3 = tempfile.NamedTemporaryFile(delete=False)
         self.fd3_name = self.fd3.name
         self.fd3.close()
         env = dict(os.environ, PI_RLM_NONCE="testnonce")
         if toolbox_dir:
             env["PI_TOOLBOX_DIR"] = toolbox_dir
+        if timeout_ms:
+            env["PI_REPL_TIMEOUT_MS"] = str(timeout_ms)
         # bash guarantees the child's fd 3 = the temp file
         self.proc = subprocess.Popen(
             ["bash", "-c", f"exec 3> {self.fd3_name}; exec {PYTHON} {GUEST}"],
@@ -272,6 +274,21 @@ def test_restore_reports_failed_values_without_crashing(guest):
     # the guest is still responsive afterwards
     d, _ = run_cell(guest, "print('still alive')", "c2")
     assert d["status"] == "ok"
+
+
+def test_cell_timeout_is_reported_as_error(guest):
+    # A cell that exceeds the per-cell timeout must NOT be reported as "ok".
+    # Use a tiny timeout so the fixed 0.5s sleep that follows exceeds it.
+    g = GuestProc(timeout_ms=400)
+    try:
+        for m in g.frames(timeout=20):
+            if m.get("type") == "ready":
+                break
+        d, _ = run_cell(g, "import time; time.sleep(0.5); print('late')", "c1")
+        assert d["status"] == "error", d
+        assert "did not finish" in d["error"]["message"].lower()
+    finally:
+        g.close()
 
 
 def test_custom_tool_file_loads_from_toolbox_dir():
