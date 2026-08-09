@@ -53,10 +53,6 @@ export function formatDuration(durationMs: number | undefined): string | undefin
 	return `${(durationMs / 1000).toFixed(1)}s`;
 }
 
-export function isShellish(line: string): boolean {
-	return line.includes("Bun.$`");
-}
-
 const SGR_PATTERN = /\x1b\[([0-9;]*)m/g;
 
 /**
@@ -129,12 +125,6 @@ function marker(state: ExecuteRenderState, deps: RenderDeps): string {
 
 function highlightLines(code: string, deps: RenderDeps): string[] {
 	if (!code) return [];
-	const lines = code.split("\n");
-	if (lines.some((line) => isShellish(line))) {
-		// Cells that contain Bun.$ templates are shell-ish; paint them as accent
-		// rather than trying to syntax-highlight TypeScript/Bun syntax as Python.
-		return lines.map((line) => deps.fg("accent", line));
-	}
 	return deps.highlight(code);
 }
 

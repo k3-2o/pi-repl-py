@@ -16,7 +16,6 @@ import {
 	closeOpenSgr,
 	type ExecuteRenderState,
 	formatDuration,
-	isShellish,
 	paintBackground,
 	type RenderDeps,
 	renderExecuteBody,
@@ -115,9 +114,13 @@ describe("render-core: helpers", () => {
 		expect(closeOpenSgr("plain")).toBe("plain");
 	});
 
-	test("isShellish detects Bun.$ templates", () => {
-		expect(isShellish("const out = await Bun.$`ls`.quiet();")).toBe(true);
-		expect(isShellish("const out = 1;")).toBe(false);
+	test("a Python cell containing a Bun.$ literal is still syntax-highlighted", () => {
+		const deps = testDeps();
+		const state = makeState({ expanded: true, code: 'print("Bun.\\$ is not special here")' });
+		const rendered = renderExecuteCell(state, 80, deps);
+		// The mock highlighter wraps every line in green — not accent, and the
+		// whole cell must not be downgraded to a single flat color.
+		expect(rendered.join("\n")).toContain("\x1b[32m");
 	});
 
 	test("formatDuration switches units at one second", () => {
