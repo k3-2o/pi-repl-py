@@ -602,6 +602,10 @@ export class EngineManager {
 		try {
 			const reply = await this.request({ type: "snapshot", id: randomUUID() }, SNAPSHOT_REQUEST_TIMEOUT_MS);
 			if (reply.type !== "snapshot_result") return null;
+			// An incomplete snapshot (the guest stalled mid-serialization) must
+			// NOT overwrite the last good file — a failed snapshot should cost a
+			// throwaway run, never the durable memory.
+			if (reply.complete === false) return null;
 			mkdirSync(dirname(config.path), { recursive: true });
 			writeFileSync(config.path, JSON.stringify({ version: 1, vars: reply.vars, failed: reply.failed }));
 			return { path: config.path, saved: Object.keys(reply.vars), failed: reply.failed };

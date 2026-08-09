@@ -197,6 +197,15 @@ def test_snapshot_excludes_toolbox_metadata(guest):
     assert "read" not in snap["vars"]
 
 
+def test_snapshot_is_flagged_complete(guest):
+    # A valid snapshot — even of an empty namespace — must be reported as
+    # complete so the host persists it; an interrupted one would be incomplete
+    # and the host would keep the last good file instead.
+    guest.send({"type": "snapshot", "id": "s1"})
+    snap = guest.recv_type("snapshot_result", timeout=20)
+    assert snap["complete"] is True
+
+
 # ── list_names ─────────────────────────────────────────────────────────────────
 def test_list_names(guest):
     run_cell(guest, "alpha = 1; beta = 2", "c1")

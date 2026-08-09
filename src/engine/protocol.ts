@@ -36,6 +36,8 @@ interface GuestToHost {
 		id: string;
 		vars: Record<string, string>;
 		failed: { name: string; reason: string }[];
+		/** False means the kernel didn't finish serializing; keep the last good file. */
+		complete?: boolean;
 	};
 	restore_result: {
 		type: "restore_result";

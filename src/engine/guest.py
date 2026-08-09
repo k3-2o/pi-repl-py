@@ -32,7 +32,7 @@ CELL_TIMEOUT_S = float(os.environ.get("PI_REPL_TIMEOUT_MS", "0") or "0") / 1000.
 # Snapshot/restore are internal bookkeeping, not user work: a huge namespace can
 # legitimately take longer than a cell, so they get a separate (fixed) window
 # instead of being throttled by a silence timer and silently losing state.
-SNAPSHOT_TIMEOUT_S = 30.0
+SNAPSHOT_TIMEOUT_S = 90.0
 
 # fd 3 protocol writer; dup'd so we don't close the caller's fd 3 on exit.
 _proto = os.fdopen(os.dup(PROTOCOL_FD), "w", buffering=1)
@@ -224,12 +224,15 @@ class Kernel:
         )
         marker = "__RLC_SNAPSHOT__"
         if marker not in out:
-            return {}, []
+            # The print at the cell's end never happened: the kernel stalled or
+            # the serialization was interrupted, so this is NOT a valid snapshot.
+            # Return incomplete so the host keeps the last good snapshot file.
+            return {}, [], False
         try:
             o = json.loads(out.split(marker)[-1])
-            return o.get("vars", {}), o.get("failed", [])
+            return o.get("vars", {}), o.get("failed", []), True
         except Exception:
-            return {}, []
+            return {}, [], False
 
     def restore_globals(self, vars_):
         if not vars_:
@@ -277,8 +280,8 @@ def main():
         if t == "ping":
             _send({"type": "pong", "id": msg["id"]})
         elif t == "snapshot":
-            vars_, failed = kernel.snapshot_globals()
-            _send({"type": "snapshot_result", "id": msg["id"], "vars": vars_, "failed": failed})
+            vars_, failed, complete = kernel.snapshot_globals()
+            _send({"type": "snapshot_result", "id": msg["id"], "vars": vars_, "failed": failed, "complete": complete})
         elif t == "restore":
             restored, failed = kernel.restore_globals(msg.get("vars", {}))
             _send({"type": "restore_result", "id": msg["id"], "restored": restored, "failed": failed})
