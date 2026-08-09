@@ -263,10 +263,13 @@ function renderOutput(
 		if (hasCode) lines.push("");
 	};
 
+	// stdout/stderr/result are color-coded so you can tell which stream a line
+	// came from at a glance: stdout in the tool output color, stderr in warning
+	// yellow, and the Python return value in accent since it's usually the point.
 	const sections: Array<{ text: string | undefined; color: string }> = [
 		{ text: details?.stdout, color: "toolOutput" },
-		{ text: details?.stderr, color: "muted" },
-		{ text: details?.result, color: "toolOutput" },
+		{ text: details?.stderr, color: "warning" },
+		{ text: details?.result, color: "accent" },
 	];
 	let renderedText = false;
 	for (const { text, color } of sections) {
@@ -279,7 +282,7 @@ function renderOutput(
 	if (!renderedText && !details && state.contentText?.trim()) {
 		startOutput();
 		renderedText = true;
-		const color = state.isError ? "muted" : "toolOutput";
+		const color = state.isError ? "error" : "toolOutput";
 		for (const line of state.contentText.trim().split("\n")) {
 			addWrapped(lines, OUTPUT_INDENT, deps.fg(color, line || " "), width, deps);
 		}
@@ -287,7 +290,7 @@ function renderOutput(
 
 	if (details?.errorStack && details.errorStack.length > 0) {
 		startOutput();
-		for (const line of details.errorStack) addWrapped(lines, OUTPUT_INDENT, deps.fg("muted", line || " "), width, deps);
+		for (const line of details.errorStack) addWrapped(lines, OUTPUT_INDENT, deps.fg("error", line || " "), width, deps);
 	} else if (!renderedText) {
 		startOutput();
 		const message = state.isPartial || statusKind(state) === "running" ? "waiting for output..." : "no output";
