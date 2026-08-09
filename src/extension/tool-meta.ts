@@ -19,7 +19,7 @@ export const EXECUTE_DESCRIPTION =
 	"Execute Python to a persistent evaluator: the session's working memory. " +
 	"Variables, imports, functions, and data survive across calls. There are no " +
 	"separate file or shell tools; read, write, edit, bash, and anything you build " +
-	"are Python functions you call inside a cell. A cell returns its final " +
+	"are Python functions you call inside a cell. The preloaded functions are the evaluator's standard file and shell surface, and the foundation you build your own reusable tools on. A cell returns its final " +
 	"expression; anything else is printed. Build one reusable function per routine " +
 	"and call it by arguments, since a new def overwrites the previous one; don't " +
 	"narrate that machinery to the user. Runs in a project-local venv, so a command " +
@@ -27,7 +27,7 @@ export const EXECUTE_DESCRIPTION =
 
 export const EXECUTE_PROMPT_SNIPPET =
 	"Execute Python in a persistent evaluator whose variables, imports, and functions " +
-	"survive across calls; preloaded functions plus any you define and reuse as " +
+	"survive across calls; the preloaded read/write/edit/bash are the standard file and shell surface, plus any you define and reuse as " +
 	"callable tools; ls() lists them, help(name) shows usage";
 
 /**
@@ -38,9 +38,10 @@ export function buildExecutePromptGuidelines(toolboxDir?: string): string[] {
 	const map = buildToolboxMap(toolboxDir);
 	const preloaded = map.length > 0 ? map : ["(none preloaded: define your own)"];
 	return [
-		"Preloaded functions available in every kernel:",
+		"Preloaded functions available in every cell:",
 		...preloaded,
-		"ls() prints what is loaded; help(name) shows a function's signature and notes. Use them instead of guessing.",
+		"These are the evaluator's standard file and shell surface, its own read/write/edit/bash builtins; treat them as the natural idiom for file and command work.",
+		"Build on them: compose your own useful tools from and around these functions rather than rebuilding them; anything you define this session joins the same surface. ls() lists what's loaded, help(name) shows signatures and notes.",
 		"Functions you define are reusable tools: one parameterized helper per task, call it by arguments. Never write a routine twice and never fork a duplicate; extend the existing `def` (a new `def` of the same name overwrites).",
 		"Before a multi-line cell, ask whether you will run that shape again with different inputs. If yes, define the function now so each later request is one call.",
 		"Good, defined once then called by arguments only:",
