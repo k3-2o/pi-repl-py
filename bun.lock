@@ -3,7 +3,7 @@
   "configVersion": 0,
   "workspaces": {
     "": {
-      "name": "pi-repl",
+      "name": "pi-repl-py",
       "devDependencies": {
         "@biomejs/biome": "2.3.5",
         "@mariozechner/pi-coding-agent": "npm:@earendil-works/pi-coding-agent@^0.84.0",

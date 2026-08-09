@@ -52,6 +52,18 @@ All notable changes to pi-repl, grouped by day and by type.
 ### Chore
 - Normalize every comment to a one-line `// --- … ---` / `# --- … ---` and collapse verbose file-top docblocks
 
+## 2026-08-09 — Structure & docs
+
+### Structure / refactor
+- Split the preview logic out of `preview-core.ts` into a single-concern `preview/` module (`types` / `descriptor` / `scan` / `shell` / `candidates` / `index`), leaving a thin aggregator so importers stay untouched
+- Split the execute prompt into a pure contract (`prompt.ts`) plus a thin adapter (`tool-meta.ts`), mirroring the schema/domain split; `index.ts` imports are unchanged
+- Prompt rewrite on the new split: sectioned guidance (What's in every cell / How to use them / Examples / Efficiency / When it breaks), the "these are your file and shell tools" thesis stated once, `ls()` as the explicit first move, and each rule led by a concrete condition; no guidance dropped, a few supporting details compressed
+- Dropped the trailing `─` border row under an expanded tool call (the coloured status border remains)
+
+### Docs
+- Documented the unified `~/.pi/agent/pi-repl/` layout (config.json / venv / state/) and the merge/override toolbox semantics
+- Moved `ARCHITECTURE.md` into `docs/` beside the other narrative docs; repointed README/CHANGELOG links and the packaged `files` list
+
 ---
 
-See `docs/ARCHITECTURE.md` for the design and `docs/` for how-to material.
+See docs/ARCHITECTURE.md for the design and `docs/` for how-to material.
