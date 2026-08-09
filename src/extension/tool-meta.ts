@@ -53,6 +53,7 @@ export function buildExecutePromptGuidelines(toolboxDir?: string): string[] {
 		"Be token-efficient: context is finite, spend it only on what advances the answer. Filter precisely — scope reads to the lines you need and use bash('grep ...')/find instead of dumping whole files, so search does not bloat the context window.",
 		"Keep large values in variables rather than printing them; a cell shows nothing unless you return or print it, so emit only the output that matters. Reuse what you already hold instead of recomputing or re-reading it.",
 		// Safety.
-		"If the output begins with <rlm_engine_reset>, the evaluator was rebuilt from a snapshot and may be stale — re-verify any variable before trusting it. Do not install packages into the evaluator; the standard library is always available. Run out-of-tree projects through their own environment.",
+		"If the output begins with <rlm_engine_reset>, the evaluator was rebuilt from a snapshot: plain values are restored, but the temporary functions you defined are GONE. Recreate any helpers you need before using them, and re-verify a variable before trusting it.",
+		"Do not install packages into the evaluator; the standard library is always available. Run out-of-tree projects through their own environment.",
 	];
 }
