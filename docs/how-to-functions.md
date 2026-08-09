@@ -17,8 +17,8 @@ By default the extension ships four (`read`, `write`, `edit`, `bash`) in
 config:
 
 ```jsonc
-// ~/.pi/agent/pi-repl.json
-{ "toolboxDir": "~/.pi/agent/pi-repl-functions" }
+// ~/.pi/agent/pi-repl/config.json
+{ "toolboxDir": "~/.pi/agent/pi-repl/functions" }
 ```
 
 Use an absolute path or a `~`-prefixed one (`~` expands to your home). A bare relative
@@ -39,7 +39,7 @@ Every toolbox file must:
 A minimal, valid file:
 
 ```python
-# pi-repl-functions/summarize.py
+# pi-repl/functions/summarize.py
 function_description = """Return a first-sentence summary of a text."""
 
 __all__ = ["summarize"]

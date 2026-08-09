@@ -20,7 +20,7 @@ const GUEST_PATH = fileURLToPath(new URL("./guest.py", import.meta.url));
 
 // --- venv created by the package postinstall ---
 function installVenvPython(): string {
-	return join(homedir(), ".pi", "agent", "pi-repl-venv", "bin", "python3");
+	return join(homedir(), ".pi", "agent", "pi-repl", "venv", "bin", "python3");
 }
 
 // --- prefer a venv with ipykernel; else PYTHON or python3 ---
@@ -262,7 +262,7 @@ export class EngineManager {
 				(error as NodeJS.ErrnoException).code === "ENOENT"
 					? "Engine process failed: '" +
 						pythonPath +
-						"' was not found on PATH. pi-repl runs its evaluator in Python; ensure it is installed and on your PATH, or set the pythonPath in ~/.pi/agent/pi-repl.json."
+						"' was not found on PATH. pi-repl runs its evaluator in Python; ensure it is installed and on your PATH, or set the pythonPath in ~/.pi/agent/pi-repl/config.json."
 					: `Engine process failed: ${error.message}`;
 			this.failAllPending(new Error(message));
 			this.transitionToShutdown(message);

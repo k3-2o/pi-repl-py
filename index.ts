@@ -65,7 +65,7 @@ export default function (pi: ExtensionAPI) {
 			const sessionKey = sessionFile ? basename(sessionFile).replace(/\.jsonl$/, "") : undefined;
 			// Kernel namespace state lives under ~/.pi/agent/pi-repl, keyed by
 			// session, so it never clutters the project's working directory.
-			const stateDir = join(homedir(), ".pi", "agent", "pi-repl", sessionKey ?? "ephemeral");
+			const stateDir = join(homedir(), ".pi", "agent", "pi-repl", "state", sessionKey ?? "ephemeral");
 			return new EngineManager({
 				cwd,
 				pythonPath: CFG.pythonPath,

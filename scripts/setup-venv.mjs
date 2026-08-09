@@ -8,7 +8,7 @@
  * and excluded from the npm tarball), so we create one at a stable path that
  * the engine also knows about:
  *
- *   ~/.pi/agent/pi-repl-venv/bin/python3
+ *   ~/.pi/agent/pi-repl/venv/bin/python3
  *
  * Failures are non-fatal: if there's no system python3 or no network, we print
  * a clear notice and let the engine fall back to '$PYTHON' or 'python3' at
@@ -20,7 +20,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-const VENV_DIR = join(homedir(), ".pi", "agent", "pi-repl-venv");
+const VENV_DIR = join(homedir(), ".pi", "agent", "pi-repl", "venv");
 const PY = join(VENV_DIR, "bin", "python3");
 const DEPS = ["ipykernel", "jupyter_client"];
 

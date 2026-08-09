@@ -16,7 +16,7 @@ def edit(path, old_text, new_text):
 
     Environment:
       This evaluator runs in a project-local Python venv, not the system
-      interpreter. For a package install that is ~/.pi/agent/pi-repl-venv; for a
+      interpreter. For a package install that is ~/.pi/agent/pi-repl/venv; for a
       repo checkout it is .venv/. The file edited is a real file on disk.
     """
     with open(path, encoding="utf-8") as f:

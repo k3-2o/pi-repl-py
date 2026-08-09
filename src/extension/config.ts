@@ -5,7 +5,7 @@
  * configured. First-found-wins, never throws on a missing/malformed file.
  *
  *   $PI_REPL_CONFIG            explicit env override
- *   ~/.pi/agent/pi-repl.json   user-global (same dir as pi's settings.json)
+ *   ~/.pi/agent/pi-repl/config.json   user-global
  *
  * The loadable function set is the toolbox directory (see engine/toolbox/);
  * there is no separate helpers list. The extension ships with the four default
@@ -41,7 +41,7 @@ function num(v: unknown, dflt: number): number {
 
 function configCandidates(): string[] {
 	const env = process.env.PI_REPL_CONFIG;
-	const user = join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".pi", "agent"), "pi-repl.json");
+	const user = join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".pi", "agent", "pi-repl"), "config.json");
 	return [env, user].filter((p): p is string => !!p && p.length > 0);
 }
 

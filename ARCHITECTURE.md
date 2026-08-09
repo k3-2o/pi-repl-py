@@ -26,7 +26,7 @@ When installed as a pi package, `npm install` runs `postinstall`
 (`scripts/setup-venv.mjs`), which creates a stable per-user venv:
 
 ```
-~/.pi/agent/pi-repl-venv/bin/python3
+~/.pi/agent/pi-repl/venv/bin/python3
 ```
 
 That path is stable across updates because it sits outside the ephemeral
@@ -38,7 +38,7 @@ At spawn, `resolvePythonPath` chooses the interpreter in order:
 
 1. the repo's own `.venv` (development)
 2. a cwd-local `.venv` (project)
-3. `~/.pi/agent/pi-repl-venv` (package install)
+3. `~/.pi/agent/pi-repl/venv` (package install)
 4. `$PYTHON` or `python3`
 
 The first existing one wins. The model is told (via `help()`) that it runs in a
@@ -125,7 +125,7 @@ Gate: `just check` = biome + bun test (host) + pytest (guest).
 
 ## Configuration reference
 
-Loaded from `~/.pi/agent/pi-repl.json` (or `$PI_REPL_CONFIG`), first-found-wins, never
+Loaded from `~/.pi/agent/pi-repl/config.json` (or `$PI_REPL_CONFIG`), first-found-wins, never
 throws on a missing/malformed file.
 
 | Key | Type / default | Meaning |

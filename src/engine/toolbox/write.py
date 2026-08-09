@@ -14,7 +14,7 @@ def write(path, content):
 
     Environment:
       This evaluator runs in a project-local Python venv, not the system
-      interpreter. For a package install that is ~/.pi/agent/pi-repl-venv; for a
+      interpreter. For a package install that is ~/.pi/agent/pi-repl/venv; for a
       repo checkout it is .venv/. Files you write are real files on disk in the
       working directory, visible to the host and other processes.
     """

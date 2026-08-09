@@ -57,7 +57,7 @@ Because the evaluator is real Python, it needs a real Python environment with
 `ipykernel` + `jupyter_client`. You cannot conjure that from nothing.
 
 The package's `postinstall` creates it once, at a stable user path
-(`~/.pi/agent/pi-repl-venv`), so a `pi install` ends with a working evaluator
+(`~/.pi/agent/pi-repl/venv`), so a `pi install` ends with a working evaluator
 and updates do not lose it (the venv is outside the ephemeral package dir
 where it would vanish). At runtime the host resolves the interpreter in a
 short deterministic order (repo venv, cwd venv, the install venv, then

@@ -15,7 +15,7 @@ def read(path, offset=1, limit=None):
 
     Environment:
       This evaluator runs in a project-local Python venv, not the system
-      interpreter. For a package install that is ~/.pi/agent/pi-repl-venv; for a
+      interpreter. For a package install that is ~/.pi/agent/pi-repl/venv; for a
       repo checkout it is .venv/. python / pip on PATH may point elsewhere, so
       do not assume the system python is what's running.
     """

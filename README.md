@@ -33,7 +33,7 @@ A plain `pi` session is untouched; the extension is dormant until `--repl` is pa
 ## Installing as a pi package
 
 `npm install` runs a `postinstall` that creates the Python venv the evaluator needs, at a stable
-per-user path (`~/.pi/agent/pi-repl-venv`). If `python3` or the network is missing, it prints a
+per-user path (`~/.pi/agent/pi-repl/venv`). If `python3` or the network is missing, it prints a
 clear notice. How the interpreter is resolved is in [docs/philosophy.md](docs/philosophy.md).
 
 ## What you get
@@ -63,7 +63,7 @@ the kernel also only loads the toolbox at boot.
 
 ## Configuration
 
-`~/.pi/agent/pi-repl.json` (or `$PI_REPL_CONFIG`) sets `toolboxDir`, `pythonPath`, and timeouts.
+`~/.pi/agent/pi-repl/config.json` (or `$PI_REPL_CONFIG`) sets `toolboxDir`, `pythonPath`, and timeouts.
 Full keys and path rules: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## More
