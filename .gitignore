@@ -20,3 +20,6 @@ __pycache__/
 *.egg-info/
 # internal contributor guide (not shipped)
 AGENTS.md
+
+# local audit working artifact (see AGENTS/adversarial-audit)
+AUDIT-FINDINGS.md
