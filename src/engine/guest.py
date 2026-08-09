@@ -91,8 +91,12 @@ _TOOLBOX_SRC = _toolbox_files(TOOLBOX_DIR or DEFAULT_TOOLBOX_DIR)
 # help/ls are part of the evaluator, not the toolbox: any kernel, even a bare
 # one, gets a way to discover what is loaded.
 INTRINSIC = """
+# IPython injects a few globals (exit/quit/get_ipython/open/...) that aren't the
+# agent's toolbox; ls() must not surface them as callable tooling.
+_RPL_LS_NOISE = {'exit', 'quit', 'get_ipython', 'open', 'display'}
+
 def ls():
-    return sorted([n for n in globals() if not n.startswith('__') and callable(globals()[n])])
+    return sorted(n for n in globals() if n not in _RPL_LS_NOISE and not n.startswith('_') and callable(globals()[n]))
 
 def help(name=None):
     if name is None:

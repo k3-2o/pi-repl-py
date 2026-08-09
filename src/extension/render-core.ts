@@ -197,12 +197,14 @@ function topLine(state: ExecuteRenderState, width: number, deps: RenderDeps): st
 }
 
 function sanitizeTuiOutput(text: string): string {
-	// Control characters from user code output can move the cursor, change
-	// colors, or print zero-width glyphs that break the TUI layout. Following
-	// pi-fabric's escapeControlChars, render the escape byte and CR as Unicode
-	// control pictures so the user can see what was emitted instead of silently
-	// stripping it. Tabs expand to 4 spaces; other controls become �.
+	// Terminal escape sequences and control characters from user code output can
+	// move the cursor, change colors, or print zero-width glyphs that break the
+	// TUI layout. Color SGR / CSI sequences (e.g. IPython's colored tracebacks)
+	// are STRIPPED so text stays readable; a remaining lone escape byte and other
+	// control chars are shown as Unicode control pictures so nothing is silently
+	// eaten. Tabs expand to 4 spaces; CR becomes ␍.
 	return text
+		.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
 		.replace(/\x1b/g, "␛")
 		.replace(/\r/g, "␍")
 		.replace(/\t/g, "    ")

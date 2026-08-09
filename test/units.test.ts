@@ -263,6 +263,9 @@ describe("render-core: layout", () => {
 		expect(plain).toContain("stdout:");
 		expect(plain).toContain("stderr:");
 		expect(raw).toContain("␍"); // carriage return escaped as a control picture
+		// color SGR must be stripped, not re-escaped into visible ␣[31m noise
+		expect(raw).not.toContain("␛[31m");
+		expect(raw).not.toContain("␛[0m");
 	});
 
 	test("stdout/stderr/result are labeled and color-coded", () => {

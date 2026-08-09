@@ -263,6 +263,9 @@ def test_help_and_ls_are_always_available(guest):
     assert d["status"] == "ok"
     joined = " ".join(m["chunk"] for m in streams)
     assert "read" in joined and "bash" in joined
+    # IPython bookkeeping must not leak into the tool list
+    for noise in ("exit", "quit", "get_ipython", "open"):
+        assert noise not in joined, f"ls() leaked {noise}: {joined}"
     d2, streams2 = run_cell(guest, "print(help('edit'))", "c2")
     assert d2["status"] == "ok"
     assert any("edit" in m["chunk"] for m in streams2)
