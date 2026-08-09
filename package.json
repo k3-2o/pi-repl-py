@@ -22,7 +22,6 @@
 		"docs",
 		"index.ts",
 		"README.md",
-		"ARCHITECTURE.md",
 		"LICENSE"
 	],
 	"engines": {

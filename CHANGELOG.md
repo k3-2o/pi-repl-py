@@ -54,4 +54,4 @@ All notable changes to pi-repl, grouped by day and by type.
 
 ---
 
-See `ARCHITECTURE.md` for the design and `docs/` for how-to material.
+See `docs/ARCHITECTURE.md` for the design and `docs/` for how-to material.

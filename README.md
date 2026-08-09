@@ -76,12 +76,12 @@ the kernel also only loads the toolbox at boot.
 ## Configuration
 
 `~/.pi/agent/pi-repl/config.json` (or `$PI_REPL_CONFIG`) sets `toolboxDir`, `pythonPath`, and timeouts.
-Full keys and path rules: [ARCHITECTURE.md](ARCHITECTURE.md).
+Full keys and path rules: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## More
 
 - Why this design: [docs/philosophy.md](docs/philosophy.md)
-- How it works, the venv, config reference: [ARCHITECTURE.md](ARCHITECTURE.md)
+- How it works, the venv, config reference: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
 ## It is not
 
