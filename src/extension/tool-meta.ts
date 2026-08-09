@@ -24,7 +24,9 @@ export const EXECUTE_DESCRIPTION =
 	"A cell returns the value of its final expression; anything else is printed. " +
 	"Functions you define become reusable tools just like the prebuilt ones: call " +
 	"them again instead of redefining, or combine existing functions into new " +
-	"composed tools (a new def overwrites the previous one). " +
+	"composed tools (a new def overwrites the previous one). Before running a body " +
+	"you might need again — a fetch, a parse, a scan — define it as a function and " +
+	"call it, instead of repasting the same logic per request. " +
 	"The evaluator runs in a project-local venv, so a command that starts python/pip " +
 	"should target the same venv.";
 
@@ -45,7 +47,9 @@ export function buildExecutePromptGuidelines(toolboxDir?: string): string[] {
 		...functions,
 		"ls() lists everything currently loaded; help(name) returns the exact signature and argument notes — use them instead of guessing.",
 		// Define, reuse, rebuild — functions are reusable tools.
-		"Reuse what you already defined: functions and variables persist for the whole session, so call them again with new arguments instead of rewriting them. Redefine only to fix a bug or change behavior — a new def overwrites the old one.",
+		"Reuse what you already defined: functions and variables persist for the whole session, so call them again with new arguments instead of rewriting them. These functions are safe to define and persist for the session, so a later ask is a one-line call. Redefine only to fix a bug or change behavior, or to rebuild a helper that a reset dropped — a new def overwrites the old one.",
+		"Before writing a multi-line cell, decide whether you will run that shape again (a fetch, a parse, a scan). If yes, define it as a function the first time, then call it; don't hand-copy the same body when the only input that changes is an argument.",
+		"# Good: define once, then each request is a one-liner\ndef get_news(feed, limit=10):\n    ...fetch + parse + print...\nget_news(today_feed)\nget_news(turkey_feed)   # same tool, new argument",
 		"Functions you create are first-class reusable tools, just like the preloaded ones. Make new functions as tools you will call again, combine several existing functions into one composite mega-tool, or modify an existing function to your exact spec. They compose:",
 		"def count_hits(dir, pattern):\n    files = bash(f'grep -rl {pattern} {dir}').stdout.splitlines()\n    return sum(read(p).count(pattern) for p in files)",
 		"Once defined, call your tools exactly like the preloaded ones — build composites so the next call builds on the previous result.",
