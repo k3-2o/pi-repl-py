@@ -1,13 +1,4 @@
-/**
- * Wire protocol between EngineManager (host) and the Python guest.
- *
- * Line-delimited JSON on a dedicated pipe (fd 3), never on stdout.
- * Two load-bearing properties make the channel trustworthy:
- *   1. Separation. stdout/stderr carry only user output, so a cell printing
- *      JSON cannot be parsed as protocol traffic.
- *   2. Authentication. Frames carry a nonce the host mints and the guest
- *      cannot recover; a cell cannot forge a message.
- */
+// --- trust: fd3 is protocol-only (user output stays on stdout), and a cell can't forge frames (minted nonce) ---
 
 interface HostToGuest {
 	run: { type: "run"; cellId: string; code: string };

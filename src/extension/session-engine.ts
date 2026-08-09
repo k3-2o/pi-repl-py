@@ -1,17 +1,4 @@
-/**
- * Engine lifecycle for a pi session: creation, revival, and the reset notice.
- *
- * Kept free of pi imports so the lifecycle is testable directly. The rule it
- * enforces is that **reviving the namespace is part of creating an engine**,
- * never a separate step a caller has to remember.
- *
- * That separation was a real defect. pi tears extensions down on reload
- * unconditionally, but only re-emits session_start when the extension has
- * registered UI, commands, a shutdown handler, or an error listener. An
- * extension with none of those got the teardown and not the startup, so the
- * next tool call quietly built a fresh engine with an empty namespace. Cells
- * kept working perfectly; every variable was simply gone.
- */
+// A session may get teardown without session_start on reload, so revival is part of create() (was a real defect)
 
 import type { RestoreResult } from "../engine/index.js";
 

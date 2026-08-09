@@ -1,10 +1,4 @@
-/**
- * Pure layout logic for the `execute` cell renderer.
- *
- * Deliberately free of pi imports so it is unit-testable outside pi's runtime:
- * theme, syntax highlighting, key hints, and width primitives are injected.
- * `render.ts` binds the real implementations.
- */
+// --- pure layout, free of pi imports so unit tests can drive it directly ---
 
 export interface ExecuteDetails {
 	status?: "ok" | "error" | "aborted" | string;

@@ -1,11 +1,4 @@
-/**
- * pi-repl: Python REPL engine for pi.
- *
- * A single LLM-facing tool, `execute`, running Python in a persistent evaluator.
- * Everything else — shell, files, custom toolbox functions — is expressed as
- * code inside that tool rather than as more pi tools, which is what lets
- * capabilities grow without changing the interface the model sees.
- */
+// --- pi-repl: one execute tool over Python; everything else runs as functions inside it ---
 
 import { basename, join } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";

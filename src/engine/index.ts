@@ -1,10 +1,4 @@
-/**
- * EngineManager — the host half of the evaluator.
- *
- * Owns one persistent Python guest, speaks the line-JSON protocol over a
- * private pipe, and exposes the execute / snapshot / restore API the `execute`
- * tool is built on.
- */
+// --- EngineManager: the host half; one python3 guest over a private fd3 line-JSON pipe ---
 
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
