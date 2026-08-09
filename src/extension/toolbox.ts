@@ -64,8 +64,7 @@ function loadToolboxEntries(dir: string | undefined): ToolEntry[] {
 		if (!file.endsWith(".py")) continue;
 		const name = file.slice(0, -3);
 		if (!/^[A-Za-z_]\w*$/.test(name)) continue;
-		// An underscore-prefixed file is not loaded into the kernel (see guest.py),
-		// so it must never be advertised either.
+		// --- underscore-prefixed files are neither loaded nor advertised ---
 		if (name.startsWith("_")) continue;
 		try {
 			const source = readFileSync(join(d, file), "utf8");

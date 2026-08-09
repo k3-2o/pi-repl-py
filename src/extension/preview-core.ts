@@ -22,7 +22,7 @@ export interface CellPreview {
 const BACKTICK = "\u0060";
 const DESCRIPTOR_MAX_WIDTH = 64;
 
-// ── descriptor hygiene ───────────────────────────────────────────────────────
+//--- descriptor hygiene ---
 
 function collapseWhitespace(text: string): string {
 	return text.replace(/\s+/g, " ").trim();
@@ -49,7 +49,7 @@ export function descriptor(text: string): string {
 	return truncateDescriptor(collapseWhitespace(redactNoise(text)));
 }
 
-// ── source scanning ──────────────────────────────────────────────────────────
+//--- source scanning ---
 
 interface Span {
 	start: number;
@@ -119,7 +119,7 @@ function maskSpan(source: string, span: Span): string {
 	return source.slice(0, span.start) + " ".repeat(span.end - span.start) + source.slice(span.end);
 }
 
-// ── shell command simplification ─────────────────────────────────────────────
+//--- shell command simplification ---
 
 const CD_PREFIX_PATTERN = /^\s*cd\s+([^&;|]+?)\s*(?:&&|;)\s*/;
 const SHELL_SETUP_PATTERN = /^(?:export\s+\w+=|set\s+[-+]|source\s+\S+|\.\s+\S+)/;
@@ -279,7 +279,7 @@ function previewShellCommandScored(command: string): { text: string; strength: n
 	return { text: descriptor(text), strength: best.score };
 }
 
-// ── special construct extraction ─────────────────────────────────────────────
+//--- special construct extraction ---
 
 interface Candidate {
 	kind: CellPreviewKind;
@@ -415,7 +415,7 @@ function fileCandidates(source: string, vars: ReadonlyMap<string, string>): Cand
 	return candidates;
 }
 
-// ── bridged host tools ───────────────────────────────────────────────────────
+//--- bridged host tools ---
 
 /** Per-tool: which argument names the target, the verb shown, and the band. */
 const BRIDGED_TOOLS: Record<string, { arg: string; verb: string; score: number }> = {
@@ -444,7 +444,7 @@ function bridgedToolCandidates(source: string, vars: ReadonlyMap<string, string>
 	return candidates;
 }
 
-// ── generic line scoring ─────────────────────────────────────────────────────
+//--- generic line scoring ---
 
 const SKIP_LINE_PATTERN = /^(?:$|\/\/|\/\*|\*|import\s|export\s+(?:type\s|\{)|[})\];,]+$)/;
 const DEFINITION_PATTERN = /^(?:export\s+)?(?:async\s+)?(?:function\s|class\s|interface\s|type\s+\w+\s*=)/;
@@ -490,16 +490,14 @@ function genericCandidates(masked: string): Candidate[] {
 	return candidates;
 }
 
-// ── entry point ──────────────────────────────────────────────────────────────
+//--- entry point ---
 
 export function previewCell(code: string): CellPreview {
 	const source = code.trimEnd();
 	if (!source) return { kind: "ts", text: "" };
 	const vars = stringConsts(source);
 
-	// Order matters: agent spans scrub shell-looking syntax first, then
-	// the shell scan masks shell bodies before the agent scan.
-	// generic line scan so command text is never scored as TypeScript.
+	// --- scan order matters: agent masks shell-looking syntax before the shell scan ---
 	const agent = agentCandidates(source, vars);
 	const shell = shellCandidates(agent.masked, vars);
 	const candidates: Candidate[] = [

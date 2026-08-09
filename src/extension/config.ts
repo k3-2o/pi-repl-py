@@ -29,8 +29,7 @@ export interface ReplConfig {
 }
 
 const DEFAULT_CONFIG: ReplConfig = {
-	// 0 = no stall provecap: cells run until they finish. A nonzero value is a
-	// SILENCE watchdog (no output for N ms), not a wall-clock deadline.
+	// --- timeoutMs: 0 = no cap; nonzero = silence watchdog (no output for N ms) ---
 	timeoutMs: 0,
 	snapshotDebounceMs: 1500,
 };

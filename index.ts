@@ -63,8 +63,7 @@ export default function (pi: ExtensionAPI) {
 		create() {
 			const { cwd, sessionFile } = location;
 			const sessionKey = sessionFile ? basename(sessionFile).replace(/\.jsonl$/, "") : undefined;
-			// Kernel namespace state lives under ~/.pi/agent/pi-repl, keyed by
-			// session, so it never clutters the project's working directory.
+			// --- kernel namespace state lives under ~/.pi/agent/pi-repl, keyed by session, so it never clutters the project ---
 			const stateDir = join(homedir(), ".pi", "agent", "pi-repl", "state", sessionKey ?? "ephemeral");
 			return new EngineManager({
 				cwd,
@@ -84,11 +83,7 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	// --- no custom prompt: pi's default prompt stands. session_start collapses
-	//     the active set to just `execute`, so the default prompt's built-in
-	//     read/bash/edit/write never appear. All REPL knowledge (description,
-	//     promptSnippet, promptGuidelines) lives on the tool itself, not in a
-	//     prompt builder. ---
+	// --- no custom prompt: pi's default prompt stands; active tools collapse to execute, so REPL knowledge lives on the tool ---
 
 	pi.on("session_start", async (_event, ctx) => {
 		if (!active()) {
@@ -195,10 +190,7 @@ export default function (pi: ExtensionAPI) {
 				throw new Error(text || "(no output)");
 			}
 			if (r.status === "aborted") {
-				// A cancelled cell's kernel may still be executing work the guest
-				// single-threaded loop can't interrupt. Discard the engine so the
-				// NEXT run gets a fresh kernel instead of queuing behind the
-				// still-busy one (same class as the stalled-timeout recovery).
+				// --- a busy kernel can't be interrupted mid-cell; discard+rebuild so the next run doesn't queue ---
 				await lifecycle.discard();
 			}
 			return result;

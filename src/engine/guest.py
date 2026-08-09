@@ -83,8 +83,7 @@ def _toolbox_files(directory):
 
 DEFAULT_TOOLBOX_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "toolbox")
 TOOLBOX_DIR = os.environ.get("PI_TOOLBOX_DIR", "").strip()
-# Merge: the shipped built-ins are supreme; a config toolboxDir adds any other
-# function and, on a name collision, overrides the built-in one.
+# --- Merge: built-ins are supreme; a config toolboxDir adds others and overrides on name ---
 _TOOLBOX_SRC = _toolbox_files(DEFAULT_TOOLBOX_DIR)
 if TOOLBOX_DIR and os.path.expanduser(TOOLBOX_DIR) != DEFAULT_TOOLBOX_DIR:
     _TOOLBOX_SRC.update(_toolbox_files(TOOLBOX_DIR))

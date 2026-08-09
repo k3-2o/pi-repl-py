@@ -134,8 +134,7 @@ interface ActiveExecution {
 	reject(error: Error): void;
 }
 
-// ── process-wide cleanup ─────────────────────────────────────────────────────
-// Guests are killed on host exit; the guest also self-exits on stdin EOF.
+// --- process-wide cleanup: guests killed on exit; the guest self-exits on stdin EOF ---
 
 const liveEngines = new Set<EngineManager>();
 let cleanupHandlersInstalled = false;
@@ -190,7 +189,7 @@ export class EngineManager {
 		return this.state === "running";
 	}
 
-	// ── lifecycle ──────────────────────────────────────────────────────────────
+	//--- lifecycle ---
 
 	async start(): Promise<void> {
 		if (this.state === "shutdown") throw new Error("Engine has been shut down");
@@ -220,7 +219,7 @@ export class EngineManager {
 				PI_REPL_TIMEOUT_MS: String(this.timeoutMs),
 				PI_TOOLBOX_DIR: this.toolboxDir ?? "",
 			},
-			// fd 3 carries protocol; stdout/stderr stay user output.
+			// --- fd 3 is the protocol pipe; stdout/stderr stay user output ---
 			stdio: ["pipe", "pipe", "pipe", "pipe"],
 		});
 		this.child = child;
@@ -247,8 +246,7 @@ export class EngineManager {
 		}
 		this.protocolReader = createInterface({ input: protocolStream });
 		this.protocolReader.on("line", (line) => this.handleGuestLine(line));
-		// Anything the guest writes to the real stdout/stderr fds is subprocess
-		// output (Bun.$ without .quiet()); attribute it to the running cell.
+		// --- guest stdout/stderr are subprocess output; attach to the running cell ---
 		child.stdout!.on("data", (buffer: Buffer) => this.appendActiveOutput("stdout", buffer.toString()));
 		child.stderr!.on("data", (buffer: Buffer) => {
 			const text = buffer.toString();
@@ -280,8 +278,7 @@ export class EngineManager {
 			}
 		});
 
-		// On a boot timeout the child must be torn down and the state reset to
-		// idle, or a retried start() orphans the previous child and its fd3 pipe.
+		// --- on a boot timeout tear down the child and reset state, or a retried start orphans it ---
 		await ready.catch((error) => {
 			if (this.child === child) this.child = undefined;
 			this.protocolReader?.close();
@@ -348,7 +345,7 @@ export class EngineManager {
 		await this.kill();
 	}
 
-	// ── guest messaging ────────────────────────────────────────────────────────
+	//--- guest messaging ---
 
 	private sendToGuest(message: HostToGuestMessage): void {
 		// --- a write into a dying child can throw; callers learn via the exit path ---
@@ -373,7 +370,7 @@ export class EngineManager {
 	}
 
 	private handleGuestLine(line: string): void {
-		// fd 3 is protocol-only; a line that fails to decode is discarded.
+		// --- fd 3 is protocol-only; undecodable lines are discarded ---
 		const message = decodeMessage<GuestToHostMessage>(line, this.nonce);
 		if (!message) return;
 		switch (message.type) {
@@ -427,7 +424,7 @@ export class EngineManager {
 		pending.resolve(message);
 	}
 
-	// ── output accumulation ────────────────────────────────────────────────────
+	//--- output accumulation ---
 
 	private appendActiveOutput(name: "stdout" | "stderr", text: string): void {
 		const active = this.activeExecution;
@@ -448,15 +445,14 @@ export class EngineManager {
 		} else {
 			active[truncatedKey] = true;
 		}
-		// --- cap the live stream feed too, so index.ts's accumulated partial
-		//     content cannot grow past the same budget the final output is capped at ---
+		// --- cap the live stream feed, so partial content can't grow past the output budget ---
 		const room = active.maxChars - active.streamedChars;
 		const forward = Math.min(text.length, Math.max(0, room));
 		if (forward > 0) active.opts.onStream?.(text.slice(0, forward), name);
 		active.streamedChars += forward;
 	}
 
-	// ── execute ────────────────────────────────────────────────────────────────
+	//--- execute ---
 
 	async execute(code: string, opts: ExecuteOptions = {}): Promise<ExecuteResult> {
 		// --- claim the queue slot synchronously so order == submission order ---
@@ -565,8 +561,7 @@ export class EngineManager {
 		active.settled = true;
 		if (this.activeExecution === active) this.activeExecution = undefined;
 
-		// A cancelled cell reports "aborted" even if it finished first:
-		// the caller withdrew interest, so the value is not theirs to consume.
+		// --- a cancelled cell reports "aborted" even if it finished first (caller withdrew) ---
 		let status = active.status;
 		if (active.opts.signal?.aborted) status = "aborted";
 		if (status !== "aborted") this.maybeWedged = false;
@@ -588,7 +583,7 @@ export class EngineManager {
 		});
 	}
 
-	// ── snapshot / restore / names ─────────────────────────────────────────────
+	//--- snapshot / restore / names ---
 
 	async snapshotState(): Promise<SnapshotResult | null> {
 		const config = this.options.snapshot;
@@ -596,9 +591,7 @@ export class EngineManager {
 		try {
 			const reply = await this.request({ type: "snapshot", id: randomUUID() }, SNAPSHOT_REQUEST_TIMEOUT_MS);
 			if (reply.type !== "snapshot_result") return null;
-			// An incomplete snapshot (the guest stalled mid-serialization) must
-			// NOT overwrite the last good file — a failed snapshot should cost a
-			// throwaway run, never the durable memory.
+			// --- an incomplete snapshot must not overwrite the last good file ---
 			if (reply.complete === false) return null;
 			mkdirSync(dirname(config.path), { recursive: true });
 			writeFileSync(config.path, JSON.stringify({ version: 1, vars: reply.vars, failed: reply.failed }));

@@ -65,8 +65,7 @@ export function closeOpenSgr(line: string): string {
 				fgOpen = false;
 				bgOpen = false;
 			} else if (code === 38 || code === 48) {
-				// Skip the payload of 38;5;n / 38;2;r;g;b so a component (e.g. 38)
-				// is not read as another SGR code.
+				// --- skip the 38;5;n / 38;2;r;g;b payload so a component isn't read as another SGR code ---
 				if (code === 38) fgOpen = true;
 				else bgOpen = true;
 				const mode = Number(params[i + 1]);
@@ -138,11 +137,7 @@ function topLine(state: ExecuteRenderState, width: number, deps: RenderDeps): st
 	const language = preview.kind === "shell" ? "repl · shell" : preview.kind === "agent" ? "repl · agent" : "repl";
 	const prefix = `${marker(state, deps)} ${deps.fg("muted", language)}`;
 
-	// Fixed metadata after the preview must always survive; the preview
-	// absorbs all truncation. Counts settle-only: live updates jitter the header.
-	// Suffix order is by priority: the expand hint must survive first, then the
-	// error, then duration, then counts. Truncation happens from the right, so
-	// low-priority items are elided before the user loses the expand keybinding.
+	// --- suffix priority: expand hint > error > duration > counts, so truncation never hides the expand key ---
 	const suffixParts: string[] = [];
 	suffixParts.push(deps.keyHint(state.expanded));
 
@@ -170,12 +165,10 @@ function topLine(state: ExecuteRenderState, width: number, deps: RenderDeps): st
 	const separator = deps.fg("dim", " · ");
 	const separatorWidth = deps.visibleWidth(separator);
 	const suffix = suffixParts.join(separator);
-	// Budget: total width minus leading space, prefix, suffix, separators.
+	// --- budget: width minus leading space, prefix, suffix, and separators ---
 	const fixed = 1 + deps.visibleWidth(prefix) + separatorWidth + deps.visibleWidth(suffix);
 	const previewBudget = Math.max(8, width - fixed - separatorWidth);
-	// A semantic preview is a one-line summary of the code. Highlight Python
-	// code the same way the expanded block is highlighted; shell/agent previews
-	// stay accent-colored so they read as intent, not syntax.
+	// --- a semantic preview is a one-line summary; highlight Python code, accent shell/agent intent ---
 	let middle = "";
 	if (preview.text) {
 		const previewText =
@@ -191,12 +184,7 @@ function topLine(state: ExecuteRenderState, width: number, deps: RenderDeps): st
 }
 
 function sanitizeTuiOutput(text: string): string {
-	// Terminal escape sequences and control characters from user code output can
-	// move the cursor, change colors, or print zero-width glyphs that break the
-	// TUI layout. Color SGR / CSI sequences (e.g. IPython's colored tracebacks)
-	// are STRIPPED so text stays readable; a remaining lone escape byte and other
-	// control chars are shown as Unicode control pictures so nothing is silently
-	// eaten. Tabs expand to 4 spaces; CR becomes ␍.
+	// --- strip ANSI SGR/CSI and escape control chars for a readable TUI; tabs expand, CR becomes ␍ ---
 	return text
 		.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
 		.replace(/\x1b/g, "␛")
@@ -245,7 +233,7 @@ function renderCode(state: ExecuteRenderState, lines: string[], width: number, d
 	const highlighted = highlightLines(code, deps);
 	for (const [index, rawLine] of code.split("\n").entries()) {
 		const prefix = index === 0 ? deps.fg("dim", "› ") : deps.fg("dim", "  ");
-		// Code is already syntax-highlighted; don't strip its ANSI.
+		// --- code is already highlighted; don't strip its ANSI ---
 		addWrapped(lines, prefix, highlighted[index] ?? rawLine, width, deps, { sanitize: false });
 	}
 	return true;
@@ -263,9 +251,7 @@ function renderOutput(
 	const details = state.details;
 	const output: string[] = [];
 
-	// stdout/stderr/result are color-coded and labeled so you can tell which
-	// stream a line came from at a glance. Sanitize the raw text before
-	// applying the section color, or our own ANSI gets escaped as user output.
+	// --- stdout/stderr/result are color-coded; sanitize before section color so our ANSI isn't escaped ---
 	const sections: Array<{ text: string | undefined; color: string; label: string }> = [
 		{ text: details?.stdout, color: "toolOutput", label: "stdout" },
 		{ text: details?.stderr, color: "warning", label: "stderr" },
@@ -337,7 +323,7 @@ export function renderExecuteBody(state: ExecuteRenderState, width: number, deps
 	const lines: string[] = [];
 	const hasCode = renderCode(state, lines, safeWidth, deps);
 	renderOutput(state, lines, safeWidth, hasCode, deps);
-	// A thin bottom border separates the expanded cell from whatever follows.
+	// --- a thin bottom border separates the expanded cell from whatever follows ---
 	if (lines.length > 0) lines.push(` ${deps.fg("dim", "─".repeat(Math.max(1, safeWidth - 1)))}`);
 	const kind = statusKind(state);
 	return lines.map((line) => paintBackground(line, safeWidth, kind, deps));
