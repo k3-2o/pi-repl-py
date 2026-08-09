@@ -12,9 +12,9 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 import { EngineBusyError, EngineManager } from "./src/engine/index.js";
 import { loadConfig } from "./src/extension/config.js";
-import { buildRlmPyPrompt, buildToolboxListing } from "./src/extension/prompt.js";
 import { ExecuteCellComponent, type ExecuteDetails, type ExecuteRenderState } from "./src/extension/render.js";
 import { EngineLifecycle, summarizeNames } from "./src/extension/session-engine.js";
+import { EXECUTE_DESCRIPTION, buildExecutePromptGuidelines, EXECUTE_PROMPT_SNIPPET } from "./src/extension/tool-meta.js";
 
 const executeSchema = Type.Object({
 	code: Type.String({
@@ -88,19 +88,11 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	// --- replace pi's default prompt (it advertises tools we don't register) ---
-	pi.on("before_agent_start", async (event, ctx) => {
-		if (!active()) return undefined; // --- dormant: stock prompt + stock tools stand ---
-		const options = (event as { systemPromptOptions?: { contextFiles?: Array<{ path: string; content: string }> } })
-			.systemPromptOptions;
-		return {
-			systemPrompt: buildRlmPyPrompt({
-				cwd: ctx.cwd,
-				contextFiles: options?.contextFiles,
-				toolboxDir: CFG.toolboxDir,
-			}),
-		};
-	});
+	// --- no custom prompt: pi's default prompt stands. session_start collapses
+	//     the active set to just `execute`, so the default prompt's built-in
+	//     read/bash/edit/write never appear. All REPL knowledge (description,
+	//     promptSnippet, promptGuidelines) lives on the tool itself, not in a
+	//     prompt builder. ---
 
 	pi.on("session_start", async (_event, ctx) => {
 		if (!active()) {
@@ -145,10 +137,9 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool<typeof executeSchema, ExecuteDetails, Partial<ExecuteRenderState>>({
 		name: "execute",
 		label: "execute",
-		description:
-			"Execute Python in a persistent evaluator. Variables, imports, and loaded data persist across calls. " +
-			`Toolbox functions are preloaded: ${buildToolboxListing(CFG.toolboxDir)}. ` +
-			"Use ls() / help(name) to discover them. The final expression of the cell is returned as the result.",
+		description: EXECUTE_DESCRIPTION,
+		promptSnippet: EXECUTE_PROMPT_SNIPPET,
+		promptGuidelines: buildExecutePromptGuidelines(CFG.toolboxDir),
 		parameters: executeSchema,
 		renderShell: "self",
 		renderCall(args, theme, context) {
