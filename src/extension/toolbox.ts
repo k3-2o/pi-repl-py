@@ -71,9 +71,7 @@ function loadToolboxEntries(dir: string | undefined): ToolEntry[] {
 			const call = parseDefCall(source);
 			if (!call) continue;
 			entries.push({ name, call, description: parseDescription(source) });
-		} catch {
-			continue;
-		}
+		} catch {}
 	}
 	return entries;
 }
