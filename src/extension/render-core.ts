@@ -323,8 +323,6 @@ export function renderExecuteBody(state: ExecuteRenderState, width: number, deps
 	const lines: string[] = [];
 	const hasCode = renderCode(state, lines, safeWidth, deps);
 	renderOutput(state, lines, safeWidth, hasCode, deps);
-	// --- a thin bottom border separates the expanded cell from whatever follows ---
-	if (lines.length > 0) lines.push(` ${deps.fg("dim", "─".repeat(Math.max(1, safeWidth - 1)))}`);
 	const kind = statusKind(state);
 	return lines.map((line) => paintBackground(line, safeWidth, kind, deps));
 }
