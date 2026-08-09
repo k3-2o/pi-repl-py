@@ -303,7 +303,11 @@ def main():
                 _send({"type": "done", "cellId": cell_id, "status": "error", "error": _line_error(error)})
             else:
                 _send({"type": "done", "cellId": cell_id, "status": "ok", "result": result})
-        # "abort" is cooperative-only; the host hard-kills us for a real timeout.
+        # Note: the guest's main loop is single-threaded, so it stays inside
+        # run_cell while a cell executes and cannot read an "abort" line until
+        # the cell finishes. Cancel recovery therefore happens HOST-side: on an
+        # aborted cell the engine is discarded and rebuilt so the next run
+        # never queues behind a still-busy kernel.
 
 
 if __name__ == "__main__":

@@ -198,6 +198,13 @@ export default function (pi: ExtensionAPI) {
 				pendingErrorResults.set(toolCallId, { details });
 				throw new Error(text || "(no output)");
 			}
+			if (r.status === "aborted") {
+				// A cancelled cell's kernel may still be executing work the guest
+				// single-threaded loop can't interrupt. Discard the engine so the
+				// NEXT run gets a fresh kernel instead of queuing behind the
+				// still-busy one (same class as the stalled-timeout recovery).
+				await lifecycle.discard();
+			}
 			return result;
 		} catch (error) {
 			if (error instanceof EngineBusyError) {
