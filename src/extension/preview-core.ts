@@ -12,7 +12,7 @@
  */
 
 /** What kind of work the winning line represents; drives the header label. */
-export type CellPreviewKind = "shell" | "agent" | "ts";
+type CellPreviewKind = "shell" | "agent" | "ts";
 
 export interface CellPreview {
 	kind: CellPreviewKind;

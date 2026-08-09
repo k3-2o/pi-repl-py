@@ -50,7 +50,7 @@ export interface EngineLifecycleDeps<E extends RevivableEngine> {
  */
 export type AcquireOrigin = "startup" | "cell";
 
-export function formatEngineResetNotice(restore: RestoreResult | null): string {
+function formatEngineResetNotice(restore: RestoreResult | null): string {
 	const lines = ["<rlm_engine_reset>"];
 	if (!restore) {
 		// --- no snapshot at all: namespace is genuinely empty ---

@@ -9,7 +9,7 @@
  *      cannot recover; a cell cannot forge a message.
  */
 
-export interface HostToGuest {
+interface HostToGuest {
 	run: { type: "run"; cellId: string; code: string };
 	abort: { type: "abort"; cellId: string };
 	ping: { type: "ping"; id: string };
@@ -20,7 +20,7 @@ export interface HostToGuest {
 
 export type HostToGuestMessage = HostToGuest[keyof HostToGuest];
 
-export interface GuestToHost {
+interface GuestToHost {
 	ready: { type: "ready" };
 	stream: { type: "stream"; cellId: string; name: "stdout" | "stderr"; chunk: string };
 	done: {
@@ -48,7 +48,7 @@ export interface GuestToHost {
 
 export type GuestToHostMessage = GuestToHost[keyof GuestToHost];
 
-export const ENVELOPE_KEY = "__rlm";
+const ENVELOPE_KEY = "__rlm";
 /** Env var carrying the per-process nonce to the guest. */
 export const NONCE_ENV = "PI_RLM_NONCE";
 /** Protocol pipe: guest → host. */

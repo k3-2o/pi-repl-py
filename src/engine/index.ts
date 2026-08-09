@@ -46,7 +46,7 @@ const PING_TIMEOUT_MS = 5_000;
 const DEFAULT_SNAPSHOT_DEBOUNCE_MS = 1500;
 const SNAPSHOT_REQUEST_TIMEOUT_MS = 30_000;
 
-export interface EngineExecuteError {
+interface EngineExecuteError {
 	/** Error class name, e.g. "TypeError". */
 	name: string;
 	message: string;
