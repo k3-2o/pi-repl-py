@@ -25,11 +25,15 @@ export function buildPromptGuidelines(preloaded: string[]): string[] {
 		"These are your file and shell tools — call them. Don't reimplement read/write/edit/bash in Python, " +
 			"and don't fork a near-copy under a new name; a new def overwrites an old one by name, so extend " +
 			"the existing function instead.",
+		"This is a persistent workspace, not a script — your defs ARE your working memory. When a shape " +
+			"recurs (the same fetch, filter, or transform with different inputs), define it once and call it " +
+			"by arguments from then on. Reaching for an existing def beats rewriting its logic; rewriting is " +
+			"the failure mode. ls() lists the toolbox plus every function you've defined — that is your library.",
 		"This is a real IPython kernel: `!cmd` runs a shell command (fire-and-forget, output prints), `%%bash` " +
 			"is the block form, and `%timeit`/other magics work. Use `bash(cmd)` when you need the output back " +
 			"in a Python variable — it returns the CompletedProcess with `.stdout`/`.stderr`/`.returncode`.",
-		"Define a new function only to reuse it: if you'll run this shape again with different inputs, write " +
-			"it once as def and call it by arguments — otherwise just run the cell.",
+		"Define a function when the shape recurs or the logic is worth naming; don't wrap a single one-off " +
+			"call in a def — just run the cell.",
 		"Do the job, then answer with the result. Don't tell the user you 'defined a function' or 'built a " +
 			"tool'; that's internal machinery.",
 		"",
@@ -44,8 +48,12 @@ export function buildPromptGuidelines(preloaded: string[]): string[] {
 		"  count_lines(find_files('*.csv'))      # one call",
 		"",
 		"## Efficiency",
-		"Everything a cell prints stays in context for the whole turn, so print slices, matches, or counts — " +
-			"never whole files — and keep large values in variables.",
+		"Context is the budget: everything a cell prints lands in the transcript for the whole turn. Print " +
+			"slices, counts, or names — never whole files or dumps — and keep large values in variables. " +
+			"Notebook-style, a `;` at the end of a cell suppresses its last-expression echo.",
+		"Search output is the classic bloat trap: web_search() returns long content blocks. Store the result " +
+			"in a variable, print a lean digest (titles + links, or hit counts), and pull the full text only " +
+			"when a result looks relevant — never stream the whole content list.",
 		"For whole-filesystem or large-directory scans, use the shell tools (find, fd, du, grep), not a " +
 			"Python os.walk: it pays a syscall per file and runs minutes on a big tree. Example: " +
 			"`find -xdev -type f -size +100M | sort -rn | head`. Reserve Python for analysing the results.",

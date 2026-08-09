@@ -11,6 +11,11 @@ dropped the static function enumeration (it can't know config-loaded helpers lik
 - Advertised the real kernel's notebook conveniences in the prompt: `!cmd` runs shell,
 `%%bash`/`%timeit` magics work, with the division of labour — use `bash(cmd)` when output
 must come back as a Python variable (it returns the CompletedProcess)
+- Instilled the persistent-workspace doctrine: defs are working memory, recurred shapes
+become reusable functions, rewriting is the failure mode, `ls()` is the library; and the
+efficiency doctrine: context is the budget, `;` suppresses a cell's echo, and
+`web_search()` output is called out as the classic bloat trap (digest first, pull detail
+only when a result looks relevant)
 - Toolbox loader stops deriving signatures from `def` lines (the regex grabbed
 a private helper like `_get_env(key)` as the advertised call for `bash`/
 `web_search`); the model-facing surface is now `function_description` only,
