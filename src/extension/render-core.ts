@@ -278,7 +278,8 @@ function renderOutput(
 	const output: string[] = [];
 
 	// stdout/stderr/result are color-coded and labeled so you can tell which
-	// stream a line came from at a glance.
+	// stream a line came from at a glance. Sanitize the raw text before
+	// applying the section color, or our own ANSI gets escaped as user output.
 	const sections: Array<{ text: string | undefined; color: string; label: string }> = [
 		{ text: details?.stdout, color: "toolOutput", label: "stdout" },
 		{ text: details?.stderr, color: "warning", label: "stderr" },
@@ -289,26 +290,32 @@ function renderOutput(
 		if (!text?.trim()) continue;
 		renderedText = true;
 		output.push(` ${OUTPUT_INDENT}${deps.fg("dim", `${label}:`)}`);
-		for (const line of text.split("\n")) addWrapped(output, OUTPUT_INDENT, deps.fg(color, line || " "), width, deps);
+		for (const line of text.split("\n")) {
+			const safe = sanitizeTuiOutput(line || " ");
+			addWrapped(output, OUTPUT_INDENT, deps.fg(color, safe), width, deps, { sanitize: false });
+		}
 	}
 
 	if (!renderedText && !details && state.contentText?.trim()) {
 		renderedText = true;
 		const color = state.isError ? "error" : "toolOutput";
 		for (const line of state.contentText.trim().split("\n")) {
-			addWrapped(output, OUTPUT_INDENT, deps.fg(color, line || " "), width, deps);
+			const safe = sanitizeTuiOutput(line || " ");
+			addWrapped(output, OUTPUT_INDENT, deps.fg(color, safe), width, deps, { sanitize: false });
 		}
 	}
 
 	if (details?.errorStack && details.errorStack.length > 0) {
 		output.push(` ${OUTPUT_INDENT}${deps.fg("dim", "traceback:")}`);
-		for (const line of details.errorStack)
-			addWrapped(output, OUTPUT_INDENT, deps.fg("error", line || " "), width, deps);
+		for (const line of details.errorStack) {
+			const safe = sanitizeTuiOutput(line || " ");
+			addWrapped(output, OUTPUT_INDENT, deps.fg("error", safe), width, deps, { sanitize: false });
+		}
 	}
 
 	if (!renderedText) {
 		const message = state.isPartial || statusKind(state) === "running" ? "waiting for output..." : "no output";
-		addWrapped(output, OUTPUT_INDENT, deps.fg("muted", message), width, deps);
+		addWrapped(output, OUTPUT_INDENT, deps.fg("muted", message), width, deps, { sanitize: false });
 	}
 
 	const entries = selectPreviewLines(output, MAX_OUTPUT_LINES);
@@ -344,17 +351,12 @@ export function renderExecuteBody(state: ExecuteRenderState, width: number, deps
 	const lines: string[] = [];
 	const hasCode = renderCode(state, lines, safeWidth, deps);
 	renderOutput(state, lines, safeWidth, hasCode, deps);
+	// A thin bottom border separates the expanded cell from whatever follows.
+	if (lines.length > 0) lines.push(` ${deps.fg("dim", "─".repeat(Math.max(1, safeWidth - 1)))}`);
 	const kind = statusKind(state);
 	return lines.map((line) => paintBackground(line, safeWidth, kind, deps));
 }
 
 export function renderExecuteCell(state: ExecuteRenderState, width: number, deps: RenderDeps): string[] {
-	const safeWidth = Math.max(1, width);
-	const lines = [deps.truncateToWidth(` ${topLine(state, safeWidth, deps)}`, safeWidth, "")];
-	if (state.expanded) {
-		const hasCode = renderCode(state, lines, safeWidth, deps);
-		renderOutput(state, lines, safeWidth, hasCode, deps);
-	}
-	const kind = statusKind(state);
-	return lines.map((line) => paintBackground(line, safeWidth, kind, deps));
+	return [...renderExecuteHeader(state, width, deps), ...renderExecuteBody(state, width, deps)];
 }

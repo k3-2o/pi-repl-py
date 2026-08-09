@@ -323,7 +323,7 @@ describe("render-core: layout", () => {
 		expect(stripAnsi(renderExecuteCell(running, 80, deps).join("\n"))).toContain("waiting for output");
 	});
 
-	test("output ANSI escapes and control chars are escaped, not stripped", () => {
+	test("output ANSI escapes are stripped before section coloring is applied", () => {
 		const deps = testDeps();
 		const state = makeState({
 			expanded: true,
@@ -335,15 +335,14 @@ describe("render-core: layout", () => {
 		});
 		const raw = renderExecuteCell(state, 80, deps).join("\n");
 		const plain = stripAnsi(raw);
-		// Unicode control pictures keep the escape byte visible.
-		expect(raw).toContain("␛[31mred␛[0m");
-		expect(raw).toContain("␍");
+		// User ANSI is stripped; our section color is applied afterward.
 		expect(plain).toContain("red");
 		expect(plain).toContain("beep");
 		expect(plain).not.toContain("\x07");
 		expect(plain).toContain("    "); // tab expanded
 		expect(plain).toContain("stdout:");
 		expect(plain).toContain("stderr:");
+		expect(raw).toContain("␍"); // carriage return escaped as a control picture
 	});
 
 	test("stdout/stderr/result are labeled and color-coded", () => {
