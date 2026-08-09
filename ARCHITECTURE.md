@@ -94,7 +94,8 @@ bare kernel still lets the model discover what is loaded.
 After each successful cell the host schedules a debounced snapshot: it asks
 the guest to pickle the kernel's globals (entry-by-entry so one bad value
 costs only itself), and stores that as `namespace.snapshot` keyed to the
-session file. On a fresh engine it restores, and whatever cannot be pickled
+session file under `~/.pi/agent/pi-repl/state/<session>/`. On a fresh engine it
+restores, and whatever cannot be pickled
 (live handles, some objects) is reported by name.
 
 If the evaluator restarts, the result is prefixed with a `<rlm_engine_reset>`

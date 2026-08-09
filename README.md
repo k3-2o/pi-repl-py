@@ -52,7 +52,19 @@ A small set of Python functions is preloaded into every kernel and surfaced to t
 model through the `execute` tool's prompt guidance (their signatures + one-line
 summaries are listed there, and `ls()`/`help()` discover them at runtime), so the
 model can call `read`, `write`, `edit`, and `bash` without reimplementing them.
-Set `toolboxDir` to point at your own folder.
+Set `toolboxDir` to point at your own folder; its functions are loaded **in addition to** the built-ins, and a file there with the **same name** as a built-in overrides it.
+
+Everything the extension keeps lives under one folder in your home directory:
+
+```
+~/.pi/agent/pi-repl/
+  config.json   settings (toolboxDir, pythonPath, timeoutMs)
+  venv/         the Python interpreter + ipykernel
+  functions/    your custom toolbox functions, if any
+  state/        per-session namespace snapshots
+```
+
+These functions are the evaluator's standard file-and-shell surface; the model reaches for them as its builtins and composes its own reusable tools on top.
 
 The function list shown to the model is built when the `execute` tool is
 registered, so changing the toolbox (adding/removing a file, renaming one with a
