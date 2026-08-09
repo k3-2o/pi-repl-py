@@ -24,8 +24,9 @@ config:
 Use an absolute path or a `~`-prefixed one (`~` expands to your home). A bare relative
 path resolves from the process working directory, which is not reliable, so prefer
 an absolute path for a stable per-user folder. Point `toolboxDir` at a directory and
-every `*.py` there is loaded. Note: it **replaces** the shipped defaults; you do not
-get built-ins plus yours, unless you copy the built-ins into your folder too.
+every `*.py` there is loaded **in addition to** the shipped `read`/`write`/`edit`/`bash`.
+If a file in your folder has the **same name** as a built-in (e.g. `read.py`), your
+version wins and the built-in is ignored for that name.
 
 ## The file contract
 

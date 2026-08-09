@@ -130,7 +130,7 @@ throws on a missing/malformed file.
 
 | Key | Type / default | Meaning |
 | --- | --- | --- |
-| `toolboxDir` | string, optional | Directory of one-function-per-`.py` files that replaces the shipped `src/engine/toolbox`. `~` is expanded; a bare relative path resolves from the process cwd (not reliable) — prefer an absolute path. |
+| `toolboxDir` | string, optional | Directory of one-function-per-`.py` files that ADDS to the shipped `src/engine/toolbox` and, when a name collides, overrides that built-in. `~` is expanded; a bare relative path resolves from the process cwd (not reliable) — prefer an absolute path. |
 | `pythonPath` | string, optional | The interpreter used to spawn the guest. Omit to use `resolvePythonPath` (see venv). |
 | `timeoutMs` | number, 60000 | Per-cell execution timeout in ms. |
 | `snapshotDebounceMs` | number, 1500 | Debounce after an ok cell before snapshot, in ms. |

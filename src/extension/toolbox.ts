@@ -9,6 +9,7 @@
  */
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 interface ToolEntry {
@@ -41,9 +42,22 @@ function defaultToolboxDir(): string {
 	return join(import.meta.dirname, "..", "..", "src", "engine", "toolbox");
 }
 
-/** Load {function_name → source} for each non-underscore *.py in `dir`. */
+/** Expand a leading `~` to the user's home, matching the guest's expanduser. */
+function expandTilde(p: string): string {
+	const home = homedir();
+	if (p === "~" || p === "~/") return home;
+	if (p.startsWith("~/") || p.startsWith("~\\")) return join(home, p.slice(2));
+	return p;
+}
+
+/** Resolve a toolbox dir the way the config intends (expand ~, missing → shipped default). */
+function toolboxDir(dir: string | undefined): string {
+	return dir && dir.trim().length > 0 ? expandTilde(dir.trim()) : defaultToolboxDir();
+}
+
+/** Load {function_name → entry} for each non-underscore *.py in `dir`. */
 function loadToolboxEntries(dir: string | undefined): ToolEntry[] {
-	const d = dir && dir.length > 0 ? dir : defaultToolboxDir();
+	const d = toolboxDir(dir);
 	if (!existsSync(d)) return [];
 	const entries: ToolEntry[] = [];
 	for (const file of readdirSync(d).sort()) {
@@ -66,9 +80,22 @@ function loadToolboxEntries(dir: string | undefined): ToolEntry[] {
 }
 
 /**
- * The markdown-style function map: one `- call: description` line per function,
- * ready to drop into the prompt guidelines.
+ * The shipped built-in function set, always present (the canonical toolbox).
+ */
+function builtInEntries(): ToolEntry[] {
+	return loadToolboxEntries(undefined);
+}
+
+/**
+ * The effective function map: the shipped built-ins are supreme (always
+ * present); the config `toolboxDir`, if set, adds any extra function and, when
+ * a name collides, overrides the built-in one. `~` is resolved like the guest.
  */
 export function buildToolboxMap(dir: string | undefined): string[] {
-	return loadToolboxEntries(dir).map((t) => (t.description ? `- ${t.call}: ${t.description}` : `- ${t.call}`));
+	const byName = new Map<string, ToolEntry>();
+	for (const e of builtInEntries()) byName.set(e.name, e);
+	if (dir && dir.trim().length > 0 && toolboxDir(dir) !== defaultToolboxDir()) {
+		for (const e of loadToolboxEntries(dir)) byName.set(e.name, e);
+	}
+	return [...byName.values()].map((t) => (t.description ? `- ${t.call}: ${t.description}` : `- ${t.call}`));
 }

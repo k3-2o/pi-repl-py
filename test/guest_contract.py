@@ -333,12 +333,10 @@ def test_silence_watchdog_allows_active_work(guest):
         g.close()
 
 
-def test_custom_tool_file_loads_from_toolbox_dir():
-    # A user folder in PI_TOOLBOX_DIR is loaded into the kernel; a one-file custom
-    # function appears alongside. Setting PI_TOOLBOX_DIR replaces the shipped
-    # default set rather than merging, so only the custom function is present.
-    import pathlib
-    import shutil
+def test_custom_tool_dir_merges_with_shipped_builtins():
+    # The config folder ADDS to the shipped set, never replaces it: a new
+    # function appears AND the built-in read/bash stay available.
+    import pathlib, shutil
     d = tempfile.mkdtemp()
     try:
         (pathlib.Path(d) / "double.py").write_text("def double(n):\n    return n * 2\n")
@@ -350,6 +348,33 @@ def test_custom_tool_file_loads_from_toolbox_dir():
             d2, streams = run_cell(g, "print(double(21))", "c1")
             assert d2["status"] == "ok"
             assert any("42" in m["chunk"] for m in streams)
+            d3, s3 = run_cell(g, "print(ls())", "c2")
+            joined = " ".join(m["chunk"] for m in s3)
+            assert "double" in joined and "read" in joined and "bash" in joined
+        finally:
+            g.close()
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_custom_tool_overrides_builtin_by_name():
+    # A config function with the same name as a shipped built-in wins over it.
+    import pathlib, shutil
+    d = tempfile.mkdtemp()
+    try:
+        (pathlib.Path(d) / "read.py").write_text(
+            'function_description = """custom read"""\n'
+            "def read(path):\n"
+            "    return 'overridden:' + path\n"
+        )
+        g = GuestProc(toolbox_dir=d)
+        for m in g.frames(timeout=20):
+            if m.get("type") == "ready":
+                break
+        try:
+            d2, streams = run_cell(g, "print(read('x'))", "c1")
+            assert d2["status"] == "ok"
+            assert any("overridden" in m["chunk"] for m in streams)
         finally:
             g.close()
     finally:
