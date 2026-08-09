@@ -13,7 +13,7 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/k3-2o/pi-repl-py.git"
+		"url": "git+https://github.com/k3-2o/pi-repl-py.git"
 	},
 	"homepage": "https://github.com/k3-2o/pi-repl-py",
 	"bugs": {
@@ -35,7 +35,7 @@
 	"engines": {
 		"node": ">=22"
 	},
-"scripts": {
+	"scripts": {
 		"typecheck": "tsc --noEmit",
 		"format": "biome format --write .",
 		"lint": "biome check .",
