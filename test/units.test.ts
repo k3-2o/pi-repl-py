@@ -323,7 +323,7 @@ describe("render-core: layout", () => {
 		expect(stripAnsi(renderExecuteCell(running, 80, deps).join("\n"))).toContain("waiting for output");
 	});
 
-	test("output ANSI escapes and control chars are sanitized", () => {
+	test("output ANSI escapes and control chars are escaped, not stripped", () => {
 		const deps = testDeps();
 		const state = makeState({
 			expanded: true,
@@ -333,13 +333,51 @@ describe("render-core: layout", () => {
 				stderr: "\r\x00\x1b[1m",
 			},
 		});
-		const rendered = stripAnsi(renderExecuteCell(state, 80, deps).join("\n"));
-		expect(rendered).toContain("red");
-		expect(rendered).toContain("beep");
-		expect(rendered).not.toContain("\x1b[");
-		expect(rendered).not.toContain("\x07");
-		expect(rendered).toContain("    "); // tab expanded
-		expect(rendered).toContain("␍"); // carriage return escaped
+		const raw = renderExecuteCell(state, 80, deps).join("\n");
+		const plain = stripAnsi(raw);
+		// Unicode control pictures keep the escape byte visible.
+		expect(raw).toContain("␛[31mred␛[0m");
+		expect(raw).toContain("␍");
+		expect(plain).toContain("red");
+		expect(plain).toContain("beep");
+		expect(plain).not.toContain("\x07");
+		expect(plain).toContain("    "); // tab expanded
+		expect(plain).toContain("stdout:");
+		expect(plain).toContain("stderr:");
+	});
+
+	test("stdout/stderr/result are labeled and color-coded", () => {
+		const deps = testDeps();
+		const state = makeState({
+			expanded: true,
+			details: {
+				status: "ok",
+				stdout: "out",
+				stderr: "err",
+				result: "res",
+			},
+		});
+		const plain = stripAnsi(renderExecuteCell(state, 80, deps).join("\n"));
+		expect(plain).toContain("stdout:");
+		expect(plain).toContain("stderr:");
+		expect(plain).toContain("result:");
+		expect(plain).toContain("out");
+		expect(plain).toContain("err");
+		expect(plain).toContain("res");
+	});
+
+	test("huge output is head/tail truncated with a hidden marker", () => {
+		const deps = testDeps();
+		const state = makeState({
+			expanded: true,
+			details: { status: "ok", stdout: Array.from({ length: 60 }, (_, i) => `line ${i}`).join("\n") },
+		});
+		const plain = stripAnsi(renderExecuteCell(state, 80, deps).join("\n"));
+		expect(plain).toContain("line 0");
+		expect(plain).toContain("line 59");
+		expect(plain).toContain("hidden");
+		// Should not render every line.
+		expect(plain.match(/line \d+/g)?.length).toBeLessThan(60);
 	});
 
 	test("background is re-armed after inner SGR resets so it spans the row", () => {

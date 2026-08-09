@@ -207,15 +207,32 @@ function topLine(state: ExecuteRenderState, width: number, deps: RenderDeps): st
 }
 
 function sanitizeTuiOutput(text: string): string {
-	// Escape sequences and control characters from user code output can move the
-	// cursor, change colors, or print zero-width glyphs that break the TUI layout.
-	// This mirrors pi-fabric's escapeControlChars: keep the visible meaning of
-	// tab/newline, but neutralize everything else.
+	// Control characters from user code output can move the cursor, change
+	// colors, or print zero-width glyphs that break the TUI layout. Following
+	// pi-fabric's escapeControlChars, render the escape byte and CR as Unicode
+	// control pictures so the user can see what was emitted instead of silently
+	// stripping it. Tabs expand to 4 spaces; other controls become �.
 	return text
-		.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+		.replace(/\x1b/g, "␛")
 		.replace(/\r/g, "␍")
 		.replace(/\t/g, "    ")
 		.replace(/[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f-\x9f]/g, "�");
+}
+
+type PreviewEntry = { kind: "line"; line: string } | { kind: "hidden"; hidden: number };
+
+/** Head/tail truncation with a hidden-line marker, adapted from pi-fabric. */
+function selectPreviewLines(lines: string[], limit: number): PreviewEntry[] {
+	const lineEntry = (line: string): PreviewEntry => ({ kind: "line", line });
+	if (lines.length <= limit || limit <= 0) return lines.map(lineEntry);
+	if (limit < 8) return [...lines.slice(0, limit).map(lineEntry), { kind: "hidden", hidden: lines.length - limit }];
+	const head = Math.ceil(limit * 0.65);
+	const tail = Math.max(1, limit - head - 1);
+	return [
+		...lines.slice(0, head).map(lineEntry),
+		{ kind: "hidden", hidden: lines.length - head - tail },
+		...lines.slice(-tail).map(lineEntry),
+	];
 }
 
 function addWrapped(
@@ -248,6 +265,8 @@ function renderCode(state: ExecuteRenderState, lines: string[], width: number, d
 	return true;
 }
 
+const MAX_OUTPUT_LINES = 50;
+
 function renderOutput(
 	state: ExecuteRenderState,
 	lines: string[],
@@ -256,45 +275,51 @@ function renderOutput(
 	deps: RenderDeps,
 ): void {
 	const details = state.details;
-	let outputStarted = false;
-	const startOutput = () => {
-		if (outputStarted) return;
-		outputStarted = true;
-		if (hasCode) lines.push("");
-	};
+	const output: string[] = [];
 
-	// stdout/stderr/result are color-coded so you can tell which stream a line
-	// came from at a glance: stdout in the tool output color, stderr in warning
-	// yellow, and the Python return value in accent since it's usually the point.
-	const sections: Array<{ text: string | undefined; color: string }> = [
-		{ text: details?.stdout, color: "toolOutput" },
-		{ text: details?.stderr, color: "warning" },
-		{ text: details?.result, color: "accent" },
+	// stdout/stderr/result are color-coded and labeled so you can tell which
+	// stream a line came from at a glance.
+	const sections: Array<{ text: string | undefined; color: string; label: string }> = [
+		{ text: details?.stdout, color: "toolOutput", label: "stdout" },
+		{ text: details?.stderr, color: "warning", label: "stderr" },
+		{ text: details?.result, color: "accent", label: "result" },
 	];
 	let renderedText = false;
-	for (const { text, color } of sections) {
+	for (const { text, color, label } of sections) {
 		if (!text?.trim()) continue;
-		startOutput();
 		renderedText = true;
-		for (const line of text.split("\n")) addWrapped(lines, OUTPUT_INDENT, deps.fg(color, line || " "), width, deps);
+		output.push(` ${OUTPUT_INDENT}${deps.fg("dim", `${label}:`)}`);
+		for (const line of text.split("\n")) addWrapped(output, OUTPUT_INDENT, deps.fg(color, line || " "), width, deps);
 	}
 
 	if (!renderedText && !details && state.contentText?.trim()) {
-		startOutput();
 		renderedText = true;
 		const color = state.isError ? "error" : "toolOutput";
 		for (const line of state.contentText.trim().split("\n")) {
-			addWrapped(lines, OUTPUT_INDENT, deps.fg(color, line || " "), width, deps);
+			addWrapped(output, OUTPUT_INDENT, deps.fg(color, line || " "), width, deps);
 		}
 	}
 
 	if (details?.errorStack && details.errorStack.length > 0) {
-		startOutput();
-		for (const line of details.errorStack) addWrapped(lines, OUTPUT_INDENT, deps.fg("error", line || " "), width, deps);
-	} else if (!renderedText) {
-		startOutput();
+		output.push(` ${OUTPUT_INDENT}${deps.fg("dim", "traceback:")}`);
+		for (const line of details.errorStack)
+			addWrapped(output, OUTPUT_INDENT, deps.fg("error", line || " "), width, deps);
+	}
+
+	if (!renderedText) {
 		const message = state.isPartial || statusKind(state) === "running" ? "waiting for output..." : "no output";
-		addWrapped(lines, OUTPUT_INDENT, deps.fg("muted", message), width, deps);
+		addWrapped(output, OUTPUT_INDENT, deps.fg("muted", message), width, deps);
+	}
+
+	const entries = selectPreviewLines(output, MAX_OUTPUT_LINES);
+	if (entries.length > 0 && hasCode) lines.push("");
+	for (const entry of entries) {
+		if (entry.kind === "hidden") {
+			const marker = ` … ${entry.hidden} line${entry.hidden === 1 ? "" : "s"} hidden … `;
+			lines.push(` ${OUTPUT_INDENT}${deps.fg("muted", marker)}`);
+		} else {
+			lines.push(entry.line);
+		}
 	}
 }
 
