@@ -199,11 +199,21 @@ def test_snapshot_excludes_toolbox_metadata(guest):
 
 def test_snapshot_is_flagged_complete(guest):
     # A valid snapshot — even of an empty namespace — must be reported as
-    # complete so the host persists it; an interrupted one would be incomplete
-    # and the host would keep the last good file instead.
+    # complete so the host can never; an empty snapshot would be marked
+    # incomplete and the host would keep the last good file.
     guest.send({"type": "snapshot", "id": "s1"})
     snap = guest.recv_type("snapshot_result", timeout=20)
     assert snap["complete"] is True
+
+
+def test_high_output_is_capped_guest_side(guest):
+    # A runaway print must not accumulate unbounded output in the guest or slip
+    # a giant frame to the host. It completes, but the captured stdout stays
+    # within the guest's buffer, not the full 10MB.
+    d, streams = run_cell(guest, "print('x' * 10_000_000)", "c1")
+    assert d["status"] == "ok"
+    total = sum(len(m["chunk"]) for m in streams)
+    assert total < 2_000_000, total
 
 
 # ── list_names ─────────────────────────────────────────────────────────────────

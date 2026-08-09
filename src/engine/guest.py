@@ -34,6 +34,12 @@ CELL_TIMEOUT_S = float(os.environ.get("PI_REPL_TIMEOUT_MS", "0") or "0") / 1000.
 # instead of being throttled by a silence timer and silently losing state.
 SNAPSHOT_TIMEOUT_S = 90.0
 
+# Per-stream cap of what the guest buffers for a cell. The host already truncates
+# to its own budget, so this is a resource guard: a runaway `while True: print`
+# cannot accumulate unlimited stdout in the guest process or send a giant frame.
+# We keep draining until idle, but stop storing past the cap.
+MAX_CELL_OUTPUT_CHARS = 1_000_000
+
 # fd 3 protocol writer; dup'd so we don't close the caller's fd 3 on exit.
 _proto = os.fdopen(os.dup(PROTOCOL_FD), "w", buffering=1)
 
@@ -152,6 +158,7 @@ class Kernel:
         """
         msg_id = self.kc.execute(code)
         out, err, error, result = [], [], None, None
+        out_len, err_len = 0, 0
         timed_out = False
         # Silence clock: only starts once the cell has actually begun (first
         # iopub message for it). This gives a slow-spawned kernel a grace period
@@ -178,7 +185,18 @@ class Kernel:
             mt = m.get("msg_type")
             c = m.get("content", {})
             if mt == "stream":
-                (out if c.get("name") == "stdout" else err).append(c.get("text", ""))
+                is_out = c.get("name") == "stdout"
+                text = c.get("text", "") or ""
+                if is_out:
+                    if out_len < MAX_CELL_OUTPUT_CHARS:
+                        take = text[: MAX_CELL_OUTPUT_CHARS - out_len]
+                        out.append(take)
+                        out_len += len(take)
+                else:
+                    if err_len < MAX_CELL_OUTPUT_CHARS:
+                        take = text[: MAX_CELL_OUTPUT_CHARS - err_len]
+                        err.append(take)
+                        err_len += len(take)
             elif mt == "execute_result":
                 result = c.get("data", {}).get("text/plain")
             elif mt == "error":
