@@ -1,0 +1,21 @@
+# junk / build artifacts
+__pycache__/
+**/__pycache__/
+**/__pycache__/**
+**/*.pyc
+*.tgz
+.pytest_cache/
+.ruff_cache/
+.venv/
+dist/
+node_modules/
+
+# not shipped
+.git/
+.github/
+.vscode/
+test/
+rig/
+AGENTS.md
+AUDIT-FINDINGS.md
+CHANGELOG.md
