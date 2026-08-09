@@ -15,7 +15,7 @@ import os
 import sys
 import time
 
-# ── protocol envelope ────────────────────────────────────────────────────────
+# --- protocol envelope ---
 ENVELOPE_KEY = "__rlm"
 NONCE_ENV = "PI_RLM_NONCE"
 PROTOCOL_FD = 3
@@ -23,24 +23,16 @@ PROTOCOL_FD = 3
 NONCE = os.environ.get(NONCE_ENV, "")
 os.environ.pop(NONCE_ENV, None)
 
-# Per-cell timeout comes from the host config (default "0" = no wall-clock cap).
-# When nonzero it is a SILENCE watchdog: it trips only if the cell emits no
-# output for that many seconds, never after N elapsed. A signal that is slow but
-# producing output (or a deliberately silent `find | sort`) can run to completion.
+# --- per-cell timeout: 0 = no cap; else a silence watchdog (no output for N seconds) ---
 CELL_TIMEOUT_S = float(os.environ.get("PI_REPL_TIMEOUT_MS", "0") or "0") / 1000.0
 
-# Snapshot/restore are internal bookkeeping, not user work: a huge namespace can
-# legitimately take longer than a cell, so they get a separate (fixed) window
-# instead of being throttled by a silence timer and silently losing state.
+# --- snapshot/restore use a fixed window, not the cell silence timer ---
 SNAPSHOT_TIMEOUT_S = 90.0
 
-# Per-stream cap of what the guest buffers for a cell. The host already truncates
-# to its own budget, so this is a resource guard: a runaway `while True: print`
-# cannot accumulate unlimited stdout in the guest process or send a giant frame.
-# We keep draining until idle, but stop storing past the cap.
+# --- cap buffered output so a runaway print can't grow guest memory or send one giant frame ---
 MAX_CELL_OUTPUT_CHARS = 1_000_000
 
-# fd 3 protocol writer; dup'd so we don't close the caller's fd 3 on exit.
+# --- fd 3 protocol writer; dup'd so we don't close the caller's fd 3 on exit ---
 _proto = os.fdopen(os.dup(PROTOCOL_FD), "w", buffering=1)
 
 
@@ -66,8 +58,7 @@ def _decode(line):
     return obj
 
 
-# Toolbox: one function per *.py, exec'd into every kernel (`PI_TOOLBOX_DIR`,
-# default the sibling toolbox/ dir). help/ls are hard-wired, not configurable.
+# --- toolbox: one function per *.py, exec'd into every kernel (PI_TOOLBOX_DIR) ---
 
 def _toolbox_files(directory):
     """Return {function_name: source} for each *.py in `directory`."""
@@ -94,11 +85,9 @@ DEFAULT_TOOLBOX_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "
 TOOLBOX_DIR = os.environ.get("PI_TOOLBOX_DIR", "").strip()
 _TOOLBOX_SRC = _toolbox_files(TOOLBOX_DIR or DEFAULT_TOOLBOX_DIR)
 
-# help/ls are part of the evaluator, not the toolbox: any kernel, even a bare
-# one, gets a way to discover what is loaded.
+# --- help/ls are part of the evaluator, not the toolbox ---
 INTRINSIC = """
-# IPython injects a few globals (exit/quit/get_ipython/open/...) that aren't the
-# agent's toolbox; ls() must not surface them as callable tooling.
+# --- ls() filters IPython-injected names out of the tool list ---
 _RPL_LS_NOISE = {'exit', 'quit', 'get_ipython', 'open', 'display'}
 
 def ls():
@@ -160,9 +149,7 @@ class Kernel:
         out, err, error, result = [], [], None, None
         out_len, err_len = 0, 0
         timed_out = False
-        # Silence clock: only starts once the cell has actually begun (first
-        # iopub message for it). This gives a slow-spawned kernel a grace period
-        # so the first-scheduled cell isn't falsely tripped.
+        # --- silence clock only starts once the cell begins (grace for a fresh kernel) ---
         last_activity: float | None = None
         while True:
             if not self.km.is_alive():
@@ -204,9 +191,7 @@ class Kernel:
             elif mt == "status" and c.get("execution_state") == "idle":
                 break
         if timed_out:
-            # Best-effort: cancel the stuck code so the NEXT cell does not queue
-            # behind it. Interrupt delivers SIGINT to the kernel; for a real hang
-            # the parent host kills the process and we report the wedge above.
+            # --- best-effort cancel so the NEXT cell doesn't queue behind this one ---
             try:
                 self.kc.interrupt_kernel()
             except Exception:
@@ -223,11 +208,7 @@ class Kernel:
         return self._drain_execution(code, CELL_TIMEOUT_S)
 
     def snapshot_globals(self):
-        # Skip the toolbox functions and intrinsic helpers (functions don't
-        # pickle anyway; excluding avoids a noisy `failed` list on every save).
-        # Skip the toolbox/intrinsic functions, plus the toolbox metadata globals
-        # (function_description) which are exec'd into the namespace but are not
-        # user state and must not be snapshotted as such.
+        # --- snapshot only user state (skip toolbox/intrinsic functions and _ names) ---
         tool_names = sorted(set(_TOOLBOX_SRC) | {"ls", "help", "function_description"})
         skip_names = json.dumps(tool_names)
         out, _, _, _ = self.execute(
@@ -246,9 +227,7 @@ class Kernel:
         )
         marker = "__RLC_SNAPSHOT__"
         if marker not in out:
-            # The print at the cell's end never happened: the kernel stalled or
-            # the serialization was interrupted, so this is NOT a valid snapshot.
-            # Return incomplete so the host keeps the last good snapshot file.
+            # --- marker never printed: serialization stalled; report incomplete so the host keeps the last good file ---
             return {}, [], False
         try:
             o = json.loads(out.split(marker)[-1])
@@ -259,8 +238,7 @@ class Kernel:
     def restore_globals(self, vars_):
         if not vars_:
             return [], []
-        # Unpickle each value in a single kernel cell for atomicity, wrapping
-        # per-name so one failure reports itself and the rest still load.
+        # --- restore each variable in one atomic kernel call so one failure reports itself ---
         code2 = (
             "import pickle as _pk, base64 as _b64, json as _js\n"
             "__rl_r = {'restored': [], 'failed': []}\n"
@@ -328,11 +306,7 @@ def main():
                 _send({"type": "done", "cellId": cell_id, "status": "error", "error": _line_error(error)})
             else:
                 _send({"type": "done", "cellId": cell_id, "status": "ok", "result": result})
-        # Note: the guest's main loop is single-threaded, so it stays inside
-        # run_cell while a cell executes and cannot read an "abort" line until
-        # the cell finishes. Cancel recovery therefore happens HOST-side: on an
-        # aborted cell the engine is discarded and rebuilt so the next run
-        # never queues behind a still-busy kernel.
+        # --- a single-threaded guest can't read 'abort' mid-cell; the host discards+rebuilds ---
 
 
 if __name__ == "__main__":

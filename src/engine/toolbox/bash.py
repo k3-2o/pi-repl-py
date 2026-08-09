@@ -57,8 +57,7 @@ def bash(command, cwd=None, env=None, input=None, timeout=None):
         text=True,
         cwd=cwd,
         env=merged_env,
-        # New session => the shell+children form their own process group, which
-        # a timeout can kill outright instead of leaving grandchildren orphaned.
+        # --- new session => shell+children form one process group a timeout kills ---
         start_new_session=_os.name == "posix",
     ) as proc:
         try:
@@ -66,7 +65,7 @@ def bash(command, cwd=None, env=None, input=None, timeout=None):
         except _sp.TimeoutExpired:
             _kill_group(proc)
             try:
-                proc.communicate()  # drain so we don't leave a zombie to reap
+                proc.communicate()  # --- drain so no zombie is left ---
             except Exception:
                 pass
             raise

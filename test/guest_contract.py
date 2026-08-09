@@ -125,7 +125,7 @@ def guest():
         g.close()
 
 
-# ── persistence ────────────────────────────────────────────────────────────
+# --- persistence ---
 def test_variables_survive_across_cells(guest):
     d, _ = run_cell(guest, "x = 10", "c1")
     assert d["status"] == "ok"
@@ -141,7 +141,7 @@ def test_functions_defined_persist(guest):
     assert any("42" in m["chunk"] for m in streams)
 
 
-# ── error survival ─────────────────────────────────────────────────────────────
+# --- error survival ---
 def test_error_does_not_kill_namespace(guest):
     run_cell(guest, "x = 7", "c1")
     d, _ = run_cell(guest, "1 / 0", "c2")
@@ -155,7 +155,7 @@ def test_error_does_not_kill_namespace(guest):
     assert any("8" in m["chunk"] for m in s5)
 
 
-# ── output attribution ─────────────────────────────────────────────────────────
+# --- output attribution ---
 def test_only_printed_output_and_result_return(guest):
     d, streams = run_cell(guest, "z = 100", "c1")
     assert d["status"] == "ok"
@@ -165,7 +165,7 @@ def test_only_printed_output_and_result_return(guest):
     assert any("saw 100" in m["chunk"] for m in streams2)
 
 
-# ── snapshot / restore ─────────────────────────────────────────────────────────
+# --- snapshot / restore ---
 def test_snapshot_and_restore(guest):
     run_cell(guest, "data = {'count': 42}", "c1")
     guest.send({"type": "snapshot", "id": "s1"})
@@ -216,7 +216,7 @@ def test_high_output_is_capped_guest_side(guest):
     assert total < 2_000_000, total
 
 
-# ── list_names ─────────────────────────────────────────────────────────────────
+# --- list_names ---
 def test_list_names(guest):
     run_cell(guest, "alpha = 1; beta = 2", "c1")
     guest.send({"type": "list_names", "id": "l1"})
@@ -225,7 +225,7 @@ def test_list_names(guest):
     assert "beta" in res["names"]
 
 
-# ── toolbox: read / write / edit / bash + intrinsic help/ls ─────────────────
+# --- toolbox tests ---
 def test_bash_helper_runs_commands(guest):
     d, streams = run_cell(guest, "r = bash('echo toolbox-ok'); print(r.stdout.strip())", "c1")
     assert d["status"] == "ok"

@@ -12,8 +12,7 @@ import time
 
 import pytest
 
-# src/ is on sys.path via test/conftest.py, so engine.toolbox.bash imports as a
-# namespace package even though the toolbox dir has no __init__.py.
+# --- src/ is on sys.path via conftest.py, so engine.toolbox.bash imports as a namespace package ---
 from engine.toolbox.bash import bash
 
 
