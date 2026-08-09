@@ -71,15 +71,20 @@ At boot the guest and the host both read the toolbox directory (default
 
 - **guest** execs each `*.py` into the kernel namespace, making functions
   callable.
-- **host** reads the same files to build the `TOOLBOX` section of the system
-  prompt and the `execute` tool description.
+- **host** reads the same files to build the functions list on the `execute`
+  tool's `promptGuidelines` (and the tool `description`), so the model sees the
+  real signatures and one-line summaries.
 
 The loader reads each file's `def (...)`: signature (authoritative) and its
 `function_description = """..."""` (one-line summary, optional). Since both
-sides read the same directory, function appearing in the prompt also exists in
-the kernel. A file renamed with a `_` prefix is skipped by both, so a disabled
+sides read the same directory, a function in the prompt also exists in the
+kernel. A file renamed with a `_` prefix is skipped by both, so a disabled
 function is never advertised where it does not load. See
 `docs/how-to-functions.md`.
+
+The `promptGuidelines` are built once, when the `execute` tool is registered
+(module load). A toolbox change therefore needs a **session restart / `/reload`**
+to be reflected in the prompt — the kernel also loads the toolbox only at boot.
 
 `ls()` and `help(name)` are built into the kernel (not toolbox files), so a
 bare kernel still lets the model discover what is loaded.
@@ -108,7 +113,7 @@ before reuse rather than trusting state that is gone.
 
 ## Testing
 
-- **Host (bun):** `test/units.test.ts` (protocol, prompt, render, config) +
+- **Host (bun):** `test/units.test.ts` (protocol, render, config) +
   `test/preview-core.test.ts`.
 - **Evaluator (pytest):** `test/guest_contract.py` drives a real guest and
   asserts persistence, error-survival, output attribution, snapshots, ls/help.

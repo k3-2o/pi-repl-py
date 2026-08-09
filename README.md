@@ -48,9 +48,16 @@ clear notice. How the interpreter is resolved is in [docs/philosophy.md](docs/ph
 
 ## The toolbox
 
-A small set of Python functions is preloaded into every kernel and listed in the system prompt,
-so the model can call `read`, `write`, `edit`, and `bash` without reimplementing them, and can
-discover them with `ls()`/`help()`. Set `toolboxDir` to point at your own folder.
+A small set of Python functions is preloaded into every kernel and surfaced to the
+model through the `execute` tool's prompt guidance (their signatures + one-line
+summaries are listed there, and `ls()`/`help()` discover them at runtime), so the
+model can call `read`, `write`, `edit`, and `bash` without reimplementing them.
+Set `toolboxDir` to point at your own folder.
+
+The function list shown to the model is built when the `execute` tool is
+registered, so changing the toolbox (adding/removing a file, renaming one with a
+`_` prefix) needs a **session restart / `/reload`** for the prompt to reflect it —
+the kernel also only loads the toolbox at boot.
 
 - Adding a function (the file contract, docstrings, disabling): [docs/how-to-functions.md](docs/how-to-functions.md)
 
