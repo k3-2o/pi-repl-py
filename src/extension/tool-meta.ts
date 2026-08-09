@@ -22,11 +22,12 @@ export const EXECUTE_DESCRIPTION =
 	"There are no separate file or shell tools here: reading, writing, editing, and " +
 	"running commands are done by calling Python functions inside a cell. " +
 	"A cell returns the value of its final expression; anything else is printed. " +
-	"Functions you define become reusable tools just like the prebuilt ones: call " +
+"Functions you define become reusable tools just like the prebuilt ones: call " +
 	"them again instead of redefining, or combine existing functions into new " +
-	"composed tools (a new def overwrites the previous one). Before running a body " +
-	"you might need again — a fetch, a parse, a scan — define it as a function and " +
-	"call it, instead of repasting the same logic per request. " +
+	"composed tools (a new def overwrites the previous one). Build ONE " +
+	"parameterized function per shape (inputs become arguments) and reuse it by " +
+	"args each time — never rebuild or duplicate it; extend the existing def, don't " +
+	"fork a near-copy. " +
 	"The evaluator runs in a project-local venv, so a command that starts python/pip " +
 	"should target the same venv.";
 
@@ -46,16 +47,20 @@ export function buildExecutePromptGuidelines(toolboxDir?: string): string[] {
 		"You are not limited to a fixed set: the evaluator holds ordinary Python functions and you can define new ones that live for the session, or rework existing ones. The ones already loaded:",
 		...functions,
 		"ls() lists everything currently loaded; help(name) returns the exact signature and argument notes — use them instead of guessing.",
-		// Define, reuse, rebuild — functions are reusable tools.
-		"Reuse what you already defined: functions and variables persist for the whole session, so call them again with new arguments instead of rewriting them. These functions are safe to define and persist for the session, so a later ask is a one-line call. Redefine only to fix a bug or change behavior, or to rebuild a helper that a reset dropped — a new def overwrites the old one.",
-		"Before writing a multi-line cell, decide whether you will run that shape again (a fetch, a parse, a scan). If yes, define it as a function the first time, then call it; don't hand-copy the same body when the only input that changes is an argument.",
-		"# Good: define once, then each request is a one-liner\ndef get_news(feed, limit=10):\n    ...fetch + parse + print...\nget_news(today_feed)\nget_news(turkey_feed)   # same tool, new argument",
-		"Functions you create are first-class reusable tools, just like the preloaded ones. Make new functions as tools you will call again, combine several existing functions into one composite mega-tool, or modify an existing function to your exact spec. They compose:",
-		"def count_hits(dir, pattern):\n    files = bash(f'grep -rl {pattern} {dir}').stdout.splitlines()\n    return sum(read(p).count(pattern) for p in files)",
-		"Once defined, call your tools exactly like the preloaded ones — build composites so the next call builds on the previous result.",
-		// Token efficiency / search.
-		"Be token-efficient: context is finite, spend it only on what advances the answer. Filter precisely — scope reads to the lines you need and use bash('grep ...')/find instead of dumping whole files, so search does not bloat the context window.",
-		"Keep large values in variables rather than printing them; a cell shows nothing unless you return or print it, so emit only the output that matters. Reuse what you already hold instead of recomputing or re-reading it.",
+		// ── Define, reuse, rebuild: a function is a reusable tool you call by args ──
+		"A function you define is a reusable tool that lives for the whole session. Build ONE parameterized function per shape (every input you vary becomes an argument) and call it by args each time. Never write the same routine more than once, never fork a near-duplicate, and never rewrite a body you already defined — extend the existing `def` instead.",
+		"Decision rule before ANY multi-line cell: will I run this shape again with different inputs (a fetch, a file scan, a search, a report)? If yes or maybe, define the function NOW, with the varying inputs as arguments — so every later request is a one-line call, and it's answerable without repasting.",
+		"Good — one tool, many args you only vary:",
+		"def fetch_news(query, hl='en', gl='US', ceid='US:en', limit=15):\n    ...rss fetch + parse to a list of dicts...\n# later, each ask is just args:\nfetch_news('Turkey')\nfetch_news('Nigeria', hl='en-NG')\nfetch_news('oil', limit=6)",
+		"Bad — forking near-duplicates instead of parameterizing (fetch_news vs fetch_news_region). Consolidate into the one def, superseding the old; a new def with the same name overwrites.",
+		"Other reusable tool shapes build the same way:",
+		"def find_files(pred, root='.') -> list[str]:\n    return [os.path.join(d,f) for d,_,fs in os.walk(root) for f in fs if glob.fnmatch(f, pred)]\n# then: find_files('*.csv'); find_files('*.py', root='src')\ndef count_lines(paths): ...\ndef summarize_csv(...): ...\n# compose them: report = count_lines(find_files('*.csv'))",
+		"Functions compose and are first-class, just like the preloaded ones — make a mega-tool that calls your other tools, and modify an existing one to your exact spec instead of working around it.",
+		"Keep each tool small and its inputs/return obvious; ls() lists them, help(name) shows the signature and docstring.",
+		// ── Token efficiency: output is context forever ──
+		"Be strictly token-efficient: EVERYTHING a cell prints or returns is carried in the session context for the rest of the turn, and later calls keep paying. A gigantic printed dump (a file, a directory tree, 100 search rows) bloat-context every request that follows.",
+		"Reading & search are the highest-risk: scope reads to the slice you actually need (read(path, offset, limit)), and grep/search by pattern so you emit only the matching lines — then print counts/tags, not whole blobs, and hold the full object in a variable you index into later.",
+		"Keep large values in variables rather than printing them; a cell shows nothing unless you return or print it, so emit only what moves the answer forward. Reuse what you already hold instead of recomputing or re-reading.",
 		// Safety.
 		"If the output begins with <rlm_engine_reset>, the evaluator was rebuilt from a snapshot: plain values are restored, but the temporary functions you defined are GONE. Recreate any helpers you need before using them, and re-verify a variable before trusting it.",
 		"Do not install packages into the evaluator; the standard library is always available. Run out-of-tree projects through their own environment.",
