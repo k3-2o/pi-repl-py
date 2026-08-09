@@ -130,6 +130,8 @@ interface ActiveExecution {
 	settled: boolean;
 	/** Set on cancellation: a cancelled cell must stop contributing output at once. */
 	abortRequested: boolean;
+	/** Cumulative chars forwarded to onStream; capped so the live view can't grow unbounded. */
+	streamedChars: number;
 	/**
 	 * Aborts host-side work done on this cell's behalf.
 	 */
@@ -284,7 +286,16 @@ export class EngineManager {
 			}
 		});
 
-		await ready;
+		// On a boot timeout the child must be torn down and the state reset to
+		// idle, or a retried start() orphans the previous child and its fd3 pipe.
+		await ready.catch((error) => {
+			if (this.child === child) this.child = undefined;
+			this.protocolReader?.close();
+			this.protocolReader = undefined;
+			child.kill("SIGKILL");
+			if (this.state === "starting") this.state = "idle";
+			throw error;
+		});
 		// --- win the shutdown race: don't resurrect a killed engine as running ---
 		if ((this.state as string) === "shutdown") throw new Error("Engine has been shut down");
 		this.state = "running";
@@ -443,7 +454,12 @@ export class EngineManager {
 		} else {
 			active[truncatedKey] = true;
 		}
-		active.opts.onStream?.(text, name);
+		// --- cap the live stream feed too, so index.ts's accumulated partial
+		//     content cannot grow past the same budget the final output is capped at ---
+		const room = active.maxChars - active.streamedChars;
+		const forward = Math.min(text.length, Math.max(0, room));
+		if (forward > 0) active.opts.onStream?.(text.slice(0, forward), name);
+		active.streamedChars += forward;
 	}
 
 	// ── execute ────────────────────────────────────────────────────────────────
@@ -510,6 +526,7 @@ export class EngineManager {
 				status: "ok",
 				settled: false,
 				abortRequested: false,
+				streamedChars: 0,
 				hostAbort: new AbortController(),
 				resolve,
 				reject,
