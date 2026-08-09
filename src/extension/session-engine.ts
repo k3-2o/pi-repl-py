@@ -96,6 +96,8 @@ export class EngineLifecycle<E extends RevivableEngine> {
 	private pendingNotice?: string;
 	/** Teardown in progress; a rebuild must not overlap the final snapshot flush. */
 	private teardown?: Promise<void>;
+	/** First-build in progress: concurrent acquire() must not spawn two engines. */
+	private acquiring?: Promise<{ engine: E; restore: RestoreResult | null; created: boolean }>;
 
 	constructor(private readonly deps: EngineLifecycleDeps<E>) {}
 
@@ -105,21 +107,30 @@ export class EngineLifecycle<E extends RevivableEngine> {
 	 */
 	async acquire(origin: AcquireOrigin): Promise<{ engine: E; restore: RestoreResult | null; created: boolean }> {
 		if (this.engine) {
-			// --- still resolving: a concurrent caller must not race ahead ---
 			return { engine: this.engine, restore: await this.revival!, created: false };
 		}
-		// --- a teardown flushing its final snapshot must finish before the rebuild reads it ---
-		while (this.teardown) await this.teardown;
-		if (this.engine) {
-			const held: E = this.engine;
-			return { engine: held, restore: await this.revival!, created: false };
+		// --- two concurrent acquires on an empty engine must share one build ---
+		if (this.acquiring) return this.acquiring;
+		const build = (async () => {
+			// --- a teardown flushing its final snapshot must finish before the rebuild reads it ---
+			while (this.teardown) await this.teardown;
+			if (this.engine) {
+				const held: E = this.engine;
+				return { engine: held, restore: await this.revival!, created: false };
+			}
+			const engine = this.deps.create();
+			this.engine = engine;
+			this.revival = engine.restoreState().catch(() => null);
+			const restore = await this.revival;
+			if (origin === "cell") this.pendingNotice = formatEngineResetNotice(restore);
+			return { engine, restore, created: true };
+		})();
+		this.acquiring = build;
+		try {
+			return await build;
+		} finally {
+			if (this.acquiring === build) this.acquiring = undefined;
 		}
-		const engine = this.deps.create();
-		this.engine = engine;
-		this.revival = engine.restoreState().catch(() => null);
-		const restore = await this.revival;
-		if (origin === "cell") this.pendingNotice = formatEngineResetNotice(restore);
-		return { engine, restore, created: true };
 	}
 
 	/** Returns the pending reset notice exactly once, then clears it. */
