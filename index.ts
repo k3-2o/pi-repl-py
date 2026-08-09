@@ -1,6 +1,7 @@
 // --- pi-repl: one execute tool over Python; everything else runs as functions inside it ---
 
 import { basename, join } from "node:path";
+import { homedir } from "node:os";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 import { EngineBusyError, EngineManager } from "./src/engine/index.js";
@@ -62,7 +63,9 @@ export default function (pi: ExtensionAPI) {
 		create() {
 			const { cwd, sessionFile } = location;
 			const sessionKey = sessionFile ? basename(sessionFile).replace(/\.jsonl$/, "") : undefined;
-			const stateDir = join(cwd, ".pi-repl", sessionKey ?? "ephemeral");
+			// Kernel namespace state lives under ~/.pi/agent/pi-repl, keyed by
+			// session, so it never clutters the project's working directory.
+			const stateDir = join(homedir(), ".pi", "agent", "pi-repl", sessionKey ?? "ephemeral");
 			return new EngineManager({
 				cwd,
 				pythonPath: CFG.pythonPath,
