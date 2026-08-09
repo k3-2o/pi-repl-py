@@ -22,14 +22,16 @@ export interface ReplConfig {
 	pythonPath?: string;
 	/** Directory of toolbox function files, exec'd into every kernel. */
 	toolboxDir?: string;
-	/** Per-cell execution timeout, ms. Default 60_000. */
+	/** Stall watchdog, ms: 0 = no cap, nonzero = no-output-for-N-ms trips it. */
 	timeoutMs: number;
 	/** Debounce for the auto-snapshot after an ok cell, ms. Default 1500. */
 	snapshotDebounceMs: number;
 }
 
 const DEFAULT_CONFIG: ReplConfig = {
-	timeoutMs: 60_000,
+	// 0 = no stall provecap: cells run until they finish. A nonzero value is a
+	// SILENCE watchdog (no output for N ms), not a wall-clock deadline.
+	timeoutMs: 0,
 	snapshotDebounceMs: 1500,
 };
 

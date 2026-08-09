@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 
 # ── protocol envelope ────────────────────────────────────────────────────────
 ENVELOPE_KEY = "__rlm"
@@ -22,12 +23,15 @@ PROTOCOL_FD = 3
 NONCE = os.environ.get(NONCE_ENV, "")
 os.environ.pop(NONCE_ENV, None)
 
-# Per-cell timeout, from the host engine config (default 60s).
-CELL_TIMEOUT_S = float(os.environ.get("PI_REPL_TIMEOUT_MS", "60000")) / 1000.0
+# Per-cell timeout comes from the host config (default "0" = no wall-clock cap).
+# When nonzero it is a SILENCE watchdog: it trips only if the cell emits no
+# output for that many seconds, never after N elapsed. A signal that is slow but
+# producing output (or a deliberately silent `find | sort`) can run to completion.
+CELL_TIMEOUT_S = float(os.environ.get("PI_REPL_TIMEOUT_MS", "0") or "0") / 1000.0
 
 # Snapshot/restore are internal bookkeeping, not user work: a huge namespace can
 # legitimately take longer than a cell, so they get a separate (fixed) window
-# instead of being throttled by the per-cell timeout and silently losing state.
+# instead of being throttled by a silence timer and silently losing state.
 SNAPSHOT_TIMEOUT_S = 30.0
 
 # fd 3 protocol writer; dup'd so we don't close the caller's fd 3 on exit.
@@ -135,21 +139,38 @@ class Kernel:
     def _drain_execution(self, code, timeout):
         """Run `code`; return (stdout, stderr, error_text, result, timed_out).
 
-        `timed_out` is set when no completion arrived within `timeout` seconds,
-        so the caller can distinguish a wedged cell from an ordinary error
-        instead of silently reporting it as success.
+        `timeout <= 0` means "no cap": a cell runs until it reports idle.
+        `timeout > 0` is a SILENCE watchdog — it trips only once the cell has
+        produced no message for `timeout` seconds. A silent-but-running command
+        (e.g. `find ... | sort`) is allowed to complete; a stalled one (dead
+        kernel, or nothing for the silence window) reports `timed_out=True` so
+        the caller can surface a real hang instead of faking success.
         """
         msg_id = self.kc.execute(code)
         out, err, error, result = [], [], None, None
         timed_out = False
+        # Silence clock: only starts once the cell has actually begun (first
+        # iopub message for it). This gives a slow-spawned kernel a grace period
+        # so the first-scheduled cell isn't falsely tripped.
+        last_activity: float | None = None
         while True:
-            try:
-                m = self.kc.get_iopub_msg(timeout=timeout)
-            except Exception:
+            if not self.km.is_alive():
                 timed_out = True
                 break
+            if last_activity is not None and timeout and (time.monotonic() - last_activity) >= timeout:
+                timed_out = True
+                break
+            wait = (timeout - (time.monotonic() - last_activity)) if (last_activity is not None and timeout) else 0.25
+            try:
+                m = self.kc.get_iopub_msg(timeout=max(0.01, min(0.25, wait)))
+            except Exception:
+                continue
             if m.get("parent_header", {}).get("msg_id") != msg_id:
                 continue
+            if last_activity is None:
+                last_activity = time.monotonic()
+            else:
+                last_activity = time.monotonic()
             mt = m.get("msg_type")
             c = m.get("content", {})
             if mt == "stream":
@@ -160,6 +181,14 @@ class Kernel:
                 error = "\n".join(c.get("traceback", ["(no traceback)"]))
             elif mt == "status" and c.get("execution_state") == "idle":
                 break
+        if timed_out:
+            # Best-effort: cancel the stuck code so the NEXT cell does not queue
+            # behind it. Interrupt delivers SIGINT to the kernel; for a real hang
+            # the parent host kills the process and we report the wedge above.
+            try:
+                self.kc.interrupt_kernel()
+            except Exception:
+                pass
         return "".join(out), "".join(err), error, result, timed_out
 
     def execute(self, code):

@@ -291,6 +291,26 @@ def test_cell_timeout_is_reported_as_error(guest):
         g.close()
 
 
+def test_silence_watchdog_allows_active_work(guest):
+    # The timeout is a SILENCE watchdog, not a wall-clock cap: a cell that keeps
+    # producing output past the threshold must still complete. Use a good margin
+    # between the beat cadence and the watchdog so scheduling jitter can't trip it.
+    g = GuestProc(timeout_ms=800)
+    try:
+        for m in g.frames(timeout=20):
+            if m.get("type") == "ready":
+                break
+        d, streams = run_cell(
+            g,
+            "import time\nfor _ in range(20):\n    print('beat')\n    time.sleep(0.05)\nprint('done')",
+            "c1",
+        )
+        assert d["status"] == "ok", d
+        assert any("done" in m["chunk"] for m in streams)
+    finally:
+        g.close()
+
+
 def test_custom_tool_file_loads_from_toolbox_dir():
     # A user folder in PI_TOOLBOX_DIR is loaded into the kernel; a one-file custom
     # function appears alongside. Setting PI_TOOLBOX_DIR replaces the shipped

@@ -92,7 +92,7 @@ export interface EngineOptions {
 	pythonPath?: string;
 	/** Directory of toolbox functions to exec into the kernel (PI_TOOLBOX_DIR). */
 	toolboxDir?: string;
-	/** Per-cell response timeout, ms. Default 60_000. */
+	/** Per-cell response timeout, ms. 0 = no cap; nonzero = silence watchdog. */
 	timeoutMs?: number;
 	env?: Record<string, string>;
 	/** Persist/revive the namespace across engine restarts. */
@@ -189,7 +189,7 @@ export class EngineManager {
 		this.options = options;
 		this.pythonPath = options.pythonPath ?? resolvePythonPath(options.cwd);
 		this.toolboxDir = options.toolboxDir;
-		this.timeoutMs = options.timeoutMs ?? 60_000;
+		this.timeoutMs = options.timeoutMs ?? 0;
 	}
 
 	get isRunning(): boolean {

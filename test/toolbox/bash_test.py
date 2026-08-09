@@ -5,6 +5,7 @@ The guest contract still has a basic integration smoke test; this file covers
 the new optional parameters (env, input, cwd, timeout).
 """
 
+import os
 import subprocess
 import tempfile
 import time
@@ -51,3 +52,13 @@ def test_bash_honors_timeout():
         bash("sleep 5", timeout=0.1)
     elapsed = time.time() - start
     assert elapsed < 1.0
+
+
+def test_bash_timeout_kills_the_whole_process_group():
+    # A timed-out bash must reap the shell's children too, or a background
+    # `find`/`sort`/sleep would keep running long after the call returned.
+    marker = os.path.join(tempfile.mkdtemp(), "late.txt")
+    with pytest.raises(subprocess.TimeoutExpired):
+        bash(f"(sleep 0.8; touch {marker})& echo launched; sleep 5", timeout=0.2)
+    time.sleep(1.0)
+    assert not os.path.exists(marker), "timeout left a grandchild process running"
