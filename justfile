@@ -1,6 +1,5 @@
 # pi-repl — TypeScript host + Python guest.
-# Host tooling (bun test, bunx biome) is driven by Bun, matching the vendored
-# pi-rlm base. Guest tooling is ruff + pytest on the venv Python.
+# Host tooling (bun test, bunx biome) is driven by Bun; guest tooling is ruff + pytest.
 
 PY := ".venv/bin/python"
 BIOME := "bunx biome"
