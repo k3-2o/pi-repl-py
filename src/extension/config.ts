@@ -1,16 +1,16 @@
 /**
  * config.ts — reads the user's pi-repl config.
  *
- * Where the venv python path, the toolbox directory, and timeouts are
+ * Where the venv python path, the helpers directory, and timeouts are
  * configured. First-found-wins, never throws on a missing/malformed file.
  *
- *   $PI_REPL_CONFIG            explicit env override
+ *   $PI_REPL_CONFIG                 explicit env override
  *   ~/.pi/agent/pi-repl/config.json   user-global
  *
- * The loadable function set is the toolbox directory (see engine/toolbox/);
- * there is no separate helpers list. The extension ships with the four default
- * functions (read/write/edit/bash) and a user points toolboxDir at their own
- * folder to replace them.
+ * The loadable set lives in ONE location: the helpers dir (default
+ * ~/.pi/agent/pi-repl/helpers). The shipped shell.py helper template is
+ * installed there on first use; the user edits the dir freely. There is no
+ * shipped toolbox in the extension.
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -20,8 +20,8 @@ import { join } from "node:path";
 export interface ReplConfig {
 	/** Python interpreter used to spawn the guest. Defaults to the venv / PATH. */
 	pythonPath?: string;
-	/** Directory of toolbox function files, exec'd into every kernel. */
-	toolboxDir?: string;
+	/** Directory of helper files, exec'd into every kernel. Default: ~/.pi/agent/pi-repl/helpers. */
+	helpersDir?: string;
 	/** Stall watchdog, ms: 0 = no cap, nonzero = no-output-for-N-ms trips it. */
 	timeoutMs: number;
 	/** Debounce for the auto-snapshot after an ok cell, ms. Default 1500. */
@@ -54,7 +54,7 @@ export function loadConfig(): ReplConfig {
 			const r = raw as Record<string, unknown>;
 			return {
 				pythonPath: typeof r.pythonPath === "string" && r.pythonPath.length > 0 ? r.pythonPath : undefined,
-				toolboxDir: typeof r.toolboxDir === "string" && r.toolboxDir.length > 0 ? r.toolboxDir : undefined,
+				helpersDir: typeof r.helpersDir === "string" && r.helpersDir.length > 0 ? r.helpersDir : undefined,
 				timeoutMs: num(r.timeoutMs, DEFAULT_CONFIG.timeoutMs),
 				snapshotDebounceMs: num(r.snapshotDebounceMs, DEFAULT_CONFIG.snapshotDebounceMs),
 			};

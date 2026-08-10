@@ -84,8 +84,8 @@ export interface EngineOptions {
 	cwd?: string;
 	/** Python interpreter to spawn the guest with. Defaults to the repo venv. */
 	pythonPath?: string;
-	/** Directory of toolbox functions to exec into the kernel (PI_TOOLBOX_DIR). */
-	toolboxDir?: string;
+	/** Directory of helper files to exec into the kernel (PI_HELPERS_DIR). */
+	helpersDir?: string;
 	/** Per-cell response timeout, ms. 0 = no cap; nonzero = silence watchdog. */
 	timeoutMs?: number;
 	env?: Record<string, string>;
@@ -161,7 +161,7 @@ function truncateWithMarker(text: string, maxChars: number, wasTruncated: boolea
 export class EngineManager {
 	private readonly options: EngineOptions;
 	private readonly pythonPath: string;
-	private readonly toolboxDir?: string;
+	private readonly helpersDir?: string;
 	private readonly timeoutMs: number;
 	private child?: ChildProcess;
 	private state: "idle" | "starting" | "running" | "shutdown" = "idle";
@@ -181,7 +181,7 @@ export class EngineManager {
 	constructor(options: EngineOptions = {}) {
 		this.options = options;
 		this.pythonPath = options.pythonPath ?? resolvePythonPath(options.cwd);
-		this.toolboxDir = options.toolboxDir;
+		this.helpersDir = options.helpersDir;
 		this.timeoutMs = options.timeoutMs ?? 0;
 	}
 
@@ -217,7 +217,7 @@ export class EngineManager {
 				...(this.options.env ?? {}),
 				[NONCE_ENV]: this.nonce,
 				PI_REPL_TIMEOUT_MS: String(this.timeoutMs),
-				PI_TOOLBOX_DIR: this.toolboxDir ?? "",
+				PI_HELPERS_DIR: this.helpersDir ?? "",
 			},
 			// --- fd 3 is the protocol pipe; stdout/stderr stay user output ---
 			stdio: ["pipe", "pipe", "pipe", "pipe"],

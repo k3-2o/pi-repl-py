@@ -58,10 +58,11 @@ def _decode(line):
     return obj
 
 
-# --- toolbox: one function per *.py, exec'd into every kernel (PI_TOOLBOX_DIR) ---
+# --- helpers: one .py per *.py, exec'd into every kernel (PI_HELPERS_DIR) ---
 
-def _toolbox_files(directory):
-    """Return {function_name: source} for each *.py in `directory`."""
+
+def _helper_files(directory):
+    """Return {name: source} for each .py in `directory` (skip underscore-prefixed files)."""
     if not directory:
         return {}
     d = os.path.expanduser(directory)
@@ -81,14 +82,15 @@ def _toolbox_files(directory):
             continue
     return names
 
-DEFAULT_TOOLBOX_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "toolbox")
-TOOLBOX_DIR = os.environ.get("PI_TOOLBOX_DIR", "").strip()
-# --- Merge: built-ins are supreme; a config toolboxDir adds others and overrides on name ---
-_TOOLBOX_SRC = _toolbox_files(DEFAULT_TOOLBOX_DIR)
-if TOOLBOX_DIR and os.path.expanduser(TOOLBOX_DIR) != DEFAULT_TOOLBOX_DIR:
-    _TOOLBOX_SRC.update(_toolbox_files(TOOLBOX_DIR))
 
-# --- help/ls are part of the evaluator, not the toolbox ---
+# The helpers dir is the SINGLE, user-owned config location (src/engine/helpers/
+# holds the SHIPPED shell.py template the installer copies here; there is no
+# built-in merge — what's in this one dir is all the kernel ever loads).
+DEFAULT_HELPERS_DIR = os.path.expanduser("~/.pi/agent/pi-repl/helpers")
+HELPERS_DIR = os.environ.get("PI_HELPERS_DIR", "").strip() or DEFAULT_HELPERS_DIR
+_HELPER_SRC = _helper_files(HELPERS_DIR)
+
+# --- help/ls are part of the evaluator, not the helpers dir ---
 INTRINSIC = """
 # --- ls() filters IPython-injected names out of the tool list ---
 _RPL_LS_NOISE = {'exit', 'quit', 'get_ipython', 'open', 'display'}
@@ -126,9 +128,9 @@ class Kernel:
         self._preload()
 
     def _preload(self):
-        """Exec every toolbox function + the intrinsic help/ls into the kernel ns."""
+        """Exec every helper + the intrinsic help/ls into the kernel ns."""
         code = INTRINSIC + "\n"
-        for src in _TOOLBOX_SRC.values():
+        for src in _HELPER_SRC.values():
             code += src + "\n"
         if code.strip():
             self.kc.execute(code)
@@ -138,7 +140,10 @@ class Kernel:
         try:
             while True:
                 m = self.kc.get_iopub_msg(timeout=1)
-                if m.get("msg_type") == "status" and m.get("content", {}).get("execution_state") == "idle":
+                if (
+                    m.get("msg_type") == "status"
+                    and m.get("content", {}).get("execution_state") == "idle"
+                ):
                     break
         except Exception:
             pass
@@ -163,10 +168,18 @@ class Kernel:
             if not self.km.is_alive():
                 timed_out = True
                 break
-            if last_activity is not None and timeout and (time.monotonic() - last_activity) >= timeout:
+            if (
+                last_activity is not None
+                and timeout
+                and (time.monotonic() - last_activity) >= timeout
+            ):
                 timed_out = True
                 break
-            wait = (timeout - (time.monotonic() - last_activity)) if (last_activity is not None and timeout) else 0.25
+            wait = (
+                (timeout - (time.monotonic() - last_activity))
+                if (last_activity is not None and timeout)
+                else 0.25
+            )
             try:
                 m = self.kc.get_iopub_msg(timeout=max(0.01, min(0.25, wait)))
             except Exception:
@@ -216,12 +229,14 @@ class Kernel:
         return self._drain_execution(code, CELL_TIMEOUT_S)
 
     def snapshot_globals(self):
-        # --- snapshot only user state (skip toolbox/intrinsic functions and _ names) ---
-        tool_names = sorted(set(_TOOLBOX_SRC) | {"ls", "help", "function_description"})
+        # --- snapshot only user state (skip helper/intrinsic functions and _ names) ---
+        tool_names = sorted(set(_HELPER_SRC) | {"ls", "help", "helper_description"})
         skip_names = json.dumps(tool_names)
         out, _, _, _ = self.execute(
             "import pickle as _pk, base64 as _b64, json as _js\n"
-            "__rlm_skip = set(" + skip_names + ") | {'In','Out','get_ipython','exit','quit','open'}\n"
+            "__rlm_skip = set("
+            + skip_names
+            + ") | {'In','Out','get_ipython','exit','quit','open'}\n"
             "__rlm_v = {}\n__rlm_f = []\n"
             "for _k, _v in list(globals().items()):\n"
             "    # skip IPython bookkeeping and names with a leading underscore\n"
@@ -289,31 +304,83 @@ def main():
             _send({"type": "pong", "id": msg["id"]})
         elif t == "snapshot":
             vars_, failed, complete = kernel.snapshot_globals()
-            _send({"type": "snapshot_result", "id": msg["id"], "vars": vars_, "failed": failed, "complete": complete})
+            _send(
+                {
+                    "type": "snapshot_result",
+                    "id": msg["id"],
+                    "vars": vars_,
+                    "failed": failed,
+                    "complete": complete,
+                }
+            )
         elif t == "restore":
             restored, failed = kernel.restore_globals(msg.get("vars", {}))
-            _send({"type": "restore_result", "id": msg["id"], "restored": restored, "failed": failed})
+            _send(
+                {
+                    "type": "restore_result",
+                    "id": msg["id"],
+                    "restored": restored,
+                    "failed": failed,
+                }
+            )
         elif t == "list_names":
             names = list(kernel.snapshot_globals()[0].keys())
             _send({"type": "names_result", "id": msg["id"], "names": names})
         elif t == "run":
             cell_id = msg.get("cellId")
-            stdout, stderr, error, result, timed_out = kernel.run_cell(msg.get("code", ""))
+            stdout, stderr, error, result, timed_out = kernel.run_cell(
+                msg.get("code", "")
+            )
             if stdout:
-                _send({"type": "stream", "cellId": cell_id, "name": "stdout", "chunk": stdout})
+                _send(
+                    {
+                        "type": "stream",
+                        "cellId": cell_id,
+                        "name": "stdout",
+                        "chunk": stdout,
+                    }
+                )
             if stderr:
-                _send({"type": "stream", "cellId": cell_id, "name": "stderr", "chunk": stderr})
+                _send(
+                    {
+                        "type": "stream",
+                        "cellId": cell_id,
+                        "name": "stderr",
+                        "chunk": stderr,
+                    }
+                )
             if timed_out:
                 tmsg = {
                     "name": "Timeout",
                     "message": f"cell did not finish within {CELL_TIMEOUT_S:g}s and may still be running",
                     "stack": ["[cell timed out]"],
                 }
-                _send({"type": "done", "cellId": cell_id, "status": "error", "error": tmsg})
+                _send(
+                    {
+                        "type": "done",
+                        "cellId": cell_id,
+                        "status": "error",
+                        "error": tmsg,
+                    }
+                )
             elif error:
-                _send({"type": "done", "cellId": cell_id, "status": "error", "error": _line_error(error)})
+                _send(
+                    {
+                        "type": "done",
+                        "cellId": cell_id,
+                        "status": "error",
+                        "error": _line_error(error),
+                    }
+                )
             else:
-                _send({"type": "done", "cellId": cell_id, "status": "ok", "result": result})
+                _send(
+                    {
+                        "type": "done",
+                        "cellId": cell_id,
+                        "status": "ok",
+                        "result": result,
+                    }
+                )
         # --- a single-threaded guest can't read 'abort' mid-cell; the host discards+rebuilds ---
 
 
@@ -321,5 +388,12 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        _send({"type": "done", "cellId": "", "status": "error", "error": _line_error(str(e))})
+        _send(
+            {
+                "type": "done",
+                "cellId": "",
+                "status": "error",
+                "error": _line_error(str(e)),
+            }
+        )
         sys.exit(1)

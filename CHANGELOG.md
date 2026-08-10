@@ -2,6 +2,31 @@
 
 All notable changes to pi-repl, grouped by day and by type.
 
+## 2026-08-10 — Helpers, not files
+
+### Changed
+
+- **One helpers directory.** Removed the shipped `src/engine/toolbox` entirely. The single
+  load location is now the user `helpers` dir (default `~/.pi/agent/pi-repl/helpers`),
+  seeded on install with the one shipped helper `shell.py`; what lives there is everything
+  the kernel loads. Config key `toolboxDir` → `helpersDir`; env `PI_TOOLBOX_DIR` →
+  `PI_HELPERS_DIR`.
+- **`function_description` → `helper_description`.** The stale naming is gone everywhere
+  (loader regex, guest, docs, README).
+- **Pruned the toolkit.** Dropped shipped `read`/`write` (Python file IO is first-class;
+  redundant) and `edit`/`(bash)`; the one shipped helper is `shell`, a **context-manager
+  building block** (`with shell() as run:` then `run(cmd)`); it owns only the fragile
+  subprocess teardown (fresh process group, group-kill on timeout) and lets the model write
+  the command, the parsing, and the decisions — non-lazy.
+- **Prompt reframed to BROAD terms.** The tool description/snippet speak of "low-power
+  helpers / building blocks" so more helper shapes can be added later without rewriting
+  the contract; concrete mechanics live in the guidelines.
+- **Earn-your-own-tools.** The guidelines teach the model to wrap a recurring helper shape
+  into its own function/helper and reuse it (its defs are its library); long-running work
+  drives a deliberate, generous timeout.
+- Updated the docs (`how-to-functions.md`, `ARCHITECTURE.md`, `README.md`, `philosophy.md`)
+  and tests for the helpers-only model.
+
 ## 2026-08-09 — Description is the truth
 
 ### Changed / docs

@@ -25,9 +25,9 @@ In a persistent kernel, that work happens once and stays put:
 
 - a variable assigned in one cell is there in the next, and the next turn;
 - a function defined once is reusable for the whole session;
-- `bash()` returns a real `subprocess.CompletedProcess`, not a transcript
-  snippet, so the agent branches on `.returncode` and slices `.stdout` with
-  normal code.
+- the shell helper returns a structured result (`returncode`/`.stdout`/`.stderr`)
+  the agent branches on with normal code, while owning the fragile subprocess
+  teardown so a hung command can't orphan children.
 
 The savings compound harder for small models. Holding a whole file in context
 to avoid re-reading it is expensive precisely when context is scarce; the
@@ -63,13 +63,12 @@ where it would vanish). At runtime the host resolves the interpreter in a
 short deterministic order (repo venv, cwd venv, the install venv, then
 `$PYTHON`/`python3`). The system interpreter is the fallback, never the
 assumption, because the whole tool quietly breaks if it silently runs in the
-wrong environment. This is a fact the toolbox functions' test in `help()`
-exist to keep visible.
+wrong environment. This is a fact the helpers keep visible through `help()`.
 
 ## Trust, not a sandbox
 
 This is deliberately **not** a sandbox. The kernel runs with your user's
-permissions, can read and write anywhere you can, and the toolbox is trusted
+permissions, can read and write anywhere you can, and the helpers are trusted
 as written. If you need to guard against an untrusted model, this is the wrong
 tool: reach for a real sandbox the way you would for any untrusted user code.
 The philosophy prefers a sharp, honest tool over a pretend-safe one.
@@ -77,7 +76,7 @@ The philosophy prefers a sharp, honest tool over a pretend-safe one.
 ## What it isn't
 
 - A subagent framework. There is no `rlm.run`. To delegate, the model spawns
-  a process with `bash()`.
+  a process with the shell helper.
 - A drop-in pi-tool parcel. It exposes one `execute` tool; everything else is
   inside that workspace.
 - A replacement for your own editing/browsing tools required. It is there

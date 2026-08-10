@@ -16,13 +16,21 @@
  */
 
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, copyFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const VENV_DIR = join(homedir(), ".pi", "agent", "pi-repl", "venv");
 const PY = join(VENV_DIR, "bin", "python3");
 const DEPS = ["ipykernel", "jupyter_client"];
+
+// The helpers dir is the single user-owned config location. On install we copy
+// the shipped shell.py helper there so it works out of the box, and never
+// clobber a file the user has already edited.
+const HELPERS_DIR = join(homedir(), ".pi", "agent", "pi-repl", "helpers");
+const HERE = dirname(fileURLToPath(import.meta.url));
+const SHIPPED_SHELL = join(HERE, "..", "src", "engine", "helpers", "shell.py");
 
 function log(msg) {
   process.stdout.write(`[pi-repl] ${msg}\n`);
@@ -41,7 +49,23 @@ function findSystemPython() {
   return null;
 }
 
+function installShellHelper() {
+  try {
+    mkdirSync(HELPERS_DIR, { recursive: true });
+    const dest = join(HELPERS_DIR, "shell.py");
+    if (!existsSync(dest) && existsSync(SHIPPED_SHELL)) {
+      copyFileSync(SHIPPED_SHELL, dest);
+      log(`seeded helpers dir with the shipped shell helper (${dest})`);
+    }
+  } catch (error) {
+    warn(`could not seed the helpers dir (${error && error.message ? error.message : error}). `);
+    warn("The shell helper will just not be preloaded until you add it; nothing else is affected.");
+  }
+}
+
 function main() {
+  // Helpers dir is user-owned config; ensure it exists regardless of venv status.
+  installShellHelper();
   // Already built from a previous install/run.
   if (existsSync(PY)) {
     log(`venv already present at ${VENV_DIR}`);

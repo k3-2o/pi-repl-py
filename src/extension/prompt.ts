@@ -1,67 +1,71 @@
-// --- prompt: the execute tool's model-facing contract (pure, no pi/toolbox dependency) ---
-// --- mirrors pi-robust-edit's schema/domain split: content lives here; the thin adapter in tool-meta wires it in ---
+// --- prompt: the execute tool's model-facing contract (pure, no pi/helper dep) ---
+// The description + snippet use a BROAD term ("helpers", "low-level blocks")
+// rather than naming any Python type (no "context manager"/no "class"), so we can
+// add more helper shapes later without rewriting the contract. The precise
+// mechanics of each helper live in the guidelines, not here.
 
 export const executeToolDescription =
 	"Execute Python in a persistent REPL — the session's working memory, notebook-style. Variables, imports, " +
-	"defs, and data survive across cells. Standard notebook conveniences work: `!cmd` runs shell, " +
-	"`%timeit`/`%%bash` and friends are live. Preloaded helpers for files, shell, and search are in every " +
-	"cell — not separate tools; `ls()` lists them, `help(name)` shows the real signature. A cell returns its " +
-	"final expression; anything else prints. Runs in the project-local venv, so a command that starts " +
-	"python or pip must target that venv.";
+	"and defs survive across cells; `!cmd` runs shell and the usual magics work. A few LOW-LEVEL helpers are " +
+	"preloaded for the awkward bits (shell, web) — building blocks that own only the hard part, not finished " +
+	"tools; `ls()` lists them, `help(name)` shows what one's for. Wrap them into your OWN helpers when a " +
+	"pattern recurs. File IO and scripting are ordinary Python. A cell returns its final expression; anything " +
+	"else prints. Runs in the project-local venv, so a command that starts python or pip must target that venv.";
 
 export const executePromptSnippet =
-	"Execute Python in a persistent REPL (notebook): state survives across cells, `!` runs shell, " +
-	"magics work, and preloaded helpers are in every cell — `ls()` lists them, `help(name)` shows the " +
-	"real signature";
+	"Execute Python in a persistent REPL (notebook): state survives across cells, `!` runs shell, magics " +
+	"work, and a few low-level helpers are preloaded (`ls()` / `help(name)`). Wrap them into your own helpers " +
+	"when a pattern recurs; file IO and scripting are ordinary Python";
 
-// --- the function doctrine riding the execute tool; sections keep every rule findable and rankable as hard or soft ---
+// --- the helper doctrine riding the execute tool ---
 export function buildPromptGuidelines(preloaded: string[]): string[] {
 	return [
 		"## What's in every cell",
 		...preloaded,
-		"Not sure what's available? Call ls() first; help(name) shows a signature and notes.",
+		"Not sure what's available? Call ls() first; help(name) tells you what one is.",
 		"",
 		"## How to use them",
-		"These are your file and shell tools — call them. Don't reimplement read/write/edit/bash in Python, " +
-			"and don't fork a near-copy under a new name; a new def overwrites an old one by name, so extend " +
-			"the existing function instead.",
-		"This is a persistent workspace, not a script — your defs ARE your working memory. When a shape " +
-			"recurs (the same fetch, filter, or transform with different inputs), define it once and call it " +
-			"by arguments from then on. Reaching for an existing def beats rewriting its logic; rewriting is " +
-			"the failure mode. ls() lists the toolbox plus every function you've defined — that is your library.",
-		"This is a real IPython kernel: `!cmd` runs a shell command (fire-and-forget, output prints), `%%bash` " +
-			"is the block form, and `%timeit`/other magics work. Use `bash(cmd)` when you need the output back " +
-			"in a Python variable — it returns the CompletedProcess with `.stdout`/`.stderr`/`.returncode`.",
-		"Define a function when the shape recurs or the logic is worth naming; don't wrap a single one-off " +
-			"call in a def — just run the cell.",
-		"Do the job, then answer with the result. Don't tell the user you 'defined a function' or 'built a " +
-			"tool'; that's internal machinery.",
+		"These are LOW-LEVEL helpers, not finished tools: each owns only a fragile or opaque part (safe shell " +
+			"teardown, or a web endpoint you can't invent). The actual work happens in your code — the command, " +
+			"arguments, parsing, and decisions are yours.",
+		"Build your own tools: when the same shape recurs across cells (the same fetch, filter, or transform), " +
+			"wrap it ONCE into your own function/helper and reuse it. ls() lists the helpers plus every function " +
+			"you've defined — that list is your library. Reaching for an existing def beats rewriting its logic; " +
+			"rewriting is the failure mode. A new def of the same name overwrites the old one, so extend the " +
+			"existing helper rather than forking a near-copy.",
+		"",
+		"## Shell & files",
+		"File IO and scripting are plain Python — read & write with Path.read_text()/write_text(); don't wrap " +
+			"them. The shell helper is a block (`with <shell>() as s:` then `s.run(cmd)`) that only handles the " +
+			"shell plumbing; you decide the command and what the structured result (returncode/stdout/stderr) " +
+			"means. `!cmd` runs a shell command fire-and-forget; `%%bash`/`%timeit` and the other magics work.",
+		"Set a timeout deliberately: pass a GENEROUS timeout to a helper for long-running installs or builds " +
+			"(be patient), and a small one only when you know work is quick. The evaluator's own watchdog is the " +
+			"backstop, not your policy.",
+		"Define a function when a shape recurs; don't wrap a one-off call in a def — just run the cell.",
 		"",
 		"## Examples",
-		"Good — defined once, called by arguments:",
-		"  def fetch_news(query, hl='en', gl='US', limit=15): <fetch + parse to a list>",
-		"  fetch_news('Turkey')",
-		"  fetch_news('Nigeria', hl='en-NG')",
-		"Compose them:",
-		"  def find_files(pattern, root='.'): <walk root, filter by pattern>",
-		"  def count_lines(paths): ...",
-		"  count_lines(find_files('*.csv'))      # one call",
+		"Good — define a recurring shape once, then call it by arguments:",
+		"  def log_lines(since='-10'):\n      with shell() as s:\n          r = s.run('git log --oneline ' + since)\n" +
+			"      return r.stdout.splitlines()",
+		"  log_lines()",
+		"  log_lines('-20')",
 		"",
 		"## Efficiency",
 		"Context is the budget: everything a cell prints lands in the transcript for the whole turn. Print " +
-			"slices, counts, or names — never whole files or dumps — and keep large values in variables. " +
-			"Notebook-style, a `;` at the end of a cell suppresses its last-expression echo.",
-		"Search output is the classic bloat trap: web_search() returns long content blocks. Store the result " +
-			"in a variable, print a lean digest (titles + links, or hit counts), and pull the full text only " +
-			"when a result looks relevant — never stream the whole content list.",
-		"For whole-filesystem or large-directory scans, use the shell tools (find, fd, du, grep), not a " +
-			"Python os.walk: it pays a syscall per file and runs minutes on a big tree. Example: " +
-			"`find -xdev -type f -size +100M | sort -rn | head`. Reserve Python for analysing the results.",
+			"slices, counts, or names — never whole files or dumps — and keep large values in variables. A `;` " +
+			"at the end of a cell suppresses its last-expression echo.",
+		"Search output is the classic bloat trap: the web helper returns long payloads. Store the result in a " +
+			"variable, print a lean digest (titles + links, or hit counts), and pull the full text only when a " +
+			"result looks relevant — never stream the whole content list.",
+		"For whole-filesystem or large-directory scans, use the shell (find, du, grep) not a Python os.walk: it " +
+			"pays a syscall per file and runs minutes on a big tree. Example: `find -xdev -type f -size +100M | " +
+			"sort -rn | head`. Reserve Python for analysing the results.",
 		"",
 		"## When it breaks",
 		"If the output starts with <rlm_engine_reset>, the kernel was rebuilt: data is restored but your " +
 			"functions are gone — recreate any helper you need and re-verify a variable before trusting it.",
-		"The standard library is available; don't install packages into the evaluator. Run out-of-tree " +
-			"projects through their own environment.",
+		"The standard library is available; don't install packages into the evaluator. Run out-of-tree projects " +
+			"through their own environment.",
 	];
 }

@@ -69,7 +69,7 @@ export default function (pi: ExtensionAPI) {
 				cwd,
 				pythonPath: CFG.pythonPath,
 				timeoutMs: CFG.timeoutMs,
-				toolboxDir: CFG.toolboxDir,
+				helpersDir: CFG.helpersDir,
 				// --- snapshots are keyed to a session file; ephemeral sessions get none ---
 				snapshot: sessionKey ? { path: join(stateDir, "namespace.snapshot") } : undefined,
 			});
@@ -130,7 +130,7 @@ export default function (pi: ExtensionAPI) {
 		label: "execute",
 		description: EXECUTE_DESCRIPTION,
 		promptSnippet: EXECUTE_PROMPT_SNIPPET,
-		promptGuidelines: buildExecutePromptGuidelines(CFG.toolboxDir),
+		promptGuidelines: buildExecutePromptGuidelines(CFG.helpersDir),
 		parameters: executeSchema,
 		renderShell: "self",
 		renderCall(args, theme, context) {

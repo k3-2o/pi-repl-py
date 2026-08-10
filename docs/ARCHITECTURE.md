@@ -64,29 +64,28 @@ cannot recover it. Without this, a cell could announce its own completion and
 claim success while failing — an agent that cannot trust its own results has
 nothing.
 
-## Toolbox loading
+## Helpers loading
 
-At boot the guest and the host both read the toolbox directory (default
-`src/engine/toolbox`, overridden by config `toolboxDir` → env `PI_TOOLBOX_DIR`).
+At boot the guest and the host both read the SINGLE helpers directory (the
+config `helpersDir`, default `~/.pi/agent/pi-repl/helpers`; the installer seeds
+`shell.py` there on first use). There is no shipped toolbox that merges in.
 
-- **guest** execs each `*.py` into the kernel namespace, making functions
-  callable.
-- **host** reads the same files to build the functions list on the `execute`
-  tool's `promptGuidelines` (and the tool `description`), so the model sees the
-  real signatures and one-line summaries.
+- **guest** execs each `*.py` into the kernel namespace, making helpers callable.
+- **host** reads the same files to build the helper list on the `execute` tool's
+  `promptGuidelines`, so the model sees each `helper_description` verbatim.
 
-The loader reads each file's `def (...)`: signature (authoritative) and its
-`function_description = """..."""` (one-line summary, optional). Since both
-sides read the same directory, a function in the prompt also exists in the
-kernel. A file renamed with a `_` prefix is skipped by both, so a disabled
-function is never advertised where it does not load. See
-`docs/how-to-functions.md`.
+The loader reads each file's `helper_description = """..."""` (rendered verbatim,
+no signature parsing) — the author's prose is the whole contract; the kernel's
+`help(name)` shows the real object as ground truth. Since both sides read the
+same directory, a helper in the prompt also exists in the kernel. A file
+renamed with a `_` prefix is skipped by both. See `docs/how-to-functions.md`.
 
 The `promptGuidelines` are built once, when the `execute` tool is registered
-(module load). A toolbox change therefore needs a **session restart / `/reload`**
-to be reflected in the prompt — the kernel also loads the toolbox only at boot.
+(module load). A helpers change therefore needs a **session restart /
+`/reload`** to be reflected in the prompt — the kernel also loads helpers only
+at boot.
 
-`ls()` and `help(name)` are built into the kernel (not toolbox files), so a
+`ls()` and `help(name)` are built into the kernel (not helper files), so a
 bare kernel still lets the model discover what is loaded.
 
 ## Snapshots & honest resets
@@ -131,7 +130,7 @@ throws on a missing/malformed file.
 
 | Key | Type / default | Meaning |
 | --- | --- | --- |
-| `toolboxDir` | string, optional | Directory of one-function-per-`.py` files that ADDS to the shipped `src/engine/toolbox` and, when a name collides, overrides that built-in. `~` is expanded; a bare relative path resolves from the process cwd (not reliable) — prefer an absolute path. |
+| `helpersDir` | string, optional | The SINGLE helpers directory (default `~/.pi/agent/pi-repl/helpers`). Every `*.py` there is loaded into every kernel and advertised; nothing else is merged in. `~` is expanded; a bare relative path resolves from the process cwd (not reliable) — prefer an absolute path. |
 | `pythonPath` | string, optional | The interpreter used to spawn the guest. Omit to use `resolvePythonPath` (see venv). |
 | `timeoutMs` | number, 60000 | Per-cell execution timeout in ms. |
 | `snapshotDebounceMs` | number, 1500 | Debounce after an ok cell before snapshot, in ms. |
@@ -139,4 +138,4 @@ throws on a missing/malformed file.
 ## Reference documentation
 
 - Philosophy and design rationale: [docs/philosophy.md](docs/philosophy.md)
-- Adding a toolbox function: [docs/how-to-functions.md](docs/how-to-functions.md)
+- Adding a helper: [docs/how-to-functions.md](docs/how-to-functions.md)

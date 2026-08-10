@@ -1,150 +1,113 @@
-# How to write a toolbox function
+# How to write a helper
 
-A toolbox function is one `.py` file that pi-repl loads into every kernel and
-surfaces to the model through the `execute` tool's prompt guidance — its
-`function_description` appears **verbatim** in the prompt. The file is the
-single source of truth for what the model is told: the loader parses nothing.
+A helper is one `.py` file in the **helpers directory** (`~/.pi/agent/pi-repl/helpers`
+by default). pi-repl exec's every file there into every kernel and surfaces it to the
+model through the `execute` tool's prompt — its `helper_description` appears **verbatim**
+in the prompt. The file is the single source of truth for what the model is told; the
+loader parses nothing.
 
-> **When a change shows up.** The kernel loads the toolbox at boot, and the
-> `execute` tool builds its function list at registration (module load), so a
-> toolbox change (add/remove a file, edit a description, rename one with a
-> `_` prefix) is picked up by a **session restart / `/reload`** — not
-> mid-session.
+The philosophy: helpers are **low-power building blocks**, not finished tools. A helper
+owns only the fragile or opaque part the model can't reliably reconstruct (safe shell
+teardown, a web endpoint it can't invent). The model does the real work — the command,
+the parsing, the decisions — in code around it, and wraps recurring shapes into **its own**
+helpers. Never ship a "tool" that does the model's job for it.
 
-## Where functions live
+> **When a change shows up.** The kernel loads the helpers at boot, and the `execute`
+> tool builds its list at registration, so a change (add/remove a file, edit a
+> description) is picked up by a **session restart / `/reload`** — not mid-session.
 
-By default the extension ships four (`read`, `write`, `edit`, `bash`) in
-`src/engine/toolbox/`. To use your **own** set, set `toolboxDir` in your
-config:
+## Where helpers live
+
+There is exactly **one** helpers directory — no shipped set is merged in. Point the
+config at a folder to choose it (default `~/.pi/agent/pi-repl/helpers`):
 
 ```jsonc
 // ~/.pi/agent/pi-repl/config.json
-{ "toolboxDir": "~/.pi/agent/pi-repl/functions" }
+{ "helpersDir": "~/.pi/agent/pi-repl/helpers" }
 ```
 
-Use an absolute path or a `~`-prefixed one (`~` expands to your home). A bare
-relative path resolves from the process working directory, which is not
-reliable, so prefer an absolute path for a stable per-user folder. Point
-`toolboxDir` at a directory and every `*.py` there is loaded **in addition
-to** the shipped `read`/`write`/`edit`/`bash`. If a file in your folder has
-the **same name** as a built-in (e.g. `read.py`), your version wins and the
-built-in is ignored for that name.
+Use an absolute or `~`-prefixed path (`~` expands to home); a bare relative path is not
+reliable. What's in that one directory is everything that loads — add a `.py`, edit one,
+delete one, freely. `src/engine/helpers/` in the repo is only the **shipped template** the
+installer copies into the helpers dir on first use; it is not a second source.
 
-## The anatomy of a toolbox file
+## The anatomy of a helper file
 
-Every file has three parts. Only the first two matter to the model:
+Every file has three parts; only the first reaches the prompt:
 
 ```python
-# pi-repl/functions/find_files.py
-function_description = """find_files(pattern, root=".") — Recursively list files under root
-matching a glob pattern.
-Instead of: os.walk + fnmatch written by hand."""
+# in ~/.pi/agent/pi-repl/helpers/my_step.py
+helper_description = """my_step(...) — a small building block that owns one fragile part.
+It decides nothing; you write the command, the conversion, the decisions around it.
+Instead of: <the stdlib call this replaces>."""
 
-def find_files(pattern, root="."):
-    """Return a sorted list of paths under root matching the glob pattern.
+def _private_helper(x):
+    return x * 2        # underscore names never load, never advertise
 
-    Argument notes:
-      pattern - glob like "*.csv" or "test/*.py".
-      root    - directory to walk; defaults to the evaluator's cwd.
-
-    Behaviour:
-      - Uses pathlib.Path.rglob; dotfiles are not matched unless the pattern
-        starts with a dot.
-      - Returns relative paths, so it composes with read() and edit():
-        for p in find_files('*.md'): ...
-    """
-    import pathlib
-    return sorted(str(p) for p in pathlib.Path(root).rglob(pattern))
+def my_step(a, b):
+    """Deep detail lives here: args, return, gotchas, env facts — shown by help()."""
+    return a + b
 ```
 
 | Part | What it is | Where it goes |
 |---|---|---|
-| `function_description` | Everything the model sees in the prompt | Prompt bullet (verbatim) |
-| the `def` | The real implementation | Loaded into every kernel |
-| the docstring | Deep detail: args, return, gotchas, env facts | `help()` in the kernel |
+| `helper_description` | Everything the model sees in the prompt | Prompt bullet (verbatim) |
+| the code | The real implementation | Loaded into every kernel |
+| docstrings | Deep detail | `help()` in the kernel |
 
-**The function name comes from the filename.** `find_files.py` loads as
-`find_files`; keep the `def` name identical so nothing surprises anyone.
+The public name comes from the filename: `my_step.py` loads as `my_step`; keep the `def`
+name identical. Underscore-prefixed files/names are neither loaded nor advertised.
 
 ## Writing the description (it IS the prompt)
 
-The description is the model's entire first impression of your function — the
-loader renders it verbatim and interprets nothing, so what you write is what
-the agent reads, every turn, all session.
+The description is the model's whole first impression — the loader renders it verbatim
+and interprets nothing. This is everything it reads, every turn, all session.
 
-**Rule 1: the first line is the call shape.** Start with `name(args)`, then
-the one-line "what it does". This way the prompt bullet reads like a signature
-even though nothing parses it:
+**Rule 1: the first line is the call shape.** `name(args)`, or the block form for a
+context-style helper (`with <name>() as x:`). Then one line on what it's for.
 
-```text
-- find_files(pattern, root=".") — Recursively list files under root
-  matching a glob pattern.
-  Instead of: os.walk + fnmatch written by hand.
-```
+**Rule 2: an "Instead of:" line names the hand-roll it replaces.** This is what kills the
+trained habit of rebuilding the raw stdlib call:
 
-Keep the call shape in sync with the real `def`. If they drift, the failure
-is soft — the model calls with the stale shape, gets a `TypeError`, and
-`help()` shows the truth — but it's avoidable. Keep them matching.
+- Good: `Instead of: subprocess.run(cmd, shell=True) with hand-rolled kill-on-timeout.`
+- Bad: `Instead of: doing it manually.` — names nothing, changes nothing.
 
-**Rule 2: end with an "Instead of:" line naming the stdlib hand-roll.** This
-is what kills the trained habit of reimplementing file/shell/search access in
-raw Python. State the exact call pattern your function replaces, and the model
-that was about to write it sees a better version already exists:
-
-- Good: `Instead of: open(path).read().splitlines() — which can crash on binary and floods context.`
-- Good: `Instead of: subprocess.run(cmd, shell=True, capture_output=True, text=True).`
-- Bad: `Instead of: doing it manually.` — vague, names nothing, changes nothing.
-
-**Rule 3: keep it short.** Two to five lines: call shape, what it's for,
-maybe one consequence. Everything else belongs in the docstring. The
-description is billed into every turn's context — every word has a per-turn
-token cost.
+**Rule 3: keep it short.** Call shape + one consequence is plenty, for the model. Deep
+detail lives in the docstring. The description is billed into context every turn; a few
+words over can be fine, a flood is a waste.
 
 ## Writing the docstring (the kernel-side truth)
 
-`help(name)` in the kernel prints the **real signature** (from the live
-function, via `inspect.signature`) followed by the docstring. So the docstring
-is where the depth lives:
-
-- full argument notes (types, defaults, units),
-- return value and error behavior,
-- environment facts the model needs ("this evaluator runs in a project-local
-  venv, not the system python"),
-- anything non-obvious: "each bash() call runs a fresh subshell; cd does not
-  carry across calls."
-
-The docstring never appears in the prompt; it is the on-demand backstop the
-model reaches for when the description isn't enough. If a description drifts,
-`help()` is the mechanically truthful channel that catches it.
+`help(name)` shows the real signature plus the docstring. That's where depth lives:
+argument notes (types, defaults, units), return and error behavior, environment facts
+("this evaluator runs in a project-local venv, not the system python"), anything a caller
+needs. The docstring never appears in the prompt; it's the on-demand backstop the model
+reaches when the description isn't enough.
 
 ## Common mistakes
 
-- **First line isn't the call shape** — the prompt bullet becomes prose
-  instead of a signature; the model has no clear call form to trust.
-- **Call shape doesn't match the `def`** — recoverable (see above), but
-  sloppy; keep them aligned.
-- **Deep detail stuffed into the description** — it bloats every turn's
-  context. Move it to the docstring.
-- **No docstring** — `help()` shows only a signature and "(no docstring)";
-  the model loses the gotchas you knew about.
-- **Top-level side effects in the file** — the whole file is exec'd into every
-  kernel at boot, so keep module-level code to definitions: no prints, no
-  network calls, no slow imports at module scope.
-- **Filename ≠ function name** — the loader advertises the filename; mismatch
-  confuses `ls()`/`help()` mapping.
+- **First line isn't the shape** — the bullet becomes prose with no clear call form.
+- **The helper makes the model lazy** — it decides the command, the parsing, the routing.
+  The helper owns the murk; reasoning stays with the caller.
+- **Deep detail stuffed into the description** — bloats every turn's context; move it to
+  the docstring.
+- **No docstring** — `help()` shows a signature and "(no docstring)"; gotchas vanish.
+- **Top-level side effects** — the file is exec'd into every kernel at boot; keep
+  module-level code to definitions (no prints, no network, no slow imports at module scope).
+- **Filename ≠ public name** — a mismatch confuses `ls()`/`help()` mapping.
 
 ## Disabling a file without deleting it
 
-Rename the file to start with an underscore: `_test_helper.py`. The loader
-**(and the execute tool's prompt guidance)** skip underscore-prefixed files,
-so it never reaches the kernel or the model. Use this for scratch or internal
+Rename it to a leading underscore (`_scratch.py`). The loader and the prompt skip
+underscore-prefixed files, so it never reaches the kernel or the model. Great for scratch
 helpers.
 
 ## Checklist
 
-- [ ] Filename matches the `def` name
-- [ ] `function_description` starts with `name(args)`
+- [ ] Public name matches the filename
+- [ ] `helper_description` starts with the call shape / block form
 - [ ] An `Instead of:` line names the stdlib call it replaces
+- [ ] It owns only the murk, not the decision
 - [ ] Deep detail lives in the docstring, not the description
 - [ ] No top-level side effects
 - [ ] Restart / `/reload` the session
@@ -154,11 +117,9 @@ helpers.
 At a `pi --repl` prompt, run a cell:
 
 ```python
-print(ls())            # list what's loaded
-print(help('find_files'))  # REAL signature (from the live function) + docstring
+print(ls())                       # list what's loaded
+print(help('shell'))              # the shipped helper's real explanation
 ```
 
-If `find_files` shows up in `ls()` and `help` shows its true signature, it
-loaded. The `execute` tool's prompt guidance also shows its
-`function_description` verbatim (same call shape + summary) after the next
-session restart.
+If `my_step` shows in `ls()` and `help` explains it, it loaded. The `execute` tool's
+prompt guidance also shows its `helper_description` verbatim after the next restart.

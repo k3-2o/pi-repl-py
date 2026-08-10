@@ -29,13 +29,18 @@ class GuestProc:
     protocol pipe.
     """
 
-    def __init__(self, toolbox_dir=None, timeout_ms=None):
+    def __init__(self, helpers_dir=None, timeout_ms=None):
         self.fd3 = tempfile.NamedTemporaryFile(delete=False)
         self.fd3_name = self.fd3.name
         self.fd3.close()
+        # Hermetic by default: a transient, empty helpers dir so the contract
+        # suite never depends on (or writes into) the user's real helpers dir.
+        self._owned_helpers = None
+        if helpers_dir is None:
+            self._owned_helpers = tempfile.mkdtemp(prefix="pi-repl-helpers-")
+            helpers_dir = self._owned_helpers
         env = dict(os.environ, PI_RLM_NONCE="testnonce")
-        if toolbox_dir:
-            env["PI_TOOLBOX_DIR"] = toolbox_dir
+        env["PI_HELPERS_DIR"] = helpers_dir
         if timeout_ms:
             env["PI_REPL_TIMEOUT_MS"] = str(timeout_ms)
         # bash guarantees the child's fd 3 = the temp file
@@ -93,6 +98,10 @@ class GuestProc:
             os.unlink(self.fd3_name)
         except OSError:
             pass
+        if self._owned_helpers:
+            import shutil
+
+            shutil.rmtree(self._owned_helpers, ignore_errors=True)
 
 
 def run_cell(g, code, cell_id="c1"):
@@ -123,6 +132,23 @@ def guest():
         yield g
     finally:
         g.close()
+
+
+@pytest.fixture
+def guest_with_shell():  # a hermetic helpers dir seeded with the shipped shell helper
+    import shutil
+
+    d = tempfile.mkdtemp(prefix="pi-repl-shell-")
+    shutil.copy(os.path.join(REPO, "src", "engine", "helpers", "shell.py"), os.path.join(d, "shell.py"))
+    g = GuestProc(helpers_dir=d)
+    try:
+        for m in g.frames(timeout=20):
+            if m.get("type") == "ready":
+                break
+        yield g
+    finally:
+        g.close()
+        shutil.rmtree(d, ignore_errors=True)
 
 
 # --- persistence ---
@@ -186,15 +212,15 @@ def test_snapshot_and_restore(guest):
     guest2.close()
 
 
-def test_snapshot_excludes_toolbox_metadata(guest):
-    # function_description (and other toolbox metadata) is exec'd into the kernel
-    # namespace but is NOT user state; it must not appear in a snapshot.
+def test_snapshot_excludes_helper_metadata(guest):
+    # helper python names (e.g. helper_description and helper vars) are exec'd
+    # into the kernel but are NOT user state; they must never land in a snapshot.
     run_cell(guest, "data = {'count': 42}", "c1")
     guest.send({"type": "snapshot", "id": "s1"})
     snap = guest.recv_type("snapshot_result", timeout=20)
     assert "data" in snap["vars"]
-    assert "function_description" not in snap["vars"]
-    assert "read" not in snap["vars"]
+    assert "helper_description" not in snap["vars"]
+    assert "shell" not in snap["vars"]
 
 
 def test_snapshot_is_flagged_complete(guest):
@@ -225,64 +251,71 @@ def test_list_names(guest):
     assert "beta" in res["names"]
 
 
-# --- toolbox tests ---
-def test_bash_helper_runs_commands(guest):
-    d, streams = run_cell(guest, "r = bash('echo toolbox-ok'); print(r.stdout.strip())", "c1")
+# --- helpers tests ---
+def test_shell_helper_runs_commands(guest_with_shell):
+    code = (
+        "with shell() as s:\n"
+        "    r = s.run('echo helper-ok')\n"
+        "print(r.stdout.strip())"
+    )
+    d, streams = run_cell(guest_with_shell, code, "c1")
     assert d["status"] == "ok"
-    assert any("toolbox-ok" in m["chunk"] for m in streams)
+    assert any("helper-ok" in m["chunk"] for m in streams)
 
 
-def test_read_helper(guest):
-    import os
-    path = os.path.join(tempfile.mkdtemp(), "r.txt")
-    with open(path, "w") as f:
-        f.write("line1\nline2\nline3\n")
-    d, streams = run_cell(guest, f"print(read({path!r}).splitlines()[0])", "c1")
-    assert d["status"] == "ok"
-    assert any("line1" in m["chunk"] for m in streams)
-
-
-def test_write_helper(guest):
-    import os
-    p = os.path.join(tempfile.mkdtemp(), "w.txt")
-    d, _ = run_cell(guest, f"print(write({p!r}, 'hello world'))", "c1")
-    assert d["status"] == "ok"
-    with open(p) as f:
-        assert f.read() == "hello world"
-
-
-def test_edit_rejects_stale_anchor(guest):
-    import os
-    p = os.path.join(tempfile.mkdtemp(), "e.txt")
-    with open(p, "w") as f:
-        f.write("the quick brown fox")
-    # exact, single occurrence
-    d, _ = run_cell(guest, f"print(edit({p!r}, 'quick', 'slow'))", "c1")
-    assert d["status"] == "ok"
-    with open(p) as f:
-        assert "slow brown fox" in f.read()
-    # stale anchor (already gone) fails loudly, no silent mangle
-    d2, _ = run_cell(guest, f"edit({p!r}, 'quick', 'again')", "c2")
-    assert d2["status"] == "error"
-    assert "could not find" in d2["error"]["message"]
-    assert "quick" not in open(p).read()
-
-
-def test_help_and_ls_are_always_available(guest):
-    d, streams = run_cell(guest, "print(ls())", "c1")
+def test_shell_helper_is_a_block_not_a_done_tool(guest_with_shell):
+    # The helper owns only the shell plumbing; the caller writes the command, a
+    # deliberate timeout, and what the structured output means.
+    code = (
+        "with shell() as s:\n"
+        "    r = s.run('echo helper-value', timeout=30)\n"
+        "print(r.stdout.strip(), r.returncode)"
+    )
+    d, streams = run_cell(guest_with_shell, code, "c1")
     assert d["status"] == "ok"
     joined = " ".join(m["chunk"] for m in streams)
-    assert "read" in joined and "bash" in joined
+    assert "helper-value 0" in joined
+
+
+def test_help_and_ls_are_always_available(guest_with_shell):
+    d, streams = run_cell(guest_with_shell, "print(ls())", "c1")
+    assert d["status"] == "ok"
+    joined = " ".join(m["chunk"] for m in streams)
+    assert "shell" in joined
     # IPython bookkeeping must not leak into the tool list
     for noise in ("exit", "quit", "get_ipython", "open"):
         assert noise not in joined, f"ls() leaked {noise}: {joined}"
-    d2, streams2 = run_cell(guest, "print(help('edit'))", "c2")
+    d2, streams2 = run_cell(guest_with_shell, "print(help('shell'))", "c2")
     assert d2["status"] == "ok"
     joined2 = " ".join(m["chunk"] for m in streams2)
-    assert "edit" in joined2
-    # help() leads with the REAL signature from the live function, so the
-    # prompt can carry prose without ever being the last word on the shape.
-    assert "edit(path, old_text, new_text)" in joined2, joined2
+    assert "shell" in joined2
+
+
+def test_helpers_dir_is_the_only_source():
+    # A custom helpers dir provides EXACTLY what's loaded: nothing else is
+    # seeded in (the old read/write/edit/bash helpers no longer ship).
+    import pathlib, shutil
+
+    d = tempfile.mkdtemp()
+    try:
+        (pathlib.Path(d) / "double.py").write_text("def double(n):\n    return n * 2\n")
+        g = GuestProc(helpers_dir=d)
+        for m in g.frames(timeout=20):
+            if m.get("type") == "ready":
+                break
+        try:
+            d2, streams = run_cell(g, "print(double(21))", "c1")
+            assert d2["status"] == "ok"
+            assert any("42" in m["chunk"] for m in streams)
+            _, s3 = run_cell(g, "print(ls())", "c2")
+            joined = " ".join(m["chunk"] for m in s3)
+            assert "double" in joined
+            for stale in ("read", "write", "edit", "bash"):
+                assert stale not in joined, f"unexpected stale helper: {stale}"
+        finally:
+            g.close()
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
 
 def test_restore_reports_failed_values_without_crashing(guest):
     # Restoring garbage must be reported in `failed`, never crash the evaluator.
@@ -337,49 +370,4 @@ def test_silence_watchdog_allows_active_work(guest):
         g.close()
 
 
-def test_custom_tool_dir_merges_with_shipped_builtins():
-    # The config folder ADDS to the shipped set, never replaces it: a new
-    # function appears AND the built-in read/bash stay available.
-    import pathlib, shutil
-    d = tempfile.mkdtemp()
-    try:
-        (pathlib.Path(d) / "double.py").write_text("def double(n):\n    return n * 2\n")
-        g = GuestProc(toolbox_dir=d)
-        for m in g.frames(timeout=20):
-            if m.get("type") == "ready":
-                break
-        try:
-            d2, streams = run_cell(g, "print(double(21))", "c1")
-            assert d2["status"] == "ok"
-            assert any("42" in m["chunk"] for m in streams)
-            d3, s3 = run_cell(g, "print(ls())", "c2")
-            joined = " ".join(m["chunk"] for m in s3)
-            assert "double" in joined and "read" in joined and "bash" in joined
-        finally:
-            g.close()
-    finally:
-        shutil.rmtree(d, ignore_errors=True)
 
-
-def test_custom_tool_overrides_builtin_by_name():
-    # A config function with the same name as a shipped built-in wins over it.
-    import pathlib, shutil
-    d = tempfile.mkdtemp()
-    try:
-        (pathlib.Path(d) / "read.py").write_text(
-            'function_description = """custom read"""\n'
-            "def read(path):\n"
-            "    return 'overridden:' + path\n"
-        )
-        g = GuestProc(toolbox_dir=d)
-        for m in g.frames(timeout=20):
-            if m.get("type") == "ready":
-                break
-        try:
-            d2, streams = run_cell(g, "print(read('x'))", "c1")
-            assert d2["status"] == "ok"
-            assert any("overridden" in m["chunk"] for m in streams)
-        finally:
-            g.close()
-    finally:
-        shutil.rmtree(d, ignore_errors=True)
