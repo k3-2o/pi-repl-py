@@ -5,8 +5,15 @@
  * pure layout in render-core.ts, which is unit-tested outside pi's runtime.
  */
 
-import { highlightCode, keyHint, keyText, rawKeyHint, type Theme } from "@mariozechner/pi-coding-agent";
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
+import {
+	getMarkdownTheme,
+	highlightCode,
+	keyHint,
+	keyText,
+	rawKeyHint,
+	type Theme,
+} from "@mariozechner/pi-coding-agent";
+import { Markdown, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
 import {
 	type BgKind,
 	type ExecuteRenderState,
@@ -23,7 +30,7 @@ function makeDeps(theme: Theme): RenderDeps {
 	return {
 		fg: (color, text) => theme.fg(color as Parameters<Theme["fg"]>[0], text),
 		getBgAnsi: (bg: BgKind) => theme.getBgAnsi(bg),
-		highlight: (code) => highlightCode(code, "python"),
+		highlight: (code, language) => highlightCode(code, language ?? "python"),
 		keyHint: (expanded) => {
 			const text = expanded ? "to collapse" : "to expand";
 			const key = keyText("app.tools.expand");
@@ -32,6 +39,13 @@ function makeDeps(theme: Theme): RenderDeps {
 		visibleWidth,
 		truncateToWidth,
 		wrapTextWithAnsi,
+		renderMarkdown: (text, width) => {
+			const md = new Markdown(text, 0, 0, getMarkdownTheme());
+			return md.render(width);
+		},
+		showAudits: process.env.PI_REPL_RENDER_AUDITS !== "0",
+		borderBoxes: process.env.PI_REPL_RENDER_BORDER !== "0",
+		useMarkdown: process.env.PI_REPL_RENDER_MARKDOWN !== "0",
 	};
 }
 

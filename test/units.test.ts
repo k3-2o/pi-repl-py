@@ -11,6 +11,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decodeMessage, encodeMessage } from "../src/engine/protocol.js";
+import { type AuditEntry, renderAuditDetails, renderAuditSummary } from "../src/extension/render-audit.js";
 import {
 	backgroundFor,
 	closeOpenSgr,
@@ -101,7 +102,7 @@ function testDeps(overrides: Partial<RenderDeps> = {}): RenderDeps {
 	return {
 		fg: (_color, text) => `\x1b[31m${text}\x1b[0m`,
 		getBgAnsi: () => "\x1b[44m",
-		highlight: (code) => code.split("\n").map((line) => `\x1b[32m${line}\x1b[0m`),
+		highlight: (code, _language) => code.split("\n").map((line) => `\x1b[32m${line}\x1b[0m`),
 		keyHint: (expanded) => (expanded ? "ctrl+o to collapse" : "ctrl+o to expand"),
 		visibleWidth: (text) => stripAnsi(text).length,
 		truncateToWidth: (text, width, ellipsis = "") => {
@@ -134,6 +135,11 @@ function testDeps(overrides: Partial<RenderDeps> = {}): RenderDeps {
 			for (let i = 0; i < plain.length; i += width) chunks.push(plain.slice(i, i + width));
 			return chunks;
 		},
+		renderMarkdown: (text, width) =>
+			text.split("\n").flatMap((line) => (line.length <= width ? [line] : [line.slice(0, width), line.slice(width)])),
+		showAudits: true,
+		borderBoxes: true,
+		useMarkdown: true,
 		now: () => 0,
 		...overrides,
 	};
@@ -357,5 +363,56 @@ describe("render-core: layout", () => {
 		const resets = painted.split("\x1b[0m");
 		for (const segment of resets.slice(1, -1)) expect(segment.startsWith("\x1b[44m")).toBe(true);
 		expect(stripAnsi(painted)).toHaveLength(20);
+	});
+});
+
+describe("render-audit", () => {
+	test("summary counts and names nested calls", () => {
+		const deps = testDeps();
+		const audits: AuditEntry[] = [
+			{ ref: "bash", args: { command: "ls -la" }, success: true },
+			{ ref: "read", args: { path: "README.md" }, success: true },
+		];
+		const summary = stripAnsi(renderAuditSummary(audits, deps));
+		expect(summary).toContain("2 nested calls");
+		expect(summary).toContain("bash");
+		expect(summary).toContain("read README.md");
+	});
+
+	test("summary is empty when audits are disabled", () => {
+		const deps = testDeps({ showAudits: false });
+		const summary = stripAnsi(renderAuditSummary([{ ref: "bash", args: { command: "x" }, success: true }], deps));
+		expect(summary).toBe("");
+	});
+
+	test("details render a bordered bash box with stdout", () => {
+		const deps = testDeps();
+		const audits: AuditEntry[] = [
+			{
+				ref: "bash",
+				args: { command: "echo hi" },
+				success: true,
+				result: { args: "echo hi", returncode: 0, stdout: "hi\n", stderr: "" },
+			},
+		];
+		const lines = renderAuditDetails(audits, 40, deps).map((line) => stripAnsi(line));
+		expect(lines).toContainEqual(expect.stringContaining("bash"));
+		expect(lines).toContainEqual(expect.stringContaining("hi"));
+		expect(lines).toContainEqual(expect.stringContaining("╭"));
+		expect(lines).toContainEqual(expect.stringContaining("╯"));
+	});
+
+	test("details fall back to a plain list when border boxes are disabled", () => {
+		const deps = testDeps({ borderBoxes: false });
+		const audits: AuditEntry[] = [{ ref: "read", args: { path: "x" }, success: true, result: "content" }];
+		const plain = renderAuditDetails(audits, 40, deps).map((line) => stripAnsi(line));
+		expect(plain.some((line) => line.includes("read x"))).toBe(true);
+		expect(plain.some((line) => line.includes("content"))).toBe(true);
+		expect(plain.some((line) => line.includes("╭"))).toBe(false);
+	});
+
+	test("details are empty when audits are disabled", () => {
+		const deps = testDeps({ showAudits: false });
+		expect(renderAuditDetails([{ ref: "bash", args: { command: "x" }, success: true }], 40, deps)).toHaveLength(0);
 	});
 });

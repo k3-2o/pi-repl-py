@@ -2,6 +2,28 @@
 
 All notable changes to pi-repl, grouped by day and by type.
 
+## 2026-08-10 — Nested tool-call audits and Python-aware preview
+
+### Added
+- Python cells are now previewed by their real action: `bash(...)`, `read(...)`, `write(...)`,
+  `edit(...)`, `web_search(...)`, `!cmd`, `%%bash`, `open(..., 'w')`, and plain Python calls are
+  recognized and summarized in the collapsed header
+- Nested tool-call audits: every public function loaded from the toolbox is now wrapped in the
+  kernel, and the guest returns a per-cell `audits` list with ref, args, result, timing, and success
+- The expanded execute body renders audits as bordered boxes (bash stdout, read file content,
+  write content, edit old/new, web_search result, generic markdown/heuristic) and a one-line
+  summary when collapsed
+- Markdown-aware audit rendering: results that look like markdown are rendered through pi's
+  `Markdown` component; code-file audits are syntax-highlighted by extension
+- Toggles for the new rendering: `PI_REPL_RENDER_AUDITS=0`, `PI_REPL_RENDER_BORDER=0`, and
+  `PI_REPL_RENDER_MARKDOWN=0` disable audits, border boxes, and markdown rendering respectively
+
+### Tests / features
+- Added host unit tests for Python preview detection, f-string/variable resolution, and the audit
+  renderer's summary/details/border/toggle paths
+- Guest contract now verifies that cells return audit frames and that snapshot/restore/list_names
+  still work alongside the new instrumentation
+
 ## 2026-08-09 — Description is the truth
 
 ### Changed / docs

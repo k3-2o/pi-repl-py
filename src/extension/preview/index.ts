@@ -8,6 +8,7 @@ import {
 	shellCandidates,
 } from "./candidates.js";
 import { descriptor } from "./descriptor.js";
+import { isPythonish, pythonCandidates, pythonStringConsts } from "./python.js";
 import { stringConsts } from "./scan.js";
 import { previewShellCommand } from "./shell.js";
 import type { CellPreview } from "./types.js";
@@ -19,6 +20,17 @@ export function previewCell(code: string): CellPreview {
 	const source = code.trimEnd();
 	if (!source) return { kind: "ts", text: "" };
 	const vars = stringConsts(source);
+	let best: { kind: CellPreview["kind"]; text: string; score: number } | undefined;
+
+	// --- Python cells get Python detectors first; TypeScript cells keep the old path ---
+	if (isPythonish(source)) {
+		const pyVars = pythonStringConsts(source);
+		const pyCandidates = pythonCandidates(source, pyVars);
+		for (const candidate of pyCandidates) {
+			if (candidate.text && (!best || candidate.score > best.score)) best = candidate;
+		}
+		if (best) return best;
+	}
 
 	// --- scan order matters: agent masks shell-looking syntax before the shell scan ---
 	const agent = agentCandidates(source, vars);
@@ -31,7 +43,6 @@ export function previewCell(code: string): CellPreview {
 		...genericCandidates(shell.masked),
 	];
 
-	let best: { kind: CellPreview["kind"]; text: string; score: number } | undefined;
 	for (const candidate of candidates) {
 		if (candidate.text && (!best || candidate.score > best.score)) best = candidate;
 	}
