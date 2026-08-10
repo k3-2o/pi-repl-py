@@ -28,8 +28,11 @@ config at a folder to choose it (default `~/.pi/agent/pi-repl/helpers`):
 
 Use an absolute or `~`-prefixed path (`~` expands to home); a bare relative path is not
 reliable. What's in that one directory is everything that loads — add a `.py`, edit one,
-delete one, freely. `src/engine/helpers/` in the repo is only the **shipped template** the
-installer copies into the helpers dir on first use; it is not a second source.
+delete one, Use an absolute or `~`-prefixed path (`~` expands to home); a bare relative path is not
+reliable. What's in that one directory is everything that loads — add a `.py`, edit one,
+delete one, freely. There is no helper folder anywhere in the repo or package; the default
+`shell` and `edit` blocks are seeded straight into this dir on install (only if missing, so
+your edits are never overwritten). This dir is the only source.
 
 ## The anatomy of a helper file
 

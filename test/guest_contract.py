@@ -8,6 +8,7 @@ The guest is spawned with fd 3 connected to a pipe. Because Python's `pass_fds`
 renumbers descriptors in the child, we guarantee fd 3 via a small bash wrapper
 (`exec 3> ...`) so the semantics match how the TS host drives it.
 """
+
 import json
 import os
 import subprocess
@@ -83,7 +84,9 @@ class GuestProc:
     def recv_type(self, kind, cell_id=None, timeout=20):
         end = time.time() + timeout
         for m in self.frames(timeout):
-            if m.get("type") == kind and (cell_id is None or m.get("cellId") == cell_id):
+            if m.get("type") == kind and (
+                cell_id is None or m.get("cellId") == cell_id
+            ):
                 return m
             if time.time() > end:
                 break
@@ -134,12 +137,115 @@ def guest():
         g.close()
 
 
-@pytest.fixture
-def guest_with_shell():  # a hermetic helpers dir seeded with the shipped shell helper
-    import shutil
+def _write(dirpath, name, body):
+    import pathlib
 
+    pathlib.Path(dirpath, name).write_text(body)
+
+
+# Contract-equivalent seeded helpers. The shipping defaults live embedded in
+# scripts/setup-venv.mjs and are written into the USER helpers dir on install;
+# these are hermetic in-tests copies that pin the guest-side contract (fresh
+# read, process-group teardown / stale-guard, no commit on error, diff).
+SHELL_BLOCK = """\
+import os as _os
+import signal as _sig
+import subprocess as _sp
+
+
+class _Result:
+    __slots__ = ("args", "returncode", "stdout", "stderr")
+
+    def __init__(self, args, returncode, stdout, stderr):
+        self.args = args
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+class shell:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def __call__(self, command=None, *, cwd=None, env=None, input=None, timeout=None):
+        with _sp.Popen(
+            command, shell=True, stdin=_sp.PIPE, stdout=_sp.PIPE, stderr=_sp.PIPE,
+            text=True, cwd=cwd, env=env, start_new_session=_os.name == "posix",
+        ) as p:
+            try:
+                out, err = p.communicate(input=input, timeout=timeout)
+            except _sp.TimeoutExpired:
+                try:
+                    _os.killpg(_os.getpgid(p.pid), _sig.SIGKILL)
+                except Exception:
+                    pass
+                try:
+                    p.communicate()
+                except Exception:
+                    pass
+                raise
+        return _Result(command, p.returncode, out, err)
+
+    run = __call__
+"""
+
+EDIT_BLOCK = """
+import difflib as _d
+import pathlib as _p
+
+
+class edit:
+    def __init__(self, path, *, quiet=False, backup=True):
+        self.path = _p.Path(path)
+        self.quiet = quiet
+        self.backup = backup
+        self.text = ""
+        self.diff = ""
+        self.committed = False
+        self._orig = ""
+        self._sig = None
+
+    def __enter__(self):
+        if self.path.exists():
+            self.text = self.path.read_text()
+            st = self.path.stat()
+            self._sig = (st.st_mtime_ns, st.st_size)
+        else:
+            self.text = ""
+            self._sig = None
+        self._orig = self.text
+        return self
+
+    def __exit__(self, exc_type, exc_value, tb):
+        if exc_type is not None:
+            return False
+        if self.text == self._orig:
+            return False
+        if self._sig is not None:
+            st = self.path.stat()
+            if (st.st_mtime_ns, st.st_size) != self._sig:
+                raise RuntimeError("edit: changed on disk since block opened")
+        if self.backup and self._orig:
+            self.path.with_suffix(self.path.suffix + ".bak").write_text(self._orig)
+        self.path.write_text(self.text)
+        self.committed = True
+        self.diff = "".join(
+            _d.unified_diff(self._orig.splitlines(keepends=True),
+                            self.text.splitlines(keepends=True))
+        )
+        if self.diff and not self.quiet:
+            print(self.diff)
+        return False
+"""
+
+
+@pytest.fixture
+def guest_with_shell():  # a hermetic helpers dir seeded with a shell block
     d = tempfile.mkdtemp(prefix="pi-repl-shell-")
-    shutil.copy(os.path.join(REPO, "src", "engine", "helpers", "shell.py"), os.path.join(d, "shell.py"))
+    _write(d, "shell.py", SHELL_BLOCK)
     g = GuestProc(helpers_dir=d)
     try:
         for m in g.frames(timeout=20):
@@ -148,6 +254,26 @@ def guest_with_shell():  # a hermetic helpers dir seeded with the shipped shell 
         yield g
     finally:
         g.close()
+        import shutil
+
+        shutil.rmtree(d, ignore_errors=True)
+
+
+@pytest.fixture
+def guest_with_edit():  # hermetic helper dir seeded with the shell + edit blocks
+    d = tempfile.mkdtemp(prefix="pin-plug-in")
+    _write(d, "shell.py", SHELL_BLOCK)
+    _write(d, "edit.py", EDIT_BLOCK)
+    g = GuestProc(helpers_dir=d)
+    try:
+        for m in g.frames(timeout=20):
+            if m.get("type") == "ready":
+                break
+        yield g
+    finally:
+        g.close()
+        import shutil
+
         shutil.rmtree(d, ignore_errors=True)
 
 
@@ -196,7 +322,9 @@ def test_snapshot_and_restore(guest):
     run_cell(guest, "data = {'count': 42}", "c1")
     guest.send({"type": "snapshot", "id": "s1"})
     snap = guest.recv_type("snapshot_result", timeout=20)
-    assert "data" in snap["vars"], f"expected data in snapshot, got {list(snap['vars'])}"
+    assert "data" in snap["vars"], (
+        f"expected data in snapshot, got {list(snap['vars'])}"
+    )
 
     # simulate a fresh guest restored from the snapshot
     guest2 = GuestProc()
@@ -254,9 +382,7 @@ def test_list_names(guest):
 # --- helpers tests ---
 def test_shell_helper_runs_commands(guest_with_shell):
     code = (
-        "with shell() as s:\n"
-        "    r = s.run('echo helper-ok')\n"
-        "print(r.stdout.strip())"
+        "with shell() as s:\n    r = s.run('echo helper-ok')\nprint(r.stdout.strip())"
     )
     d, streams = run_cell(guest_with_shell, code, "c1")
     assert d["status"] == "ok"
@@ -285,15 +411,85 @@ def test_help_and_ls_are_always_available(guest_with_shell):
     # IPython bookkeeping must not leak into the tool list
     for noise in ("exit", "quit", "get_ipython", "open"):
         assert noise not in joined, f"ls() leaked {noise}: {joined}"
-    d2, streams2 = run_cell(guest_with_shell, "print(help('shell'))", "c2")
+        d2, streams2 = run_cell(guest_with_shell, "print(help('shell'))", "c2")
     assert d2["status"] == "ok"
     joined2 = " ".join(m["chunk"] for m in streams2)
     assert "shell" in joined2
 
 
+# --- edit block contract ---
+def test_edit_block_applies_and_backs_up(guest_with_edit):
+    code = (
+        "from pathlib import Path\n"
+        "p = Path('target.txt')\n"
+        "p.write_text('hello\\nworld\\n')\n"
+        "with edit(p) as ed:\n"
+        "    ed.text = ed.text.replace('world', 'everyone')\n"
+        "print(p.read_text().strip(), '|bak|', p.with_suffix(p.suffix + '.bak').read_text().strip())"
+    )
+    d, streams = run_cell(guest_with_edit, code, "c1")
+    assert d["status"] == "ok", d
+    joined = " ".join(m["chunk"] for m in streams)
+    assert "everyone" in joined
+    assert "hello" in joined  # .bak preserved the old text
+
+
+def test_edit_commits_and_prints_a_diff(guest_with_edit):
+    code = (
+        "from pathlib import Path\n"
+        "p = Path('diffed.txt')\n"
+        "p.write_text('line1\\nline2\\n')\n"
+        "with edit(p) as ed:\n"
+        "    ed.text = ed.text.replace('line2', 'CHANGED')\n"
+    )
+    d, streams = run_cell(guest_with_edit, code, "c1")
+    assert d["status"] == "ok", d
+    joined = " ".join(m["chunk"] for m in streams)
+    assert "CHANGED" in joined  # the diff surfaced the new content
+
+
+def test_edit_aborts_without_writing_on_exception(guest_with_edit):
+    # An exception inside the block must propagate AND leave the file untouched
+    # (no commit, no .bak, no temp residue).
+    code = (
+        "from pathlib import Path\n"
+        "p = Path('abort.txt')\n"
+        "p.write_text('original')\n"
+        "try:\n"
+        "    with edit(p) as ed:\n"
+        "        ed.text = ed.text.replace('original', 'should-not-write')\n"
+        "        raise ValueError('stop')\n"
+        "except ValueError:\n"
+        "    pass\n"
+        "print(p.read_text(), '|bak?', Path(str(p) + '.bak').exists())"
+    )
+    d, streams = run_cell(guest_with_edit, code, "c1")
+    assert d["status"] == "ok", d
+    joined = " ".join(m["chunk"] for m in streams)
+    assert "original |bak? False" in joined
+
+
+def test_edit_refuses_to_clobber_a_stale_file(guest_with_edit):
+    # If the file changes on disk after the block opened, commit must refuse
+    # instead of overwriting the newer content.
+    code = (
+        "from pathlib import Path\n"
+        "p = Path('stale.txt')\n"
+        "p.write_text('alpha')\n"
+        "with edit(p) as ed:\n"
+        "    ed.text = ed.text.replace('alpha', 'beta')\n"
+        "    p.write_text('gamma-on-disk')  # touched while the block is open\n"
+    )
+    d, streams = run_cell(guest_with_edit, code, "c1")
+    assert d["status"] == "error", d  # the stale guard raises inside __exit__
+    d3, s3 = run_cell(guest_with_edit, "print(open('stale.txt').read())", "c3")
+    assert any("gamma-on-disk" in m["chunk"] for m in s3)  # newer content survived
+
+
 def test_helpers_dir_is_the_only_source():
     # A custom helpers dir provides EXACTLY what's loaded: nothing else is
-    # seeded in (the old read/write/edit/bash helpers no longer ship).
+    # seeded in beyond the shipped shell/edit blocks (the old read/write/bash
+    # helpers are gone for good).
     import pathlib, shutil
 
     d = tempfile.mkdtemp()
@@ -310,23 +506,29 @@ def test_helpers_dir_is_the_only_source():
             _, s3 = run_cell(g, "print(ls())", "c2")
             joined = " ".join(m["chunk"] for m in s3)
             assert "double" in joined
-            for stale in ("read", "write", "edit", "bash"):
+            for stale in ("read", "write", "bash"):
                 assert stale not in joined, f"unexpected stale helper: {stale}"
+            # shell/edit are shipped, but only if the dir actually seeds them
+            assert "shell" not in joined and "edit" not in joined
         finally:
             g.close()
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
+
 def test_restore_reports_failed_values_without_crashing(guest):
     # Restoring garbage must be reported in `failed`, never crash the evaluator.
     # "good" is a real pickle of 42; "junk" is not valid pickle.
-    guest.send({
-        "type": "restore", "id": "r1",
-        "vars": {
-            "good": "gAVLKi4=",
-            "junk": "not-valid-pickle-base64!!!",
-        },
-    })
+    guest.send(
+        {
+            "type": "restore",
+            "id": "r1",
+            "vars": {
+                "good": "gAVLKi4=",
+                "junk": "not-valid-pickle-base64!!!",
+            },
+        }
+    )
     res = guest.recv_type("restore_result", timeout=10)
     assert "good" in res["restored"]
     assert any(f["name"] == "junk" for f in res["failed"])
@@ -368,6 +570,3 @@ def test_silence_watchdog_allows_active_work(guest):
         assert any("done" in m["chunk"] for m in streams)
     finally:
         g.close()
-
-
-

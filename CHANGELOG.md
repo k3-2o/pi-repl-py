@@ -7,17 +7,23 @@ All notable changes to pi-repl, grouped by day and by type.
 ### Changed
 
 - **One helpers directory.** Removed the shipped `src/engine/toolbox` entirely. The single
-  load location is now the user `helpers` dir (default `~/.pi/agent/pi-repl/helpers`),
-  seeded on install with the one shipped helper `shell.py`; what lives there is everything
-  the kernel loads. Config key `toolboxDir` → `helpersDir`; env `PI_TOOLBOX_DIR` →
-  `PI_HELPERS_DIR`.
+  load location is now the user `helpers` dir (default `~/.pi/agent/pi-repl/helpers`); what
+  lives there is everything the kernel loads. Config key `toolboxDir` → `helpersDir`; env
+  `PI_TOOLBOX_DIR` → `PI_HELPERS_DIR`.
+- **No helper folder in the package.** The default `shell.py` + `edit.py` helpers are
+  emitted by `scripts/setup-venv.mjs` straight into `~/.pi/agent/pi-repl/helpers` on install
+  (creating the dir and only the files that are missing — never clobbering a user edit).
+  There is no `src/engine/helpers`, no templates dir; that user dir is the only place a
+  helper `.py` ever lives.
 - **`function_description` → `helper_description`.** The stale naming is gone everywhere
   (loader regex, guest, docs, README).
 - **Pruned the toolkit.** Dropped shipped `read`/`write` (Python file IO is first-class;
-  redundant) and `edit`/`(bash)`; the one shipped helper is `shell`, a **context-manager
-  building block** (`with shell() as run:` then `run(cmd)`); it owns only the fragile
-  subprocess teardown (fresh process group, group-kill on timeout) and lets the model write
-  the command, the parsing, and the decisions — non-lazy.
+  redundant). The shipped surface is two **context-manager building blocks**: `shell`
+  (`with shell() as run:` then `run(cmd)`) owns only the fragile subprocess teardown (fresh
+  process group, group-kill on timeout); `edit` (`with edit(path) as ed:` then mutate
+  `ed.text`) owns only the fragile file WRITE — atomic commit, `.bak` backup, stale-file
+  abort, and a printed diff. The model still writes the command / the exact text change,
+  the parsing, and the decisions — non-lazy.
 - **Prompt reframed to BROAD terms.** The tool description/snippet speak of "low-power
   helpers / building blocks" so more helper shapes can be added later without rewriting
   the contract; concrete mechanics live in the guidelines.

@@ -4,10 +4,8 @@
 // add more helper shapes later without rewriting the contract. The precise
 // mechanics of each helper live in the guidelines, not here.
 
-export const executeToolDescription =
-	"Execute Python in a persistent REPL — the session's working memory, notebook-style. Variables, imports, " +
-	"and defs survive across cells; `!cmd` runs shell and the usual magics work. A few LOW-LEVEL helpers are " +
-	"preloaded for the awkward bits (shell, web) — building blocks that own only the hard part, not finished " +
+"and defs survive across cells; `!cmd` runs shell and the usual magics work. A few LOW-LEVEL helpers are " +
+	"preloaded for the awkward bits (shell, edit, web) — building blocks that own only the hard part, not finished " +
 	"tools; `ls()` lists them, `help(name)` shows what one's for. Wrap them into your OWN helpers when a " +
 	"pattern recurs. File IO and scripting are ordinary Python. A cell returns its final expression; anything " +
 	"else prints. Runs in the project-local venv, so a command that starts python or pip must target that venv.";
@@ -34,11 +32,14 @@ export function buildPromptGuidelines(preloaded: string[]): string[] {
 			"rewriting is the failure mode. A new def of the same name overwrites the old one, so extend the " +
 			"existing helper rather than forking a near-copy.",
 		"",
-		"## Shell & files",
+		"## Shell, files & editing",
 		"File IO and scripting are plain Python — read & write with Path.read_text()/write_text(); don't wrap " +
 			"them. The shell helper is a block (`with <shell>() as s:` then `s.run(cmd)`) that only handles the " +
 			"shell plumbing; you decide the command and what the structured result (returncode/stdout/stderr) " +
-			"means. `!cmd` runs a shell command fire-and-forget; `%%bash`/`%timeit` and the other magics work.",
+			"means. The edit helper is a block too (`with edit(path) as ed:` then mutate `ed.text`) that only " +
+			"handles a SAFE save (atomic write, .bak backup, stale-file abort) — you decide exactly what text to " +
+			"change. A small in-place edit beats rewriting the whole file. `!cmd` runs a shell command " +
+			"fire-and-forget; `%%bash`/`%timeit` and the other magics work.",
 		"Set a timeout deliberately: pass a GENEROUS timeout to a helper for long-running installs or builds " +
 			"(be patient), and a small one only when you know work is quick. The evaluator's own watchdog is the " +
 			"backstop, not your policy.",

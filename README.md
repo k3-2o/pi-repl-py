@@ -41,8 +41,11 @@ clear notice. How the interpreter is resolved is in [docs/philosophy.md](docs/ph
 - **A persistent namespace.** Variables, functions, imports, and data survive across cells and
   turns; snapshots preserve them across a best-effort restart.
 - **A real `ipython` kernel**, not a hand-rolled `exec` loop.
-- **Shell as a building block.** A shell helper (a `with` block) runs shell work and owns the
-  fragile subprocess teardown, so no hung command leaves orphaned children.
+- **Building blocks for the awkward bits.** `shell` (a `with` block) owns the fragile
+  subprocess teardown — commands run in their own process group, killed wholesale on
+  timeout, so no hung command leaves orphaned children. `edit` (a `with` block) owns the
+  fragile file write — atomic commit, `.bak` backup, stale-file abort, and a printed diff.
+  Both leave every decision (the command, the exact text change, the parsing) to the model.
 - **Error survival.** A cell that throws reports the traceback and the kernel keeps going.
 - **An honest evaluator.** If it restarts, it names what state it could revive and what it lost, so you don't trust memory that's gone.
 
@@ -51,8 +54,9 @@ clear notice. How the interpreter is resolved is in [docs/philosophy.md](docs/ph
 The one helpers directory preloads low-power Python building blocks into every kernel and
 surfaces each one to the model through the `execute` tool's prompt guidance (each
 `helper_description` verbatim, and `ls()`/`help()` discover them at runtime). They are
-**building blocks, not finished tools**: `shell` owns only the fragile subprocess teardown; the model
-writes the command, the arguments, and the decisions around it. Using `helpersDir` points at
+**building blocks, not finished tools**: `shell` owns only the fragile subprocess teardown and
+`edit` only the safe file write; the model
+writes the command / the text change, the arguments, and the decisions around them. Using `helpersDir` points at
 your own folder; what's in the one helpers dir is everything that loads.
 
 Everything the extension keeps lives under one folder in your home directory:
@@ -61,7 +65,7 @@ Everything the extension keeps lives under one folder in your home directory:
 ~/.pi/agent/pi-repl/
   config.json   settings (helpersDir, pythonPath, timeoutMs)
   venv/         the Python interpreter + ipykernel
-  helpers/      your helpers (shell.py is seeded on install)
+  helpers/      your helpers (shell.py + edit.py auto-seeded on install)
   state/        per-session namespace snapshots
 ```
 

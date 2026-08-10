@@ -83,9 +83,12 @@ def _helper_files(directory):
     return names
 
 
-# The helpers dir is the SINGLE, user-owned config location (src/engine/helpers/
-# holds the SHIPPED shell.py template the installer copies here; there is no
-# built-in merge — what's in this one dir is all the kernel ever loads).
+# The helpers dir is the SINGLE, user-owned config location under
+# ~/.pi/agent/pi-repl/helpers — the only place a helper .py ever lives. The
+# default shell.py + edit.py are emitted by scripts/setup-venv.mjs into this
+# dir on install (never clobbering a file you've edited); there is no helper
+# folder anywhere in the package and no built-in merge. What's in this one dir
+# is all the kernel ever loads.
 DEFAULT_HELPERS_DIR = os.path.expanduser("~/.pi/agent/pi-repl/helpers")
 HELPERS_DIR = os.environ.get("PI_HELPERS_DIR", "").strip() or DEFAULT_HELPERS_DIR
 _HELPER_SRC = _helper_files(HELPERS_DIR)
