@@ -19,8 +19,6 @@ export interface ExecuteRenderState {
 	expanded: boolean;
 	executionStarted: boolean;
 	hasResult: boolean;
-	/** Epoch ms when execution began; drives the live `elapsed` clock while running. */
-	startedAt?: number;
 }
 
 import { previewCell } from "./preview-core.js";
@@ -42,17 +40,10 @@ export interface RenderDeps {
 
 const OUTPUT_INDENT = "  ";
 const SPINNER_FRAMES = ["◐", "◓", "◑", "◒"];
-/** Tail lines surfaced in the collapsed row so work is visible without expanding. */
-const COLLAPSED_PEEK_LINES = 4;
 
 export function formatDuration(durationMs: number | undefined): string | undefined {
 	if (durationMs === undefined) return undefined;
 	if (durationMs < 1000) return `${Math.round(durationMs)}ms`;
-	return `${(durationMs / 1000).toFixed(1)}s`;
-}
-
-/** Live clock, always seconds with one decimal (bash-style `Elapsed`/`Took`). */
-export function formatElapsed(durationMs: number): string {
 	return `${(durationMs / 1000).toFixed(1)}s`;
 }
 
@@ -146,30 +137,36 @@ function topLine(state: ExecuteRenderState, width: number, deps: RenderDeps): st
 	const language = preview.kind === "shell" ? "repl · shell" : "repl";
 	const prefix = `${marker(state, deps)} ${deps.fg("muted", language)}`;
 
-	// --- suffix priority: expand hint > live clock > error name, so a running
-	// clock is never elided at narrow widths and the clock beats the counts ---
+	// --- suffix priority: expand hint > error > duration > counts, so truncation never hides the expand key ---
 	const suffixParts: string[] = [];
 	suffixParts.push(deps.keyHint(state.expanded));
 
-	const kind = statusKind(state);
-	const now = deps.now?.() ?? Date.now();
-	if (kind === "running") {
-		if (state.startedAt !== undefined) {
-			suffixParts.push(deps.fg("muted", `elapsed ${formatElapsed(Math.max(0, now - state.startedAt))}`));
-		}
-	} else if (kind === "done" && !state.isError) {
-		const duration = formatDuration(state.details?.durationMs);
-		if (duration) suffixParts.push(deps.fg("muted", `took ${duration}`));
+	const errorName = !state.isPartial ? state.details?.errorName : undefined;
+	if (errorName) {
+		// --- the error message usually beats a bare name when it fits ---
+		const summary = sanitizeTuiOutput(state.details?.errorStack?.[0] ?? "");
+		suffixParts.push(deps.fg("error", summary && deps.visibleWidth(summary) <= 48 ? summary : errorName));
 	}
-	if (state.isError && state.details?.errorName) {
-		suffixParts.push(deps.fg("error", state.details.errorName));
+
+	const duration = formatDuration(state.details?.durationMs);
+	if (duration) suffixParts.push(deps.fg("muted", duration));
+
+	// --- counts settle-only: live-updating them mid-stream jitters the header ---
+	if (!state.isPartial && statusKind(state) !== "running") {
+		const inputLines = code.split("\n").filter((line) => line.trim().length > 0).length;
+		const output = outputText(state);
+		const outputLines = output ? output.split("\n").length : 0;
+		const counts: string[] = [];
+		if (inputLines > 0) counts.push(`↑ ${inputLines}`);
+		if (outputLines > 0) counts.push(`↓ ${outputLines}`);
+		if (counts.length > 0) suffixParts.push(deps.fg("muted", `${counts.join(" ")} lines`));
 	}
 
 	const separator = deps.fg("dim", " · ");
 	const separatorWidth = deps.visibleWidth(separator);
 	const suffix = suffixParts.join(separator);
 	// --- budget: width minus leading space, prefix, suffix, and separators ---
-	const fixed = 1 + deps.visibleWidth(prefix) + separatorWidth * 2 + deps.visibleWidth(suffix);
+	const fixed = 1 + deps.visibleWidth(prefix) + separatorWidth + deps.visibleWidth(suffix);
 	const previewBudget = Math.max(8, width - fixed - separatorWidth);
 	// --- a semantic preview is a one-line summary; highlight Python code, accent shell intent ---
 	let middle = "";
@@ -305,21 +302,6 @@ function renderOutput(
 	}
 }
 
-/** Tail lines for the collapsed watch-peek; live while running, settles to a short tail. */
-function collapsedPeek(state: ExecuteRenderState, width: number, deps: RenderDeps): string[] {
-	const text = outputText(state);
-	const rawLines = text ? text.split("\n").filter((line) => line.trim().length > 0) : [];
-	if (rawLines.length === 0) return [];
-	const tail = rawLines.slice(-COLLAPSED_PEEK_LINES);
-	const out: string[] = [];
-	const marker = state.executionStarted && state.isPartial ? "…" : "⌎";
-	for (const [index, rawLine] of tail.entries()) {
-		const prefix = index === 0 ? deps.fg("muted", `${marker} `) : deps.fg("muted", "  ");
-		addWrapped(out, prefix, deps.fg("toolOutput", rawLine), width, deps);
-	}
-	return out;
-}
-
 /** Paint the status-matched panel background across the row, surviving inner SGR resets. */
 export function paintBackground(line: string, width: number, kind: StatusKind, deps: RenderDeps): string {
 	const bgAnsi = deps.getBgAnsi(backgroundFor(kind));
@@ -336,15 +318,12 @@ export function renderExecuteHeader(state: ExecuteRenderState, width: number, de
 }
 
 export function renderExecuteBody(state: ExecuteRenderState, width: number, deps: RenderDeps): string[] {
+	if (!state.expanded) return [];
 	const safeWidth = Math.max(1, width);
-	const kind = statusKind(state);
-	// --- collapsed: a live/aggregated tail of output, so you watch it build ---
-	if (!state.expanded) {
-		return collapsedPeek(state, safeWidth, deps).map((line) => paintBackground(line, safeWidth, kind, deps));
-	}
 	const lines: string[] = [];
 	const hasCode = renderCode(state, lines, safeWidth, deps);
 	renderOutput(state, lines, safeWidth, hasCode, deps);
+	const kind = statusKind(state);
 	return lines.map((line) => paintBackground(line, safeWidth, kind, deps));
 }
 

@@ -51,9 +51,8 @@ function renderVersion(state: ExecuteRenderState): string {
 		state.expanded,
 		state.executionStarted,
 		state.hasResult,
-		// --- fold the animation frame in while running so the spinner turns ---
-		// --- and the live elapsed clock repaints once a second ---
-		statusKind(state) === "running" ? `${Math.floor(Date.now() / 1000)}|${Math.floor(Date.now() / 160) % 4}` : -1,
+		// --- fold the animation frame in while running so the spinner still turns ---
+		statusKind(state) === "running" ? Math.floor(Date.now() / 160) % 4 : -1,
 	].join("|");
 }
 

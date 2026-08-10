@@ -192,15 +192,10 @@ describe("render-core: helpers", () => {
 });
 
 describe("render-core: layout", () => {
-	test("collapsed renders a header + live tail-peek; expanded renders code and output", () => {
+	test("collapsed renders exactly one row; expanded renders code and output", () => {
 		const deps = testDeps();
-		// makeState has stdout "hello" + a result "2" -> two peeked tail rows under the header
 		const collapsed = renderExecuteCell(makeState(), 80, deps);
-		expect(collapsed).toHaveLength(3);
-		// the peeked rows surface the output tail without expanding
-		const collapsedPlain = stripAnsi(collapsed.join("\n"));
-		expect(collapsedPlain).toContain("hello");
-		expect(collapsedPlain).toContain("2");
+		expect(collapsed).toHaveLength(1);
 
 		const expanded = renderExecuteCell(makeState({ expanded: true }), 80, deps);
 		expect(expanded.length).toBeGreaterThan(collapsed.length);
@@ -221,8 +216,7 @@ describe("render-core: layout", () => {
 		expect(stripAnsi([...header, ...body].join("\n"))).toBe(stripAnsi(full.join("\n")));
 
 		const collapsedBody = renderExecuteBody(makeState({ expanded: false }), 80, deps);
-		expect(collapsedBody.length).toBeGreaterThan(0); // tail-peek row, not empty
-		expect(stripAnsi(collapsedBody.join("\n"))).toContain("hello");
+		expect(collapsedBody).toHaveLength(0);
 	});
 
 	test("every rendered line fits the pane width, at any width", () => {
@@ -239,17 +233,19 @@ describe("render-core: layout", () => {
 		}
 	});
 
-	test("a long first line keeps the trailing clock and expand hint visible", () => {
+	test("a long first line keeps the trailing metadata visible", () => {
 		const deps = testDeps();
 		const state = makeState({
 			code: "const configurationSnapshotForRenderWidthProbe = { alpha: 1, beta: 2, gamma: 3, delta: 4, epsilon: 5 };",
 		});
-		// The preview absorbs truncation so the clock + expand hint survive at any
-		// width that can hold them; the preview is elided instead.
+		// The preview absorbs truncation so the metadata suffix survives at any
+		// width that can hold it; the preview is elided instead of the counts,
+		// duration, and expand hint.
 		for (const width of [80, 100, 140]) {
 			const row = stripAnsi(renderExecuteCell(state, width, deps)[0]);
 			expect(row).toContain("ctrl+o to expand");
-			expect(row).toContain("took 120ms");
+			expect(row).toContain("120ms");
+			expect(row).toContain("↑ 1");
 			expect(row).toContain("const co");
 			expect(row).toContain("…");
 			expect(row.length).toBeLessThanOrEqual(width);
@@ -264,27 +260,13 @@ describe("render-core: layout", () => {
 		expect(stripAnsi(renderExecuteCell(queued, 80, deps)[0])).toContain("◇");
 	});
 
-	test("duration and expand hint appear in the collapsed header; line counts do not", () => {
+	test("line counts and duration appear in the collapsed row", () => {
 		const deps = testDeps();
 		const row = stripAnsi(renderExecuteCell(makeState(), 200, deps)[0]);
-		expect(row).toContain("took 120ms");
+		expect(row).toContain("↑ 2");
+		expect(row).toContain("lines");
+		expect(row).toContain("120ms");
 		expect(row).toContain("ctrl+o to expand");
-		expect(row).not.toContain("↑");
-		expect(row).not.toContain("lines");
-	});
-
-	test("a running cell shows a live elapsed clock; a long output is tail-peeked", () => {
-		const deps = testDeps({ now: () => 4200 });
-		const running = makeState({
-			isPartial: true,
-			hasResult: false,
-			startedAt: 0,
-			details: { status: "running", stdout: "streaming", result: "more" },
-		});
-		// elapsed = now() - startedAt = 4200ms -> 4.2s
-		expect(stripAnsi(renderExecuteCell(running, 80, deps).join("\n"))).toContain("elapsed 4.2s");
-		// collapsed shows a tail peek of what's streaming
-		expect(stripAnsi(renderExecuteCell(running, 80, deps).join("\n"))).toContain("streaming");
 	});
 
 	test("error name and stack are surfaced", () => {
