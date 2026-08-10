@@ -8,7 +8,6 @@ export interface ExecuteDetails {
 	stderr?: string;
 	result?: string;
 	errorStack?: string[];
-	audits?: AuditEntry[];
 }
 
 export interface ExecuteRenderState {
@@ -23,7 +22,6 @@ export interface ExecuteRenderState {
 }
 
 import { previewCell } from "./preview-core.js";
-import { type AuditEntry, type AuditRenderDeps, renderAuditDetails, renderAuditSummary } from "./render-audit.js";
 
 export type StatusKind = "error" | "aborted" | "running" | "queued" | "done";
 export type BgKind = "toolPendingBg" | "toolSuccessBg" | "toolErrorBg";
@@ -31,19 +29,11 @@ export type BgKind = "toolPendingBg" | "toolSuccessBg" | "toolErrorBg";
 export interface RenderDeps {
 	fg(color: string, text: string): string;
 	getBgAnsi(bg: BgKind): string;
-	highlight(code: string, language?: string): string[];
+	highlight(code: string): string[];
 	keyHint(expanded: boolean): string;
 	visibleWidth(text: string): number;
 	truncateToWidth(text: string, width: number, ellipsis: string): string;
 	wrapTextWithAnsi(text: string, width: number): string[];
-	/** Optional markdown renderer; if absent, output is treated as plain text. */
-	renderMarkdown?(text: string, width: number): string[];
-	/** Whether to render nested tool-call audits at all. */
-	showAudits: boolean;
-	/** Whether audit details are drawn in bordered boxes. */
-	borderBoxes: boolean;
-	/** Whether to use markdown rendering when output looks like markdown. */
-	useMarkdown: boolean;
 	/** Injected for deterministic spinner frames in tests. */
 	now?(): number;
 }
@@ -126,9 +116,9 @@ function marker(state: ExecuteRenderState, deps: RenderDeps): string {
 	}
 }
 
-function highlightLines(code: string, language: string, deps: RenderDeps): string[] {
+function highlightLines(code: string, deps: RenderDeps): string[] {
 	if (!code) return [];
-	return deps.highlight(code, language);
+	return deps.highlight(code);
 }
 
 function outputText(state: ExecuteRenderState): string {
@@ -240,7 +230,7 @@ function renderCode(state: ExecuteRenderState, lines: string[], width: number, d
 	const code = state.code.trimEnd();
 	if (!code) return false;
 	lines.push("");
-	const highlighted = highlightLines(code, "python", deps);
+	const highlighted = highlightLines(code, deps);
 	for (const [index, rawLine] of code.split("\n").entries()) {
 		const prefix = index === 0 ? deps.fg("dim", "› ") : deps.fg("dim", "  ");
 		// --- code is already highlighted; don't strip its ANSI ---
@@ -310,21 +300,9 @@ function renderOutput(
 			lines.push(entry.line);
 		}
 	}
-	// --- nested tool-call audits: collapsed summary, expanded bordered boxes ---
-	const audits = deps.showAudits ? details?.audits : undefined;
-	if (audits && audits.length > 0) {
-		if (state.expanded) {
-			if (lines.length > 0 && hasCode) lines.push("");
-			lines.push(` ${OUTPUT_INDENT}${deps.fg("dim", "nested calls:")}`);
-			for (const line of renderAuditDetails(audits, Math.max(4, width - 2), deps as AuditRenderDeps)) {
-				lines.push(`  ${line}`);
-			}
-		} else {
-			const summary = renderAuditSummary(audits, deps as AuditRenderDeps);
-			if (summary) lines.push(` ${OUTPUT_INDENT}${summary}`);
-		}
-	}
 }
+
+/** Paint the status-matched panel background across the row, surviving inner SGR resets. */
 export function paintBackground(line: string, width: number, kind: StatusKind, deps: RenderDeps): string {
 	const bgAnsi = deps.getBgAnsi(backgroundFor(kind));
 	const padded = line + " ".repeat(Math.max(0, width - deps.visibleWidth(line)));

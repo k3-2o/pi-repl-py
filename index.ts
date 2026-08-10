@@ -183,7 +183,6 @@ export default function (pi: ExtensionAPI) {
 				stderr: r.stderr || undefined,
 				result: r.result,
 				errorStack: errorLines,
-				audits: r.audits,
 			};
 			const result = { content: [{ type: "text" as const, text: text || "(no output)" }], details };
 			if (r.status === "error") {

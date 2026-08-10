@@ -60,7 +60,6 @@ def _decode(line):
 
 # --- toolbox: one function per *.py, exec'd into every kernel (PI_TOOLBOX_DIR) ---
 
-
 def _toolbox_files(directory):
     """Return {function_name: source} for each *.py in `directory`."""
     if not directory:
@@ -82,10 +81,7 @@ def _toolbox_files(directory):
             continue
     return names
 
-
-DEFAULT_TOOLBOX_DIR = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "toolbox"
-)
+DEFAULT_TOOLBOX_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "toolbox")
 TOOLBOX_DIR = os.environ.get("PI_TOOLBOX_DIR", "").strip()
 # --- Merge: built-ins are supreme; a config toolboxDir adds others and overrides on name ---
 _TOOLBOX_SRC = _toolbox_files(DEFAULT_TOOLBOX_DIR)
@@ -112,52 +108,6 @@ def help(name=None):
     except Exception:
         sig = name
     return sig + chr(10) + (fn.__doc__ or f"{name} (no docstring)")
-
-# --- audit helpers: the host will wrap public functions after toolbox sources are loaded ---
-import functools as _rpl_fun, inspect as _rpl_ins, json as _rpl_json, time as _rpl_time
-import subprocess as _rpl_sub
-_rpl_audits = []
-
-def _rpl_json_default(obj):
-    if isinstance(obj, _rpl_sub.CompletedProcess):
-        return {
-            'args': obj.args,
-            'returncode': obj.returncode,
-            'stdout': obj.stdout,
-            'stderr': obj.stderr,
-        }
-    if isinstance(obj, bytes):
-        return obj.decode('utf-8', 'replace')
-    raise TypeError
-
-def _rpl_wrap(name, fn):
-    if not callable(fn) or name.startswith('_'):
-        return fn
-    try:
-        sig = _rpl_ins.signature(fn)
-    except Exception:
-        return fn
-    @_rpl_fun.wraps(fn)
-    def _rpl_wrapped(*args, **kwargs):
-        audit = {'ref': name, 'args': {}, 'success': None, 'startedAt': _rpl_time.monotonic()}
-        try:
-            bound = sig.bind(*args, **kwargs)
-            bound.apply_defaults()
-            for k, v in bound.arguments.items():
-                if k != 'function_description':
-                    audit['args'][k] = v
-            res = fn(*args, **kwargs)
-            audit['result'] = res
-            audit['success'] = True
-        except Exception as _e:
-            audit['success'] = False
-            audit['error'] = repr(_e)
-            raise
-        finally:
-            audit['endedAt'] = _rpl_time.monotonic()
-            _rpl_audits.append(audit)
-        return res
-    return _rpl_wrapped
 """
 
 
@@ -176,20 +126,10 @@ class Kernel:
         self._preload()
 
     def _preload(self):
-        """Exec every toolbox function + the intrinsic help/ls into the kernel ns, then wrap public calls for audit."""
+        """Exec every toolbox function + the intrinsic help/ls into the kernel ns."""
         code = INTRINSIC + "\n"
         for src in _TOOLBOX_SRC.values():
             code += src + "\n"
-        # --- wrap public tool names after all sources are loaded, so config overrides win ---
-        public_names = [n for n in sorted(_TOOLBOX_SRC) if not n.startswith("_")]
-        code += (
-            "_rpl_tool_names = "
-            + json.dumps(public_names)
-            + "\nfor _rpl_name in _rpl_tool_names:\n"
-            "    if _rpl_name in globals() and callable(globals()[_rpl_name]):\n"
-            "        globals()[_rpl_name] = _rpl_wrap(_rpl_name, globals()[_rpl_name])\n"
-            "del _rpl_tool_names\n"
-        )
         if code.strip():
             self.kc.execute(code)
             self._drain()
@@ -198,16 +138,13 @@ class Kernel:
         try:
             while True:
                 m = self.kc.get_iopub_msg(timeout=1)
-                if (
-                    m.get("msg_type") == "status"
-                    and m.get("content", {}).get("execution_state") == "idle"
-                ):
+                if m.get("msg_type") == "status" and m.get("content", {}).get("execution_state") == "idle":
                     break
         except Exception:
             pass
 
-    def _drain_execution(self, code, timeout, collect_audits=False):
-        """Run `code`; return (stdout, stderr, error_text, result, timed_out) or +audits.
+    def _drain_execution(self, code, timeout):
+        """Run `code`; return (stdout, stderr, error_text, result, timed_out).
 
         `timeout <= 0` means "no cap": a cell runs until it reports idle.
         `timeout > 0` is a SILENCE watchdog — it trips only once the cell has
@@ -216,12 +153,6 @@ class Kernel:
         kernel, or nothing for the silence window) reports `timed_out=True` so
         the caller can surface a real hang instead of faking success.
         """
-        if collect_audits:
-            # --- reset per-cell audit log; failures here are not fatal ---
-            try:
-                self.execute("_rpl_audits.clear()")
-            except Exception:
-                pass
         msg_id = self.kc.execute(code)
         out, err, error, result = [], [], None, None
         out_len, err_len = 0, 0
@@ -232,18 +163,10 @@ class Kernel:
             if not self.km.is_alive():
                 timed_out = True
                 break
-            if (
-                last_activity is not None
-                and timeout
-                and (time.monotonic() - last_activity) >= timeout
-            ):
+            if last_activity is not None and timeout and (time.monotonic() - last_activity) >= timeout:
                 timed_out = True
                 break
-            wait = (
-                (timeout - (time.monotonic() - last_activity))
-                if (last_activity is not None and timeout)
-                else 0.25
-            )
+            wait = (timeout - (time.monotonic() - last_activity)) if (last_activity is not None and timeout) else 0.25
             try:
                 m = self.kc.get_iopub_msg(timeout=max(0.01, min(0.25, wait)))
             except Exception:
@@ -281,22 +204,7 @@ class Kernel:
                 self.kc.interrupt_kernel()
             except Exception:
                 pass
-        if collect_audits:
-            audits = self._collect_audits()
-            return "".join(out), "".join(err), error, result, timed_out, audits
         return "".join(out), "".join(err), error, result, timed_out
-
-    def _collect_audits(self):
-        """Return the kernel's audit log as plain Python objects, or []."""
-        try:
-            out, _, _, _ = self.execute(
-                "print(_rpl_json.dumps(_rpl_audits, default=_rpl_json_default, ensure_ascii=False))"
-            )
-            if not out:
-                return []
-            return json.loads(out)
-        except Exception:
-            return []
 
     def execute(self, code):
         """Idle-sync path used by snapshot/restore; not a user cell."""
@@ -305,7 +213,7 @@ class Kernel:
     def run_cell(self, code):
         """Run a user cell under the per-cell timeout, so the model learns
         when work did not finish."""
-        return self._drain_execution(code, CELL_TIMEOUT_S, collect_audits=True)
+        return self._drain_execution(code, CELL_TIMEOUT_S)
 
     def snapshot_globals(self):
         # --- snapshot only user state (skip toolbox/intrinsic functions and _ names) ---
@@ -313,9 +221,7 @@ class Kernel:
         skip_names = json.dumps(tool_names)
         out, _, _, _ = self.execute(
             "import pickle as _pk, base64 as _b64, json as _js\n"
-            "__rlm_skip = set("
-            + skip_names
-            + ") | {'In','Out','get_ipython','exit','quit','open'}\n"
+            "__rlm_skip = set(" + skip_names + ") | {'In','Out','get_ipython','exit','quit','open'}\n"
             "__rlm_v = {}\n__rlm_f = []\n"
             "for _k, _v in list(globals().items()):\n"
             "    # skip IPython bookkeeping and names with a leading underscore\n"
@@ -383,86 +289,31 @@ def main():
             _send({"type": "pong", "id": msg["id"]})
         elif t == "snapshot":
             vars_, failed, complete = kernel.snapshot_globals()
-            _send(
-                {
-                    "type": "snapshot_result",
-                    "id": msg["id"],
-                    "vars": vars_,
-                    "failed": failed,
-                    "complete": complete,
-                }
-            )
+            _send({"type": "snapshot_result", "id": msg["id"], "vars": vars_, "failed": failed, "complete": complete})
         elif t == "restore":
             restored, failed = kernel.restore_globals(msg.get("vars", {}))
-            _send(
-                {
-                    "type": "restore_result",
-                    "id": msg["id"],
-                    "restored": restored,
-                    "failed": failed,
-                }
-            )
+            _send({"type": "restore_result", "id": msg["id"], "restored": restored, "failed": failed})
         elif t == "list_names":
             names = list(kernel.snapshot_globals()[0].keys())
             _send({"type": "names_result", "id": msg["id"], "names": names})
         elif t == "run":
             cell_id = msg.get("cellId")
-            stdout, stderr, error, result, timed_out, audits = kernel.run_cell(
-                msg.get("code", "")
-            )
+            stdout, stderr, error, result, timed_out = kernel.run_cell(msg.get("code", ""))
             if stdout:
-                _send(
-                    {
-                        "type": "stream",
-                        "cellId": cell_id,
-                        "name": "stdout",
-                        "chunk": stdout,
-                    }
-                )
+                _send({"type": "stream", "cellId": cell_id, "name": "stdout", "chunk": stdout})
             if stderr:
-                _send(
-                    {
-                        "type": "stream",
-                        "cellId": cell_id,
-                        "name": "stderr",
-                        "chunk": stderr,
-                    }
-                )
+                _send({"type": "stream", "cellId": cell_id, "name": "stderr", "chunk": stderr})
             if timed_out:
                 tmsg = {
                     "name": "Timeout",
                     "message": f"cell did not finish within {CELL_TIMEOUT_S:g}s and may still be running",
                     "stack": ["[cell timed out]"],
                 }
-                _send(
-                    {
-                        "type": "done",
-                        "cellId": cell_id,
-                        "status": "error",
-                        "error": tmsg,
-                        "audits": audits,
-                    }
-                )
+                _send({"type": "done", "cellId": cell_id, "status": "error", "error": tmsg})
             elif error:
-                _send(
-                    {
-                        "type": "done",
-                        "cellId": cell_id,
-                        "status": "error",
-                        "error": _line_error(error),
-                        "audits": audits,
-                    }
-                )
+                _send({"type": "done", "cellId": cell_id, "status": "error", "error": _line_error(error)})
             else:
-                _send(
-                    {
-                        "type": "done",
-                        "cellId": cell_id,
-                        "status": "ok",
-                        "result": result,
-                        "audits": audits,
-                    }
-                )
+                _send({"type": "done", "cellId": cell_id, "status": "ok", "result": result})
         # --- a single-threaded guest can't read 'abort' mid-cell; the host discards+rebuilds ---
 
 
@@ -470,12 +321,5 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        _send(
-            {
-                "type": "done",
-                "cellId": "",
-                "status": "error",
-                "error": _line_error(str(e)),
-            }
-        )
+        _send({"type": "done", "cellId": "", "status": "error", "error": _line_error(str(e))})
         sys.exit(1)

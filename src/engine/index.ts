@@ -8,7 +8,6 @@ import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import {
-	type AuditEntry,
 	decodeMessage,
 	encodeMessage,
 	type GuestToHostMessage,
@@ -57,7 +56,6 @@ export interface ExecuteResult {
 	status: "ok" | "error" | "aborted";
 	error?: EngineExecuteError;
 	durationMs: number;
-	audits?: AuditEntry[];
 }
 
 export interface ExecuteOptions {
@@ -128,8 +126,6 @@ interface ActiveExecution {
 	abortRequested: boolean;
 	/** Cumulative chars forwarded to onStream; capped so the live view can't grow unbounded. */
 	streamedChars: number;
-	/** Nested tool-call audits returned by the guest. */
-	audits: AuditEntry[];
 	/**
 	 * Aborts host-side work done on this cell's behalf.
 	 */
@@ -404,7 +400,6 @@ export class EngineManager {
 				} else {
 					active.result = message.result;
 				}
-				active.audits = message.audits ?? [];
 				this.settleActiveExecution(active);
 				break;
 			}
@@ -525,7 +520,6 @@ export class EngineManager {
 				hostAbort: new AbortController(),
 				resolve,
 				reject,
-				audits: [],
 			};
 			this.activeExecution = active;
 
@@ -586,7 +580,6 @@ export class EngineManager {
 			error: active.error,
 			status,
 			durationMs: Date.now() - active.started,
-			audits: active.audits,
 		});
 	}
 

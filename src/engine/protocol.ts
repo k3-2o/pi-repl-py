@@ -11,17 +11,6 @@ interface HostToGuest {
 
 export type HostToGuestMessage = HostToGuest[keyof HostToGuest];
 
-// --- one nested tool call recorded by the guest; opaque to the protocol ---
-export interface AuditEntry {
-	ref: string;
-	args?: Record<string, unknown>;
-	result?: unknown;
-	success?: boolean;
-	error?: string;
-	startedAt?: number;
-	endedAt?: number;
-}
-
 interface GuestToHost {
 	ready: { type: "ready" };
 	stream: { type: "stream"; cellId: string; name: "stdout" | "stderr"; chunk: string };
@@ -30,7 +19,6 @@ interface GuestToHost {
 		cellId: string;
 		status: "ok" | "error" | "aborted";
 		result?: string;
-		audits?: AuditEntry[];
 		error?: { name: string; message: string; stack: string[] };
 	};
 	pong: { type: "pong"; id: string };
