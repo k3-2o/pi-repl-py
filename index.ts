@@ -129,6 +129,8 @@ export default function (pi: ExtensionAPI) {
 		renderShell: "self",
 		renderCall(args, theme, context) {
 			const state = syncRenderState(context.state, { ...context, args });
+			// --- mark the start once execution begins so the live elapsed clock has an origin ---
+			if (state.executionStarted && state.startedAt === undefined) state.startedAt = Date.now();
 			// --- compact header lives in the call slot ---
 			return new ExecuteCellComponent(state, theme, "header");
 		},
@@ -143,7 +145,20 @@ export default function (pi: ExtensionAPI) {
 				.map((block) => block.text)
 				.join("\n");
 			// --- body (code + output) lives in the result slot; Ctrl+O expands it ---
-			return new ExecuteCellComponent(state, _theme, "body");
+			const component = new ExecuteCellComponent(state, _theme, "body");
+			// --- live `elapsed` clock: repaint once a second while a cell streams ---
+			const stale = state as ExecuteRenderState & { _liveTick?: ReturnType<typeof setInterval> };
+			if (state.executionStarted && state.startedAt === undefined) state.startedAt = Date.now();
+			if (state.startedAt !== undefined && options.isPartial && !context.isError && !stale._liveTick) {
+				// bash's pattern: a tick invalidates the mounted cell so pi re-renders -> clock advances
+				stale._liveTick = setInterval(() => context.invalidate(), 1000);
+			} else if (!options.isPartial || context.isError) {
+				if (stale._liveTick) {
+					clearInterval(stale._liveTick);
+					stale._liveTick = undefined;
+				}
+			}
+			return component;
 		},
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			if (!active()) {
