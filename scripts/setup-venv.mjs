@@ -288,7 +288,7 @@ function main() {
   if (!systemPython) {
     warn(
       `no python3 found on PATH; could not create the evaluator venv. ` +
-        `Install python3 and run '${PY.slice(-60)} -m venv' manually, or set PI_REPL pythonPath.`
+        `Install python3 and run '${PY.slice(-60)} -m venv' manually, or set $PYTHON to point at one.`
     );
     return;
   }

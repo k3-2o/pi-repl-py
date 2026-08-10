@@ -82,12 +82,6 @@ export interface RestoreResult {
 
 export interface EngineOptions {
 	cwd?: string;
-	/** Python interpreter to spawn the guest with. Defaults to the repo venv. */
-	pythonPath?: string;
-	/** Directory of helper files to exec into the kernel (PI_HELPERS_DIR). */
-	helpersDir?: string;
-	/** Per-cell response timeout, ms. 0 = no cap; nonzero = silence watchdog. */
-	timeoutMs?: number;
 	env?: Record<string, string>;
 	/** Persist/revive the namespace across engine restarts. */
 	snapshot?: {
@@ -160,9 +154,6 @@ function truncateWithMarker(text: string, maxChars: number, wasTruncated: boolea
 
 export class EngineManager {
 	private readonly options: EngineOptions;
-	private readonly pythonPath: string;
-	private readonly helpersDir?: string;
-	private readonly timeoutMs: number;
 	private child?: ChildProcess;
 	private state: "idle" | "starting" | "running" | "shutdown" = "idle";
 	private startPromise?: Promise<void>;
@@ -180,9 +171,6 @@ export class EngineManager {
 
 	constructor(options: EngineOptions = {}) {
 		this.options = options;
-		this.pythonPath = options.pythonPath ?? resolvePythonPath(options.cwd);
-		this.helpersDir = options.helpersDir;
-		this.timeoutMs = options.timeoutMs ?? 0;
 	}
 
 	get isRunning(): boolean {
@@ -209,15 +197,13 @@ export class EngineManager {
 		this.state = "starting";
 		installProcessCleanupOnce();
 		liveEngines.add(this);
-		const pythonPath = this.pythonPath;
+		const pythonPath = resolvePythonPath(this.options.cwd);
 		const child = spawn(pythonPath, [GUEST_PATH], {
 			cwd: this.options.cwd,
 			env: {
 				...process.env,
 				...(this.options.env ?? {}),
 				[NONCE_ENV]: this.nonce,
-				PI_REPL_TIMEOUT_MS: String(this.timeoutMs),
-				PI_HELPERS_DIR: this.helpersDir ?? "",
 			},
 			// --- fd 3 is the protocol pipe; stdout/stderr stay user output ---
 			stdio: ["pipe", "pipe", "pipe", "pipe"],
@@ -260,7 +246,8 @@ export class EngineManager {
 				(error as NodeJS.ErrnoException).code === "ENOENT"
 					? "Engine process failed: '" +
 						pythonPath +
-						"' was not found on PATH. pi-repl runs its evaluator in Python; ensure it is installed and on your PATH, or set the pythonPath in ~/.pi/agent/pi-repl/config.json."
+						"' was not found on PATH. pi-repl runs its evaluator in Python; ensure python3 is installed and " +
+						"on your PATH, or set $PYTHON to point at the interpreter."
 					: `Engine process failed: ${error.message}`;
 			this.failAllPending(new Error(message));
 			this.transitionToShutdown(message);

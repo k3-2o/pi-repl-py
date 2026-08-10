@@ -7,9 +7,9 @@ import { buildPromptGuidelines, executePromptSnippet, executeToolDescription } f
 export const EXECUTE_DESCRIPTION = executeToolDescription;
 export const EXECUTE_PROMPT_SNIPPET = executePromptSnippet;
 
-// --- build the guidelines from the helpers dir, falling back when nothing is preloaded ---
-export function buildExecutePromptGuidelines(helpersDir?: string): string[] {
-	const map = buildHelpersMap(helpersDir);
+// --- build the guidelines from the one helpers dir (default ~/.pi/agent/pi-repl/helpers) ---
+export function buildExecutePromptGuidelines(): string[] {
+	const map = buildHelpersMap();
 	const preloaded = map.length > 0 ? map : ["(no helpers preloaded yet — build your own)"];
 	return buildPromptGuidelines(preloaded);
 }

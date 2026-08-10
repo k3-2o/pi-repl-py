@@ -1,5 +1,7 @@
 /**
- * Loads the helpers from the SINGLE user-owned helpers directory.
+ * Loads the helpers from the ONE user helpers directory — a fixed path under
+ * the user's pi-repl config dir. There is no config knob for it; helpers
+ * always live at `~/.pi/agent/pi-repl/helpers` and nothing else is loaded.
  *
  * The prompt-facing list comes straight from each file's
  * `helper_description = """..."""` value, rendered verbatim — no signature
@@ -10,13 +12,15 @@
  * real object via `inspect`-free listing, so drift in the description is
  * recoverable.
  *
- * There is exactly ONE location (the helpers dir, default
+ * There is exactly ONE location (the helpers dir,
  * `~/.pi/agent/pi-repl/helpers`); there is no shipped toolbox that merges in.
  */
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+
+const DEFAULT_HELPERS_DIR = join(homedir(), ".pi", "agent", "pi-repl", "helpers");
 
 interface HelperEntry {
 	name: string;
@@ -32,23 +36,9 @@ function parseDescription(source: string): string {
 	return m ? m[2].trim() : "";
 }
 
-/** Expand a leading `~` to the user's home (matches the guest's expanduser). */
-function expandTilde(p: string): string {
-	const home = homedir();
-	if (p === "~" || p === "~/") return home;
-	if (p.startsWith("~/") || p.startsWith("~\\")) return join(home, p.slice(2));
-	return p;
-}
-
-/** Resolve a helpers dir: config value else the default install dir. */
-function helpersDir(dir: string | undefined): string {
-	const d = dir && dir.trim().length > 0 ? dir.trim() : "~/.pi/agent/pi-repl/helpers";
-	return expandTilde(d);
-}
-
-/** Load {name → entry} for each non-underscore *.py in `dir`. */
-export function loadHelperEntries(dir: string | undefined): HelperEntry[] {
-	const d = helpersDir(dir);
+/** Load {name → entry} for each non-underscore *.py in the helpers dir. */
+export function loadHelperEntries(dir?: string): HelperEntry[] {
+	const d = dir ?? DEFAULT_HELPERS_DIR;
 	if (!existsSync(d)) return [];
 	const entries: HelperEntry[] = [];
 	for (const file of readdirSync(d).sort()) {
@@ -69,7 +59,7 @@ export function loadHelperEntries(dir: string | undefined): HelperEntry[] {
  * The prompt-facing helper list for the single helpers dir. One entry per
  * loaded file, from its `helper_description` verbatim (or a help() pointer).
  */
-export function buildHelpersMap(dir: string | undefined): string[] {
+export function buildHelpersMap(dir?: string): string[] {
 	return loadHelperEntries(dir).map((t) =>
 		t.description
 			? `- ${t.description.replace(/\n/g, "\n  ")}`

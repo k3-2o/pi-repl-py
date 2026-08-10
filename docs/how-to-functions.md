@@ -18,21 +18,11 @@ helpers. Never ship a "tool" that does the model's job for it.
 
 ## Where helpers live
 
-There is exactly **one** helpers directory — no shipped set is merged in. Point the
-config at a folder to choose it (default `~/.pi/agent/pi-repl/helpers`):
-
-```jsonc
-// ~/.pi/agent/pi-repl/config.json
-{ "helpersDir": "~/.pi/agent/pi-repl/helpers" }
-```
-
-Use an absolute or `~`-prefixed path (`~` expands to home); a bare relative path is not
-reliable. What's in that one directory is everything that loads — add a `.py`, edit one,
-delete one, Use an absolute or `~`-prefixed path (`~` expands to home); a bare relative path is not
-reliable. What's in that one directory is everything that loads — add a `.py`, edit one,
-delete one, freely. There is no helper folder anywhere in the repo or package; the default
-`shell` and `edit` blocks are seeded straight into this dir on install (only if missing, so
-your edits are never overwritten). This dir is the only source.
+There is exactly **one** helpers directory — fixed at `~/.pi/agent/pi-repl/helpers`. There is
+no config file and no knob; this is the only helpers dir and the only source — its content
+is everything that loads (add a `.py`, edit one, delete one freely). There is no helper
+folder anywhere in the repo or package; the default `shell` and `edit` blocks are seeded
+straight into this dir on install (only if missing, so your edits are never overwritten).
 
 ## The anatomy of a helper file
 

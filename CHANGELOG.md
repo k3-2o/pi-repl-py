@@ -2,6 +2,25 @@
 
 All notable changes to pi-repl, grouped by day and by type.
 
+## 2026-08-10 — Drop the config.json surface
+
+### Removed
+
+- **Deleted the configuration system entirely.** Removed `src/extension/config.ts`,
+  `loadConfig()`, and the `~/.pi/agent/pi-repl/config.json` file. There is no config
+  file and no knobs. Everything is fixed under `~/.pi/agent/pi-repl/`: the venv, the
+  single helpers dir, and per-session state.
+- **The helpers dir is fixed** at `~/.pi/agent/pi-repl/helpers` (matching the guest's
+  `DEFAULT_HELPERS_DIR`) — the `helpersDir` config key is gone, so both host and guest
+  are guaranteed to read the same dir. The engine no longer takes `pythonPath`/
+  `timeoutMs`/`helpersDir` options; the interpreter is auto-resolved and the guest's
+  defaults (no per-cell watchdog cap) apply.
+
+### Added
+
+- A short "The fixed layout" section in `docs/ARCHITECTURE.md` replacing the config
+  reference, and matching README / how-to-functions updates.
+
 ## 2026-08-10 — Helpers, not files
 
 ### Changed

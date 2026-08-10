@@ -67,8 +67,8 @@ nothing.
 ## Helpers loading
 
 At boot the guest and the host both read the SINGLE helpers directory (the
-config `helpersDir`, default `~/.pi/agent/pi-repl/helpers`; the installer seeds
-`shell.py` there on first use). There is no shipped toolbox that merges in.
+fixed `~/.pi/agent/pi-repl/helpers`; the installer seeds `shell.py` + `edit.py`
+there on first use). There is no shipped toolbox that merges in.
 
 - **guest** execs each `*.py` into the kernel namespace, making helpers callable.
 - **host** reads the same files to build the helper list on the `execute` tool's
@@ -123,17 +123,23 @@ before reuse rather than trusting state that is gone.
 Gate: `just check` = biome + bun test (host) + pytest (guest).
 `just integration` adds the real-host seam.
 
-## Configuration reference
+## The fixed layout
 
-Loaded from `~/.pi/agent/pi-repl/config.json` (or `$PI_REPL_CONFIG`), first-found-wins, never
-throws on a missing/malformed file.
+There is no configuration file and no knobs. Everything lives under one fixed
+dir in the user's home, and the default is the only option:
 
-| Key | Type / default | Meaning |
-| --- | --- | --- |
-| `helpersDir` | string, optional | The SINGLE helpers directory (default `~/.pi/agent/pi-repl/helpers`). Every `*.py` there is loaded into every kernel and advertised; nothing else is merged in. `~` is expanded; a bare relative path resolves from the process cwd (not reliable) — prefer an absolute path. |
-| `pythonPath` | string, optional | The interpreter used to spawn the guest. Omit to use `resolvePythonPath` (see venv). |
-| `timeoutMs` | number, 60000 | Per-cell execution timeout in ms. |
-| `snapshotDebounceMs` | number, 1500 | Debounce after an ok cell before snapshot, in ms. |
+```
+~/.pi/agent/pi-repl/
+  venv/         the Python interpreter + ipykernel
+  helpers/      the ONE helpers dir — every *.py is loaded into every kernel
+  state/        per-session namespace snapshots
+```
+
+The helpers directory is fixed at `~/.pi/agent/pi-repl/helpers` (matching the
+guest's `DEFAULT_HELPERS_DIR`); there is no way to point it elsewhere, which
+keeps both sides guaranteed to read the same dir. The venv is auto-built and
+the interpreter auto-resolved (the venv, else `$PYTHON`/`python3`) — no setting
+needed. Per-cell timeout entered to the guest defaults to off (no cap).
 
 ## Reference documentation
 

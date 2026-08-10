@@ -5,7 +5,6 @@ import { homedir } from "node:os";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 import { EngineBusyError, EngineManager } from "./src/engine/index.js";
-import { loadConfig } from "./src/extension/config.js";
 import { ExecuteCellComponent, type ExecuteDetails, type ExecuteRenderState } from "./src/extension/render.js";
 import { EngineLifecycle, summarizeNames } from "./src/extension/session-engine.js";
 import { EXECUTE_DESCRIPTION, buildExecutePromptGuidelines, EXECUTE_PROMPT_SNIPPET } from "./src/extension/tool-meta.js";
@@ -45,8 +44,6 @@ function composeErrorLines(error: { name: string; message: string; stack: string
 	return stack[0]?.trim() === header ? stack : [header, ...stack];
 }
 
-const CFG = loadConfig();
-
 export default function (pi: ExtensionAPI) {
 	pi.registerFlag("repl", {
 		type: "boolean",
@@ -67,9 +64,6 @@ export default function (pi: ExtensionAPI) {
 			const stateDir = join(homedir(), ".pi", "agent", "pi-repl", "state", sessionKey ?? "ephemeral");
 			return new EngineManager({
 				cwd,
-				pythonPath: CFG.pythonPath,
-				timeoutMs: CFG.timeoutMs,
-				helpersDir: CFG.helpersDir,
 				// --- snapshots are keyed to a session file; ephemeral sessions get none ---
 				snapshot: sessionKey ? { path: join(stateDir, "namespace.snapshot") } : undefined,
 			});
@@ -130,7 +124,7 @@ export default function (pi: ExtensionAPI) {
 		label: "execute",
 		description: EXECUTE_DESCRIPTION,
 		promptSnippet: EXECUTE_PROMPT_SNIPPET,
-		promptGuidelines: buildExecutePromptGuidelines(CFG.helpersDir),
+		promptGuidelines: buildExecutePromptGuidelines(),
 		parameters: executeSchema,
 		renderShell: "self",
 		renderCall(args, theme, context) {

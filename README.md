@@ -56,20 +56,18 @@ surfaces each one to the model through the `execute` tool's prompt guidance (eac
 `helper_description` verbatim, and `ls()`/`help()` discover them at runtime). They are
 **building blocks, not finished tools**: `shell` owns only the fragile subprocess teardown and
 `edit` only the safe file write; the model
-writes the command / the text change, the arguments, and the decisions around them. Using `helpersDir` points at
-your own folder; what's in the one helpers dir is everything that loads.
+writes the command / the text change, the arguments, and the decisions around them. What's in the one helpers dir is everything that loads.
 
 Everything the extension keeps lives under one folder in your home directory:
 
 ```
 ~/.pi/agent/pi-repl/
-  config.json   settings (helpersDir, pythonPath, timeoutMs)
   venv/         the Python interpreter + ipykernel
   helpers/      your helpers (shell.py + edit.py auto-seeded on install)
   state/        per-session namespace snapshots
 ```
 
-The helpers are building blocks the model composes into its own reusable tools as it works.
+The helpers directory is fixed at `~/.pi/agent/pi-repl/helpers` — there is no config file to set.
 
 The helper list shown to the model is built when the `execute` tool is
 registered, so changing the helpers (adding/removing a file, renaming one with a
@@ -80,8 +78,9 @@ the kernel also only loads helpers at boot.
 
 ## Configuration
 
-`~/.pi/agent/pi-repl/config.json` (or `$PI_REPL_CONFIG`) sets `helpersDir`, `pythonPath`, and timeouts.
-Full keys and path rules: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+There is deliberately no configuration file. Everything is arranged under
+`~/.pi/agent/pi-repl/`: the venv, the fixed helpers dir, and the session state.
+The Python interpreter is auto-resolved (the venv, else `$PYTHON`/`python3`).
 
 ## More
 
