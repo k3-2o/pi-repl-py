@@ -527,6 +527,7 @@ export class EngineManager {
 				reject,
 				audits: [],
 			};
+			this.activeExecution = active;
 
 			let graceTimer: ReturnType<typeof setTimeout> | undefined;
 			const onAbort = () => {
