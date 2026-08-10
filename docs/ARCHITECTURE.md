@@ -97,7 +97,7 @@ session file under `~/.pi/agent/pi-repl/state/<session>/`. On a fresh engine it
 restores, and whatever cannot be pickled
 (live handles, some objects) is reported by name.
 
-If the evaluator restarts, the result is prefixed with a `<rlm_engine_reset>`
+If the evaluator restarts, the result is prefixed with a `<repl_engine_reset>`
 block naming what was revived and what was lost, so the model re-verifies
 before reuse rather than trusting state that is gone.
 

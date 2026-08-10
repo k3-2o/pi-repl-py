@@ -16,8 +16,8 @@ import sys
 import time
 
 # --- protocol envelope ---
-ENVELOPE_KEY = "__rlm"
-NONCE_ENV = "PI_RLM_NONCE"
+ENVELOPE_KEY = "__repl"
+NONCE_ENV = "PI_REPL_NONCE"
 PROTOCOL_FD = 3
 
 NONCE = os.environ.get(NONCE_ENV, "")
@@ -237,21 +237,21 @@ class Kernel:
         skip_names = json.dumps(tool_names)
         out, _, _, _ = self.execute(
             "import pickle as _pk, base64 as _b64, json as _js\n"
-            "__rlm_skip = set("
+            "__repl_skip = set("
             + skip_names
             + ") | {'In','Out','get_ipython','exit','quit','open'}\n"
-            "__rlm_v = {}\n__rlm_f = []\n"
+            "__repl_v = {}\n__repl_f = []\n"
             "for _k, _v in list(globals().items()):\n"
             "    # skip IPython bookkeeping and names with a leading underscore\n"
-            "    if _k.startswith('__') or _k.startswith('_') or _k in __rlm_skip:\n"
+            "    if _k.startswith('__') or _k.startswith('_') or _k in __repl_skip:\n"
             "        continue\n"
             "    try:\n"
-            "        __rlm_v[_k] = _b64.b64encode(_pk.dumps(_v)).decode()\n"
+            "        __repl_v[_k] = _b64.b64encode(_pk.dumps(_v)).decode()\n"
             "    except Exception as _e:\n"
-            "        __rlm_f.append({'name': _k, 'reason': str(_e)})\n"
-            "print('__RLC_SNAPSHOT__' + _js.dumps({'vars': __rlm_v, 'failed': __rlm_f}))\n"
+            "        __repl_f.append({'name': _k, 'reason': str(_e)})\n"
+            "print('__REPL_SNAPSHOT__' + _js.dumps({'vars': __repl_v, 'failed': __repl_f}))\n"
         )
-        marker = "__RLC_SNAPSHOT__"
+        marker = "__REPL_SNAPSHOT__"
         if marker not in out:
             # --- marker never printed: serialization stalled; report incomplete so the host keeps the last good file ---
             return {}, [], False
@@ -267,19 +267,19 @@ class Kernel:
         # --- restore each variable in one atomic kernel call so one failure reports itself ---
         code2 = (
             "import pickle as _pk, base64 as _b64, json as _js\n"
-            "__rl_r = {'restored': [], 'failed': []}\n"
+            "__repl_r = {'restored': [], 'failed': []}\n"
             + "\n".join(
                 "try:\n"
                 f"    globals()[{name!r}] = _pk.loads(_b64.b64decode({b64!r}))\n"
-                f"    __rl_r['restored'].append({name!r})\n"
+                f"    __repl_r['restored'].append({name!r})\n"
                 "except Exception as _e:\n"
-                f"    __rl_r['failed'].append({{'name': {name!r}, 'reason': str(_e)}})\n"
+                f"    __repl_r['failed'].append({{'name': {name!r}, 'reason': str(_e)}})\n"
                 for name, b64 in vars_.items()
             )
-            + "\nprint('__RLC_RESTORE__' + _js.dumps(__rl_r))"
+            + "\nprint('__REPL_RESTORE__' + _js.dumps(__repl_r))"
         )
         out, _, _, _ = self.execute(code2)
-        marker = "__RLC_RESTORE__"
+        marker = "__REPL_RESTORE__"
         if marker not in out:
             return [], []
         try:

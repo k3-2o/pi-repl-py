@@ -38,7 +38,7 @@ export interface EngineLifecycleDeps<E extends RevivableEngine> {
 export type AcquireOrigin = "startup" | "cell";
 
 function formatEngineResetNotice(restore: RestoreResult | null): string {
-	const lines = ["<rlm_engine_reset>"];
+	const lines = ["<repl_engine_reset>"];
 	if (!restore) {
 		// --- no snapshot at all: namespace is genuinely empty ---
 		lines.push(
@@ -73,7 +73,7 @@ function formatEngineResetNotice(restore: RestoreResult | null): string {
 		}
 		lines.push("Anything defined after the last snapshot is also gone.");
 	}
-	lines.push("Re-verify a variable before reusing it, especially inside shell interpolation.", "</rlm_engine_reset>");
+	lines.push("Re-verify a variable before reusing it, especially inside shell interpolation.", "</repl_engine_reset>");
 	return lines.join("\n");
 }
 

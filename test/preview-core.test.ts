@@ -3,7 +3,7 @@
  *
  * A collapsed cell has one line to say what it did. These tables pin, per cell
  * shape, which line wins and how it is presented: commands over plumbing,
- * subagent tasks over everything, file effects by verb and path, secrets never.
+ * file effects by verb and path, secrets never.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -12,7 +12,7 @@ import { descriptor, previewCell, previewShellCommand } from "../src/extension/p
 interface Case {
 	name: string;
 	code: string;
-	kind: "shell" | "agent" | "ts";
+	kind: "shell" | "ts";
 	text: string;
 }
 
@@ -78,9 +78,9 @@ describe("previewCell: shell", () => {
 		},
 		{
 			name: "a file write beats the mkdir that prepared for it",
-			code: 'const p = "/tmp/rlm-demo/notes.md";\nawait Bun.$`mkdir -p /tmp/rlm-demo`.quiet();\nawait Bun.write(p, "# notes");',
+			code: 'const p = "/tmp/repl-demo/notes.md";\nawait Bun.$`mkdir -p /tmp/repl-demo`.quiet();\nawait Bun.write(p, "# notes");',
 			kind: "ts",
-			text: "write /tmp/rlm-demo/notes.md",
+			text: "write /tmp/repl-demo/notes.md",
 		},
 		{
 			name: "a setup-only shell cell is still a shell cell",
@@ -99,41 +99,6 @@ describe("previewCell: shell", () => {
 			code: 'await Bun.$`ls`;\nawait Bun.$`git commit -m "x"`;',
 			kind: "shell",
 			text: 'git commit -m "x"',
-		},
-	]);
-});
-
-describe("previewCell: agent", () => {
-	run([
-		{
-			name: "a subagent spawn beats a shell command in the same cell",
-			code: 'await Bun.$`mkdir -p out`;\nconst h = await rlm.run("Review the engine API", { name: "reviewer" });',
-			kind: "agent",
-			text: "reviewer: Review the engine API",
-		},
-		{
-			name: "a template prompt is shown with consts resolved",
-			code: 'const target = "src/engine/index.ts";\nawait rlm.run(`Audit ${target} for races`);',
-			kind: "agent",
-			text: "Audit src/engine/index.ts for races",
-		},
-		{
-			name: "an identifier prompt resolves through a string const",
-			code: 'const prompt = "summarize README";\nawait rlm.run(prompt);',
-			kind: "agent",
-			text: "summarize README",
-		},
-		{
-			name: "fan-out counts the extra spawns",
-			code: 'await rlm.run("analyze a.ts");\nawait rlm.run("analyze b.ts");\nawait rlm.run("analyze c.ts");',
-			kind: "agent",
-			text: "analyze a.ts (+2 more)",
-		},
-		{
-			name: "shell syntax inside a prompt is not mistaken for a shell cell",
-			code: 'await rlm.run("run Bun.$`bun test` and report failures");',
-			kind: "agent",
-			text: "run Bun.$`bun test` and report failures",
 		},
 	]);
 });

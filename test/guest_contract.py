@@ -40,7 +40,7 @@ class GuestProc:
         if helpers_dir is None:
             self._owned_helpers = tempfile.mkdtemp(prefix="pi-repl-helpers-")
             helpers_dir = self._owned_helpers
-        env = dict(os.environ, PI_RLM_NONCE="testnonce")
+        env = dict(os.environ, PI_REPL_NONCE="testnonce")
         env["PI_HELPERS_DIR"] = helpers_dir
         if timeout_ms:
             env["PI_REPL_TIMEOUT_MS"] = str(timeout_ms)
@@ -77,7 +77,7 @@ class GuestProc:
             time.sleep(0.05)
 
     def send(self, msg):
-        env = {"__rlm": 1, **msg, "n": "testnonce"}
+        env = {"__repl": 1, **msg, "n": "testnonce"}
         self.proc.stdin.write((json.dumps(env) + "\n").encode())
         self.proc.stdin.flush()
 

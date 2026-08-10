@@ -41,9 +41,9 @@ interface GuestToHost {
 
 export type GuestToHostMessage = GuestToHost[keyof GuestToHost];
 
-const ENVELOPE_KEY = "__rlm";
+const ENVELOPE_KEY = "__repl";
 /** Env var carrying the per-process nonce to the guest. */
-export const NONCE_ENV = "PI_RLM_NONCE";
+export const NONCE_ENV = "PI_REPL_NONCE";
 /** Protocol pipe: guest → host. */
 export const PROTOCOL_FD = 3;
 

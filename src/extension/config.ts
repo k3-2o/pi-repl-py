@@ -8,9 +8,9 @@
  *   ~/.pi/agent/pi-repl/config.json   user-global
  *
  * The loadable set lives in ONE location: the helpers dir (default
- * ~/.pi/agent/pi-repl/helpers). The shipped shell.py helper template is
- * installed there on first use; the user edits the dir freely. There is no
- * shipped toolbox in the extension.
+ * ~/.pi/agent/pi-repl/helpers). The default shell.py + edit.py blocks are
+ * auto-seeded there on install (changing no user edits); the user edits the
+ * dir freely. There is no shipped helper folder or toolbox in the package.
  */
 
 import { existsSync, readFileSync } from "node:fs";

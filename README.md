@@ -91,7 +91,7 @@ Full keys and path rules: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 ## It is not
 
 - A sandbox. The kernel runs with your permissions; the toolbox trusts you.
-- A subagent framework. There are no `rlm.run` subagents; spawn a process with the shell helper.
+- A subagent framework. There is no `repl.run` API; spawn a process with the shell helper.
 - A pi tool-rack. It is one `execute` tool with functions inside.
 
 ## License

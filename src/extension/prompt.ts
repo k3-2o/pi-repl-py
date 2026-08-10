@@ -4,7 +4,9 @@
 // add more helper shapes later without rewriting the contract. The precise
 // mechanics of each helper live in the guidelines, not here.
 
-"and defs survive across cells; `!cmd` runs shell and the usual magics work. A few LOW-LEVEL helpers are " +
+export const executeToolDescription =
+	"Execute Python in a persistent REPL — the session's working memory, notebook-style. Variables, imports, " +
+	"and defs survive across cells; `!cmd` runs shell and the usual magics work. A few LOW-LEVEL helpers are " +
 	"preloaded for the awkward bits (shell, edit, web) — building blocks that own only the hard part, not finished " +
 	"tools; `ls()` lists them, `help(name)` shows what one's for. Wrap them into your OWN helpers when a " +
 	"pattern recurs. File IO and scripting are ordinary Python. A cell returns its final expression; anything " +
@@ -64,7 +66,7 @@ export function buildPromptGuidelines(preloaded: string[]): string[] {
 			"sort -rn | head`. Reserve Python for analysing the results.",
 		"",
 		"## When it breaks",
-		"If the output starts with <rlm_engine_reset>, the kernel was rebuilt: data is restored but your " +
+		"If the output starts with <repl_engine_reset>, the kernel was rebuilt: data is restored but your " +
 			"functions are gone — recreate any helper you need and re-verify a variable before trusting it.",
 		"The standard library is available; don't install packages into the evaluator. Run out-of-tree projects " +
 			"through their own environment.",

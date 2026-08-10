@@ -31,52 +31,6 @@ export function shellCandidates(
 	return { candidates, masked };
 }
 
-const STRING_ARG_PATTERN = /^\s*(?:"([^"]*)"|'([^']*)')/;
-
-export function agentCandidates(
-	source: string,
-	vars: ReadonlyMap<string, string>,
-): { candidates: Candidate[]; masked: string } {
-	const tasks: string[] = [];
-	let masked = source;
-	const pattern = /rlm\s*\.\s*run\s*\(/g;
-	let match = pattern.exec(masked);
-	while (match) {
-		const argsStart = match.index + match[0].length;
-		let task: string | undefined;
-		const rest = masked.slice(argsStart);
-		const literal = rest.match(STRING_ARG_PATTERN);
-		if (literal) {
-			task = literal[1] ?? literal[2];
-		} else if (rest.trimStart().startsWith(BACKTICK)) {
-			const tickIndex = argsStart + rest.indexOf(BACKTICK);
-			const span = scanTemplate(masked, tickIndex);
-			task = substituteVars(span.body, vars);
-			masked = maskSpan(masked, span);
-		} else {
-			const identifier = rest.match(/^\s*([A-Za-z_$][\w$]*)/)?.[1];
-			task = identifier ? (vars.get(identifier) ?? identifier) : undefined;
-		}
-		// --- a chosen child name is identity; lead with it ---
-		const name = masked.slice(argsStart).match(/name\s*:\s*(?:"([^"]*)"|'([^']*)')/);
-		const label = name?.[1] ?? name?.[2];
-		tasks.push(label && task ? label + ": " + task : (label ?? task ?? "subagent"));
-		pattern.lastIndex = argsStart;
-		match = pattern.exec(masked);
-	}
-	const candidates: Candidate[] =
-		tasks.length === 0
-			? []
-			: [
-					{
-						kind: "agent",
-						text: descriptor(tasks.length === 1 ? (tasks[0] ?? "") : tasks[0] + " (+" + (tasks.length - 1) + " more)"),
-						score: 100,
-					},
-				];
-	return { candidates, masked };
-}
-
 const FILE_EFFECT_PATTERN =
 	/(?:Bun\.write|\b(?:fs|fsp|promises)\.(?:writeFileSync|writeFile|appendFileSync|appendFile|mkdirSync|mkdir|rmSync|rmdirSync|unlinkSync|unlink|renameSync|rename|copyFileSync|copyFile|cpSync|cp)|\b(?:writeFileSync|writeFile|appendFileSync|mkdirSync|rmSync|unlinkSync|renameSync|copyFileSync))\s*\(\s*([^,)\n]+)/g;
 

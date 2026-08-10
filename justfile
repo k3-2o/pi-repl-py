@@ -30,7 +30,7 @@ check: fmt lint test
 
 # ── test (the real spec) ──────────────────────────────────────────────────
 test:
-	# Host: the pi-rlm TS host with its own runner (bun-native).
+	# Host: the TS host with its own (bun-native) runner.
 	bun test test/units.test.ts test/preview-core.test.ts
 	# Guest: the Python evaluator contract.
 	{{PY}} -m pytest test/guest_contract.py -q

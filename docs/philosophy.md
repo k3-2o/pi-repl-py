@@ -48,7 +48,7 @@ to `exec`.
 And it is an honest isolation boundary: the kernel is a separate process from
 pi. A cell can raise, or consume memory, or spin, and pi keeps answering because
 pi is not the process that failed. The host restores from the last completed
-snapshot and tells the model exactly what came back in a `<rlm_engine_reset>`
+snapshot and tells the model exactly what came back in a `<repl_engine_reset>`
 notice. More in `ARCHITECTURE.md`.
 
 ## The venv as part of the design
@@ -75,7 +75,7 @@ The philosophy prefers a sharp, honest tool over a pretend-safe one.
 
 ## What it isn't
 
-- A subagent framework. There is no `rlm.run`. To delegate, the model spawns
+- A subagent framework. There is no `repl.run`. To delegate, the model spawns
   a process with the shell helper.
 - A drop-in pi-tool parcel. It exposes one `execute` tool; everything else is
   inside that workspace.

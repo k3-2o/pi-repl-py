@@ -75,7 +75,7 @@ describe("protocol framing", () => {
 		const line = encodeMessage({ type: "ping", id: "p1" });
 		expect(line.endsWith("\n")).toBe(true);
 		expect(line.trimEnd().split("\n")).toHaveLength(1);
-		expect(line).toContain('"__rlm":1');
+		expect(line).toContain('"__repl":1');
 	});
 
 	test("round-trips a message", () => {
@@ -85,9 +85,9 @@ describe("protocol framing", () => {
 
 	test("rejects non-envelope, malformed, and typeless lines", () => {
 		expect(decodeMessage("plain subprocess output")).toBeNull();
-		expect(decodeMessage('{"__rlm":1, broken json')).toBeNull();
-		expect(decodeMessage(JSON.stringify({ __rlm: 1 }))).toBeNull();
-		expect(decodeMessage(JSON.stringify({ __rlm: 2, type: "done" }))).toBeNull();
+		expect(decodeMessage('{"__repl":1, broken json')).toBeNull();
+		expect(decodeMessage(JSON.stringify({ __repl: 1 }))).toBeNull();
+		expect(decodeMessage(JSON.stringify({ __repl: 2, type: "done" }))).toBeNull();
 		expect(decodeMessage("")).toBeNull();
 	});
 });
