@@ -82,39 +82,49 @@ describe("host × python-kernel integration", () => {
 		expect(result.result).toContain("200");
 	});
 
-	test("ls() and help() are always available and hide IPython noise", { timeout: 60_000 }, async () => {
-		const d = tempDir();
-		// hermetic helpers dir: nothing preloaded
-		const m = engine({ cwd: d, env: { PI_HELPERS_DIR: tempDir() } });
+	test(
+		"no pi-repl discovery intrinsics are injected; the workspace is standard Python",
+		{ timeout: 60_000 },
+		async () => {
+			const d = tempDir();
+			// hermetic helpers dir: nothing preloaded
+			const m = engine({ cwd: d, env: { PI_HELPERS_DIR: tempDir() } });
 
-		const ls = await m.execute("print(ls())");
-		expect(ls.status).toBe("ok");
-		for (const noise of ["exit", "quit", "get_ipython", "open"]) {
-			expect(ls.stdout).not.toContain(noise);
-		}
-		expect(ls.stdout).toContain("ls");
-		expect(ls.stdout).toContain("help");
+			// The custom ls() intrinsic is gone: 'ls' is not in the namespace, and no
+			// pi/helper-specific symbol was injected — discovery is ordinary Python.
+			const ls = await m.execute("print('ls' in globals())");
+			expect(ls.status).toBe("ok");
+			expect(ls.stdout).toContain("False");
 
-		const help = await m.execute("print(help('ls'))");
-		expect(help.status).toBe("ok");
-	});
+			// Standard introspection stays available (the builtin help() stands in for
+			// the old helper-usage helper).
+			const intro = await m.execute("print(callable(help), len(globals()) >= 0)");
+			expect(intro.status).toBe("ok");
+			expect(intro.stdout).toContain("True");
+		},
+	);
 
-	test("a custom helper file loads into the kernel and appears in ls()", { timeout: 60_000 }, async () => {
-		const d = tempDir();
-		const helpers = tempDir();
-		writeFileSync(join(helpers, "double.py"), "def double(n):\n    return n * 2\n");
-		const m = engine({ cwd: d, env: { PI_HELPERS_DIR: helpers } });
+	test(
+		"a custom helper file loads into the kernel and appears under plain Python globals()",
+		{ timeout: 60_000 },
+		async () => {
+			const d = tempDir();
+			const helpers = tempDir();
+			writeFileSync(join(helpers, "double.py"), "def double(n):\n    return n * 2\n");
+			const m = engine({ cwd: d, env: { PI_HELPERS_DIR: helpers } });
 
-		const r = await m.execute("print(double(21))");
-		expect(r.status).toBe("ok");
-		expect(r.stdout).toContain("42");
+			const r = await m.execute("print(double(21))");
+			expect(r.status).toBe("ok");
+			expect(r.stdout).toContain("42");
 
-		const ls = await m.execute("print(ls())");
-		expect(ls.stdout).toContain("double");
-		for (const stale of ["shell", "edit", "read", "write", "bash"]) {
-			expect(ls.stdout).not.toContain(stale);
-		}
-	});
+			const ns = await m.execute("print([k for k in globals() if k == 'double'])");
+			expect(ns.status).toBe("ok");
+			expect(ns.stdout).toContain("double");
+			for (const stale of ["shell", "edit", "read", "write", "bash"]) {
+				expect(ns.stdout).not.toContain(stale);
+			}
+		},
+	);
 
 	test("a variable set in one engine survives restart via the snapshot file", { timeout: 60_000 }, async () => {
 		const d = tempDir();

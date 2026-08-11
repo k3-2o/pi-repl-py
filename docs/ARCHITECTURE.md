@@ -58,9 +58,9 @@ At spawn, `resolvePythonPath` chooses the interpreter in order:
 3. `~/.pi/agent/pi-repl/venv` (package install)
 4. `$PYTHON` or `python3`
 
-The first existing one wins. The model is told (via `help()`) that it runs in a
-project-local venv, not the system interpreter, so it does not leak the wrong
-assumption into commands.
+The first existing one wins. The model is told in the tool guidance that it
+runs in a project-local venv, not the system interpreter, so it does not leak
+the wrong assumption into commands.
 
 ## The kernel client
 
@@ -104,18 +104,20 @@ helpers seeded). There is no shipped toolbox that merges in.
   `promptGuidelines`, so the model sees each `helper_description` verbatim.
 
 The loader reads each file's `helper_description = """..."""` (rendered verbatim,
-no signature parsing) — the author's prose is the whole contract; the kernel's
-`help(name)` shows the real object as ground truth. Since both sides read the
-same directory, a helper in the prompt also exists in the kernel. A file
-renamed with a `_` prefix is skipped by both. See `docs/how-to-functions.md`.
+no signature parsing) — the author's prose is the whole contract; the model can
+inspect the real object via plain-Python intro via `print(name.__doc__)`.
+Since both sides read the same directory, a helper in the prompt also exists in
+the kernel. A file renamed with a `_` prefix is skipped by both. See
+`docs/how-to-functions.md`.
 
 The `promptGuidelines` are built once, when the `execute` tool is registered
 (module load). A helpers change therefore needs a **session restart /
 `/reload`** to be reflected in the prompt — the kernel also loads helpers only
 at boot.
 
-`ls()` and `help(name)` are built into the kernel (preloaded intrinsics, not
-helper files), so a bare kernel still lets the model discover what is loaded.
+There are no custom discovery intrinsics (`ls()`/`help()`) in a bare kernel; the
+model discovers what is loaded by listing the namespace with ordinary Python
+(`[k for k in globals() if not k.startswith('_')]`).
 
 ## Snapshots & honest resets
 

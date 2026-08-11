@@ -52,11 +52,11 @@ describe("helpers loader: description is the truth", () => {
 		expect(bullet).not.toContain("_get_env");
 	});
 
-	test("a file without a description falls back to a help() pointer", () => {
+	test("a file without a description falls back to a plain-Python pointer", () => {
 		const dir = mkdtempSync(join(tmpdir(), "pi-repl-helpers-"));
 		writeFileSync(join(dir, "bare.py"), "def bare(x):\n    return x\n");
 		const bullet = buildHelpersMap(dir).find((b) => b.includes("bare"));
-		expect(bullet).toContain("call help('bare')");
+		expect(bullet).toContain("bare.__doc__");
 	});
 
 	test("the helpers dir is the single source — its content is the surface", () => {

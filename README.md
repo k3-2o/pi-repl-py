@@ -51,7 +51,7 @@ clear notice. How the interpreter is resolved is in [docs/philosophy.md](docs/ph
 
 The one helpers directory lets you preload your own Python building blocks into every kernel
 and surfaces each one to the model through the `execute` tool's prompt guidance (each
-`helper_description` verbatim, and `ls()`/`help()` discover them at runtime). They are
+`helper_description` verbatim). They are
 **additions you choose**, for things the REPL does not already give as ordinary Python — a
 `web_search` with provider failover, a client wrapper, anything you reach for often. The
 directory ships **empty**: shell and file IO are already native, so a fresh install preloads

@@ -8,8 +8,8 @@
 // nonce, and the whole middle process existed only because the host did not
 // speak the kernel's own protocol; they are gone.
 //
-// Responsibilities: spawn + connect + readiness, boot preload (helpers and
-// ls/help intrinsics), cell execution with output routed by msg_id, silence
+// Responsibilities: spawn + connect + readiness, boot preload (helpers), cell
+// execution with output routed by msg_id, silence
 // watchdog timeout, real cancellation via control-channel interrupt,
 // snapshot/restore/names over private-MIME display payloads, teardown.
 
@@ -64,25 +64,9 @@ export interface SnapshotReply {
 	complete: boolean;
 }
 
-// --- boot preload: ls()/help() intrinsics (same as the old guest) ---
-
-const INTRINSIC = `
-_RPL_LS_NOISE = {'exit', 'quit', 'get_ipython', 'open', 'display'}
-def ls():
-    return sorted(n for n in globals() if n not in _RPL_LS_NOISE and not n.startswith('_') and callable(globals()[n]))
-def help(name=None):
-    if name is None:
-        return ls()
-    fn = globals().get(name)
-    if fn is None or not callable(fn):
-        return f"no such function: {name!r}"
-    try:
-        import inspect
-        sig = f"{name}{inspect.signature(fn)}"
-    except Exception:
-        sig = name
-    return sig + chr(10) + (fn.__doc__ or f"{name} (no docstring)")
-`;
+// --- boot preload: every helper source is exec'd into the namespace. No ls()/help()
+// intrinsics — the model lists what's loaded with plain Python (globals()), and the
+// tool guidance already surfaces each helper's description verbatim. ---
 
 /** Read the helpers dir (same skip rules as the extension's prompt loader). */
 export function readHelperSources(dir?: string): { name: string; source: string }[] {
@@ -101,18 +85,7 @@ export function readHelperSources(dir?: string): { name: string; source: string 
 }
 
 function buildSkipList(helperNames: string[]): string {
-	const names = new Set([
-		...helperNames,
-		"ls",
-		"help",
-		"helper_description",
-		"In",
-		"Out",
-		"get_ipython",
-		"exit",
-		"quit",
-		"open",
-	]);
+	const names = new Set([...helperNames, "helper_description", "In", "Out", "get_ipython", "exit", "quit", "open"]);
 	return JSON.stringify([...names]);
 }
 
@@ -232,7 +205,11 @@ export class KernelClient {
 		});
 
 		const deadline = Date.now() + KERNEL_READY_TIMEOUT_MS;
-		while (!existsSync(connPath)) {
+		// --- poll until the connection file is present AND fully written: existsSync
+		// returns as soon as the file is created, before ipykernel finishes writing,
+		// so reading an invalid JSON there races the write and throws "Unexpected EOF."
+		let conn: ConnectionFile;
+		while (true) {
 			if (child.exitCode !== null) {
 				throw new Error(
 					`ipykernel exited before writing its connection file (code=${child.exitCode})` +
@@ -241,12 +218,17 @@ export class KernelClient {
 			}
 			if (Date.now() > deadline) {
 				child.kill("SIGKILL");
-				throw new Error("ipykernel did not write a connection file in time");
+				throw new Error("ipykernel did not write a valid connection file in time");
 			}
-			await new Promise((resolve) => setTimeout(resolve, 25));
+			try {
+				conn = readConnectionFile(connPath);
+				break;
+			} catch {
+				// --- file not present yet, or mid-write: retry ---
+				await new Promise((resolve) => setTimeout(resolve, 25));
+			}
 		}
 
-		const conn = readConnectionFile(connPath);
 		const kc = new KernelClient(conn, opts);
 		kc.child = child;
 		kc.connectionFilePath = connPath;
@@ -292,9 +274,9 @@ export class KernelClient {
 		return this.waitForReply(msgId, KERNEL_READY_TIMEOUT_MS, "kernel_info_reply").then(() => {});
 	}
 
-	/** Exec the intrinsics + every helper file into the kernel namespace. */
+	/** Exec every helper file into the kernel namespace. No custom intrinsics. */
 	private preload(): Promise<void> {
-		let code = INTRINSIC;
+		let code = "";
 		for (const h of this.helperSources) code += `\n${h.source}\n`;
 		return this.executeCell(code, { maxOutputChars: DEFAULT_MAX_OUTPUT_CHARS }).then(() => {});
 	}

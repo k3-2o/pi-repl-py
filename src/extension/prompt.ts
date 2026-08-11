@@ -4,9 +4,9 @@ export const executeToolDescription =
 	"You have one tool: a persistent Python workspace backed by a real `ipython` kernel. " +
 	"Variables, imports, functions, and data survive across cells and turns. Use this tool to read files, " +
 	"run shell commands, search code, transform data, and build up solutions — all inside Python. " +
-	"Helpers in `~/.pi/agent/pi-repl/helpers/` are loaded at boot as functions; use `ls()` to see what's " +
-	"loaded and `help(name)` for details. A cell returns its final expression; printed output is captured " +
-	"separately.";
+	"Helpers in `~/.pi/agent/pi-repl/helpers/` are loaded at boot as functions; see what's loaded with " +
+	"`[k for k in globals() if not k.startswith('_')]`. A cell returns its final expression; printed output " +
+	"is captured separately.";
 
 export const executePromptSnippet =
 	"Use the Python workspace: keep state in variables, batch independent reads/searches in one cell, " +
@@ -46,7 +46,7 @@ export function buildPromptGuidelines(preloaded: string[]): string[] {
 			? [
 					"## Helpers",
 					"User helpers load from `~/.pi/agent/pi-repl/helpers/`. Their descriptions appear below. " +
-						"Use `ls()` and `help(name)` to discover them at runtime.",
+						"List what's loaded with `[k for k in globals() if not k.startswith('_')]`.",
 					"",
 					...preloaded,
 					"",

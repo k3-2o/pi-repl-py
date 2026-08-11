@@ -57,12 +57,13 @@ function loadHelperEntries(dir?: string): HelperEntry[] {
 
 /**
  * The prompt-facing helper list for the single helpers dir. One entry per
- * loaded file, from its `helper_description` verbatim (or a help() pointer).
+ * loaded file, from its `helper_description` verbatim (or a plain-Python
+ * introspection pointer when the file omits one).
  */
 export function buildHelpersMap(dir?: string): string[] {
 	return loadHelperEntries(dir).map((t) =>
 		t.description
 			? `- ${t.description.replace(/\n/g, "\n  ")}`
-			: `- ${t.name} (no description — call help('${t.name}') for a look)`,
+			: `- ${t.name} (no description — inspect it with print(${t.name}.__doc__))`,
 	);
 }

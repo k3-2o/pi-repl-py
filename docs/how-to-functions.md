@@ -39,7 +39,7 @@ def _private_helper(x):
     return x * 2        # underscore names never load, never advertise
 
 def my_step(a, b):
-    """Deep detail lives here: args, return, gotchas, env facts — shown by help()."""
+    """Deep detail lives here: args, return, gotchas, env facts."""
     return a + b
 ```
 
@@ -47,7 +47,7 @@ def my_step(a, b):
 |---|---|---|
 | `helper_description` | Everything the model sees in the prompt | Prompt bullet (verbatim) |
 | the code | The real implementation | Loaded into every kernel |
-| docstrings | Deep detail | `help()` in the kernel |
+| docstrings | Deep detail | Available via plain-Python introspection (`print(name.__doc__)`) |
 
 The public name comes from the filename: `my_step.py` loads as `my_step`; keep the `def`
 name identical. Underscore-prefixed files/names are neither loaded nor advertised.
@@ -72,11 +72,11 @@ words over can be fine, a flood is a waste.
 
 ## Writing the docstring (the kernel-side truth)
 
-`help(name)` shows the real signature plus the docstring. That's where depth lives:
-argument notes (types, defaults, units), return and error behavior, environment facts
-("this evaluator runs in a project-local venv, not the system python"), anything a caller
-needs. The docstring never appears in the prompt; it's the on-demand backstop the model
-reaches when the description isn't enough.
+Plain Python introspection (`print(name.__doc__)` or the builtin `help()`) shows the
+real object. That's where depth lives: argument notes (types, defaults, units), return and
+error behavior, environment facts ("this evaluator runs in a project-local venv, not the
+system python"), anything a caller needs. The docstring never appears in the prompt; it's
+the on-demand backstop the model reaches when the description isn't enough.
 
 ## Common mistakes
 
@@ -85,10 +85,10 @@ reaches when the description isn't enough.
   The helper owns the murk; reasoning stays with the caller.
 - **Deep detail stuffed into the description** — bloats every turn's context; move it to
   the docstring.
-- **No docstring** — `help()` shows a signature and "(no docstring)"; gotchas vanish.
+- **No docstring** — the model sees nothing but a signature; gotchas vanish.
 - **Top-level side effects** — the file is exec'd into every kernel at boot; keep
   module-level code to definitions (no prints, no network, no slow imports at module scope).
-- **Filename ≠ public name** — a mismatch confuses `ls()`/`help()` mapping.
+- **Filename ≠ public name** — a mismatch confuses the namespace and prompts.
 
 ## Disabling a file without deleting it
 
@@ -111,9 +111,10 @@ helpers.
 At a `pi --repl` prompt, run a cell:
 
 ```python
-print(ls())                       # list what's loaded
-print(help('web_search'))           # a helper you added
+print([k for k in globals() if not k.startswith('_')])  # what's loaded
+print(double(3))                                          # call it
 ```
 
-If `my_step` shows in `ls()` and `help` explains it, it loaded. The `execute` tool's
-prompt guidance also shows its `helper_description` verbatim after the next restart.
+If the helper's name shows in the printed namespace and it runs, it loaded. The
+`execute` tool's prompt guidance also shows its `helper_description` verbatim
+after the next restart.
