@@ -67,8 +67,8 @@ nothing.
 ## Helpers loading
 
 At boot the guest and the host both read the SINGLE helpers directory (the
-fixed `~/.pi/agent/pi-repl/helpers`; the installer seeds `shell.py` + `edit.py`
-there on first use). There is no shipped toolbox that merges in.
+fixed `~/.pi/agent/pi-repl/helpers`; created empty on install, no default
+helpers seeded). There is no shipped toolbox that merges in.
 
 - **guest** execs each `*.py` into the kernel namespace, making helpers callable.
 - **host** reads the same files to build the helper list on the `execute` tool's

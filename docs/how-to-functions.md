@@ -6,11 +6,11 @@ model through the `execute` tool's prompt — its `helper_description` appears *
 in the prompt. The file is the single source of truth for what the model is told; the
 loader parses nothing.
 
-The philosophy: helpers are **low-power building blocks**, not finished tools. A helper
-owns only the fragile or opaque part the model can't reliably reconstruct (safe shell
-teardown, a web endpoint it can't invent). The model does the real work — the command,
-the parsing, the decisions — in code around it, and wraps recurring shapes into **its own**
-helpers. Never ship a "tool" that does the model's job for it.
+The philosophy: helpers are **additions the user chooses**, for things the REPL
+doesn't already provide natively (e.g. a `web_search` with provider failover).
+Shell and file IO are **not** helpers — the REPL gives those as ordinary
+Python (`subprocess`, `!cmd`, `%%bash`, `open`, `pathlib`). A helper owns only
+the fragile or opaque part the model can't reliably reconstruct.
 
 > **When a change shows up.** The kernel loads the helpers at boot, and the `execute`
 > tool builds its list at registration, so a change (add/remove a file, edit a
@@ -21,8 +21,9 @@ helpers. Never ship a "tool" that does the model's job for it.
 There is exactly **one** helpers directory — fixed at `~/.pi/agent/pi-repl/helpers`. There is
 no config file and no knob; this is the only helpers dir and the only source — its content
 is everything that loads (add a `.py`, edit one, delete one freely). There is no helper
-folder anywhere in the repo or package; the default `shell` and `edit` blocks are seeded
-straight into this dir on install (only if missing, so your edits are never overwritten).
+folder anywhere in the repo or package; the dir is created empty on install. Shell and file
+IO are native (not helpers), so a new pi-repl install has **no** preloaded helpers until
+you add one.
 
 ## The anatomy of a helper file
 
@@ -111,7 +112,7 @@ At a `pi --repl` prompt, run a cell:
 
 ```python
 print(ls())                       # list what's loaded
-print(help('shell'))              # the shipped helper's real explanation
+print(help('web_search'))           # a helper you added
 ```
 
 If `my_step` shows in `ls()` and `help` explains it, it loaded. The `execute` tool's

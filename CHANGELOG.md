@@ -2,6 +2,30 @@
 
 All notable changes to pi-repl, grouped by day and by type.
 
+## 2026-08-11 — Evict the shell() and edit() helpers; the REPL is plain Python
+
+### Removed
+
+- **Deleted the `shell()` and `edit()` helper blocks** (both the shipped defaults and
+  the embeddings in `scripts/setup-venv.mjs`). A REPL already *is* a shell and a file
+  editor, and the model kept defaulting to plain Python (`subprocess`, `!cmd`, `%%bash`,
+  `open`, `pathlib`) anyway — the wrappers were redundant complexity for the model to
+  ignore. `web_search()` stays (for now; to be redesigned separately).
+
+### Changed
+
+- **`scripts/setup-venv.mjs` no longer seeds any helpers.** It creates the user helpers
+  dir empty on install; nothing is preloaded. Shell and file IO are native to the REPL.
+- **The prompt now says shell and file IO are ordinary Python** — no special helper to
+  learn. `!cmd`/`%%bash` for shell, `open()`/`pathlib.Path` for files.
+- **The guest contract tests** dropped the shell/edit block suites and now assert the
+  evicted helpers are *not* advertised by `ls()`, while any user helper still loads.
+
+### Notes
+
+- A fresh install has **zero** preloaded helpers until the user adds one (e.g.
+  `web_search.py`).
+
 ## 2026-08-10 — Drop the config.json surface
 
 ### Removed

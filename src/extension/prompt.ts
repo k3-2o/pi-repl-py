@@ -1,75 +1,48 @@
 // --- prompt: the execute tool's model-facing contract (pure, no pi/helper dep) ---
-// The description + snippet use a BROAD term ("helpers", "low-level blocks")
-// rather than naming any Python type (no "context manager"/no "class"), so we can
-// add more helper shapes later without rewriting the contract. The precise
-// mechanics of each helper live in the guidelines, not here.
 
 export const executeToolDescription =
 	"Execute Python in a persistent REPL — the session's working memory, notebook-style. Variables, imports, " +
-	"and defs survive across cells; `!cmd` runs shell and the usual magics work. A few LOW-LEVEL helpers are " +
-	"preloaded for the awkward bits (shell, edit, web) — building blocks that own only the hard part, not finished " +
-	"tools; `ls()` lists them, `help(name)` shows what one's for. Wrap them into your OWN helpers when a " +
-	"pattern recurs. File IO and scripting are ordinary Python. A cell returns its final expression; anything " +
+	"and defs survive across cells. Shell and file IO are ordinary Python: `!cmd` / `%%bash` run shell, and " +
+	"`open()` / `pathlib.Path` read and write files — no helper needed. Any preloaded helpers you add are " +
+	"listed by `ls()`; `help(name)` shows what one's for. Wrap recurring chains into your own reusable " +
+	"functions — they become part of your session workspace. A cell returns its final expression; anything " +
 	"else prints. Runs in the project-local venv, so a command that starts python or pip must target that venv.";
 
 export const executePromptSnippet =
 	"Execute Python in a persistent REPL (notebook): state survives across cells, `!` runs shell, magics " +
-	"work, and a few low-level helpers are preloaded (`ls()` / `help(name)`). Wrap them into your own helpers " +
-	"when a pattern recurs; file IO and scripting are ordinary Python";
+	"work. Shell and file IO are ordinary Python; your own defs persist and are reusable. `ls()` lists your " +
+	"workspace, `help(name)` shows usage.";
 
-// --- the helper doctrine riding the execute tool ---
+// --- the workspace doctrine riding the execute tool ---
 export function buildPromptGuidelines(preloaded: string[]): string[] {
 	return [
-		"## What's in every cell",
-		...preloaded,
-		"Not sure what's available? Call ls() first; help(name) tells you what one is.",
+		"## This workspace is persistent",
+		"Everything you define — variables, imports, functions — survives across the whole session. " +
+			"If a value, file, or function is already loaded, reuse it. Don't re-read an unchanged file or " +
+			"re-derive a value just because it is earlier in the transcript.",
 		"",
-		"## How to use them",
-		"These are LOW-LEVEL helpers, not finished tools: each owns only a fragile or opaque part (safe shell " +
-			"teardown, or a web endpoint you can't invent). The actual work happens in your code — the command, " +
-			"arguments, parsing, and decisions are yours.",
-		"Build your own tools: when the same shape recurs across cells (the same fetch, filter, or transform), " +
-			"wrap it ONCE into your own function/helper and reuse it. ls() lists the helpers plus every function " +
-			"you've defined — that list is your library. Reaching for an existing def beats rewriting its logic; " +
-			"rewriting is the failure mode. A new def of the same name overwrites the old one, so extend the " +
-			"existing helper rather than forking a near-copy.",
+		"## Shell & files are plain Python",
+		"`!cmd` runs a shell command fire-and-forget; `%%bash` runs a shell cell. Use `subprocess.run(...)` " +
+			"when you need the result back in a variable. File IO is `open(...)` / `pathlib.Path` — read, " +
+			"transform, write. There is no special helper to learn.",
 		"",
-		"## Shell, files & editing",
-		"File IO and scripting are plain Python — read & write with Path.read_text()/write_text(); don't wrap " +
-			"them. The shell helper is a block (`with <shell>() as s:` then `s.run(cmd)`) that only handles the " +
-			"shell plumbing; you decide the command and what the structured result (returncode/stdout/stderr) " +
-			"means. The edit helper is a block too (`with edit(path) as ed:` then mutate `ed.text`) that only " +
-			"handles a SAFE save (atomic write, a stale-file abort, and ed.edit which fails unless " +
-			"the target text is unique) — you decide exactly what text to " +
-			"change. A small in-place edit beats rewriting the whole file. `!cmd` runs a shell command " +
-			"fire-and-forget; `%%bash`/`%timeit` and the other magics work.",
-		"Set a timeout deliberately: pass a GENEROUS timeout to a helper for long-running installs or builds " +
-			"(be patient), and a small one only when you know work is quick. The evaluator's own watchdog is the " +
-			"backstop, not your policy.",
-		"Define a function when a shape recurs; don't wrap a one-off call in a def — just run the cell.",
-		"",
-		"## Examples",
-		"Good — define a recurring shape once, then call it by arguments:",
-		"  def log_lines(since='-10'):\n      with shell() as s:\n          r = s.run('git log --oneline ' + since)\n" +
-			"      return r.stdout.splitlines()",
-		"  log_lines()",
-		"  log_lines('-20')",
+		...(preloaded.length
+			? ["## Your helpers", ...preloaded, "ls() lists them, help(name) shows what one's for.", ""]
+			: []),
+		"## Compose, then crystallize",
+		"Start with direct calls. If the same chain appears more than once, wrap it in a `def` and call it " +
+			"by arguments. One-off logic: run the cell. Recurring shape: a quick function. Frequent or complex " +
+			"shape: a polished reusable function that composes other helpers and your own code.",
 		"",
 		"## Efficiency",
-		"Context is the budget: everything a cell prints lands in the transcript for the whole turn. Print " +
-			"slices, counts, or names — never whole files or dumps — and keep large values in variables. A `;` " +
-			"at the end of a cell suppresses its last-expression echo.",
-		"Search output is the classic bloat trap: the web helper returns long payloads. Store the result in a " +
-			"variable, print a lean digest (titles + links, or hit counts), and pull the full text only when a " +
-			"result looks relevant — never stream the whole content list.",
-		"For whole-filesystem or large-directory scans, use the shell (find, du, grep) not a Python os.walk: it " +
-			"pays a syscall per file and runs minutes on a big tree. Example: `find -xdev -type f -size +100M | " +
-			"sort -rn | head`. Reserve Python for analysing the results.",
+		"Printing is a context cost: everything a cell prints stays in the transcript for the whole turn. " +
+			"Print slices, counts, and names — never whole files or dumps. Keep large values in variables. " +
+			"End a cell with `;` to suppress the last-expression echo. For deep searches, use shell tools " +
+			"(`fd`, `rg`, `du`, `grep`) instead of Python loops.",
 		"",
-		"## When it breaks",
-		"If the output starts with <repl_engine_reset>, the kernel was rebuilt: data is restored but your " +
-			"functions are gone — recreate any helper you need and re-verify a variable before trusting it.",
-		"The standard library is available; don't install packages into the evaluator. Run out-of-tree projects " +
-			"through their own environment.",
+		"## Guards",
+		"Give long installs/builds a generous timeout. If the output starts with `<repl_engine_reset>`, the " +
+			"kernel was rebuilt: your defs and imports are gone — recreate only what you need and re-verify " +
+			"variables before trusting them.",
 	];
 }

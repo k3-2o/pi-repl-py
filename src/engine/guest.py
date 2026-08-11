@@ -85,10 +85,11 @@ def _helper_files(directory):
 
 # The helpers dir is the SINGLE, user-owned config location under
 # ~/.pi/agent/pi-repl/helpers — the only place a helper .py ever lives. The
-# default shell.py + edit.py are emitted by scripts/setup-venv.mjs into this
-# dir on install (never clobbering a file you've edited); there is no helper
-# folder anywhere in the package and no built-in merge. What's in this one dir
-# is all the kernel ever loads.
+# dir is created by scripts/setup-venv.mjs on install (never clobbering a file
+# you've edited); there is no helper folder anywhere in the package and no
+# built-in merge. What's in this one dir is all the kernel ever loads. Shell
+# and file IO are the REPL's own (via Python); helpers exist for things the
+# user chooses to add (e.g. web_search).
 DEFAULT_HELPERS_DIR = os.path.expanduser("~/.pi/agent/pi-repl/helpers")
 HELPERS_DIR = os.environ.get("PI_HELPERS_DIR", "").strip() or DEFAULT_HELPERS_DIR
 _HELPER_SRC = _helper_files(HELPERS_DIR)
