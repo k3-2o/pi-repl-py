@@ -1,48 +1,75 @@
 // --- prompt: the execute tool's model-facing contract (pure, no pi/helper dep) ---
 
 export const executeToolDescription =
-	"Execute Python in a persistent REPL — the session's working memory, notebook-style. Variables, imports, " +
-	"and defs survive across cells. Shell and file IO are ordinary Python: `!cmd` / `%%bash` run shell, and " +
-	"`open()` / `pathlib.Path` read and write files — no helper needed. Any preloaded helpers you add are " +
-	"listed by `ls()`; `help(name)` shows what one's for. Wrap recurring chains into your own reusable " +
-	"functions — they become part of your session workspace. A cell returns its final expression; anything " +
-	"else prints. Runs in the project-local venv, so a command that starts python or pip must target that venv.";
+	"You have one tool: a persistent Python workspace backed by a real `ipython` kernel. " +
+	"Variables, imports, functions, and data survive across cells and turns. Use this tool to read files, " +
+	"run shell commands, search code, transform data, and build up solutions — all inside Python. " +
+	"Helpers in `~/.pi/agent/pi-repl/helpers/` are loaded at boot as functions; use `ls()` to see what's " +
+	"loaded and `help(name)` for details. A cell returns its final expression; printed output is captured " +
+	"separately.";
 
 export const executePromptSnippet =
-	"Execute Python in a persistent REPL (notebook): state survives across cells, `!` runs shell, magics " +
-	"work. Shell and file IO are ordinary Python; your own defs persist and are reusable. `ls()` lists your " +
-	"workspace, `help(name)` shows usage.";
+	"Use the Python workspace: keep state in variables, batch independent reads/searches in one cell, " +
+	"edit files safely, and iterate in small cells.";
 
 // --- the workspace doctrine riding the execute tool ---
 export function buildPromptGuidelines(preloaded: string[]): string[] {
 	return [
-		"## This workspace is persistent",
-		"Everything you define — variables, imports, functions — survives across the whole session. " +
-			"If a value, file, or function is already loaded, reuse it. Don't re-read an unchanged file or " +
-			"re-derive a value just because it is earlier in the transcript.",
+		"## This workspace is your only tool",
+		"In `--repl` mode, `execute` is the only callable tool. Read files, run shell, search, and edit " +
+			"all happen inside Python.",
+		"",
+		"## The loop is generate → execute → observe → iterate",
+		"Write a cell, run it, observe the result, then write the next cell. Build solutions incrementally.",
+		"",
+		"## State persists",
+		"Variables, imports, and functions survive across cells and turns. Assign read/search results to " +
+			"named variables and reuse them.",
+		"",
+		"## Chain big tasks into verifiable steps",
+		"Break ambitious requests into independently checkable steps. Confirm assumptions before writing " +
+			"code that depends on them.",
 		"",
 		"## Shell & files are plain Python",
-		"`!cmd` runs a shell command fire-and-forget; `%%bash` runs a shell cell. Use `subprocess.run(...)` " +
-			"when you need the result back in a variable. File IO is `open(...)` / `pathlib.Path` — read, " +
-			"transform, write. There is no special helper to learn.",
+		"`!cmd` / `%%bash` for fire-and-forget shell; `subprocess.run(...)` when you need the result back as " +
+			"a value. `open()` / `pathlib` read and write files. For safe edits: read the full file, modify " +
+			"in memory, write once, then re-read to verify.",
+		"",
+		"## Batch independent work, keep exploratory cells small",
+		"Batch independent reads, searches, and setup steps in one cell to reduce round-trips. Keep " +
+			"exploratory/iterative cells small so you can observe and adjust.",
+		"",
+		"## Search efficiently",
+		"Use `rg`, `fd`, `grep`, `find` via `subprocess.run` for deep searches, not Python loops.",
 		"",
 		...(preloaded.length
-			? ["## Your helpers", ...preloaded, "ls() lists them, help(name) shows what one's for.", ""]
+			? [
+					"## Helpers",
+					"User helpers load from `~/.pi/agent/pi-repl/helpers/`. Their descriptions appear below. " +
+						"Use `ls()` and `help(name)` to discover them at runtime.",
+					"",
+					...preloaded,
+					"",
+				]
 			: []),
-		"## Compose, then crystallize",
-		"Start with direct calls. If the same chain appears more than once, wrap it in a `def` and call it " +
-			"by arguments. One-off logic: run the cell. Recurring shape: a quick function. Frequent or complex " +
-			"shape: a polished reusable function that composes other helpers and your own code.",
+		"## Compose and reuse",
+		"If the same pattern appears more than once, wrap it in a `def` and reuse it.",
 		"",
-		"## Efficiency",
-		"Printing is a context cost: everything a cell prints stays in the transcript for the whole turn. " +
-			"Print slices, counts, and names — never whole files or dumps. Keep large values in variables. " +
-			"End a cell with `;` to suppress the last-expression echo. For deep searches, use shell tools " +
-			"(`fd`, `rg`, `du`, `grep`) instead of Python loops.",
+		"## Output discipline",
+		"Printing is a context cost: everything a cell prints stays in the transcript. Print slices, " +
+			"counts, and summaries. Keep large values in variables. End a cell with `;` to suppress the " +
+			"last-expression echo.",
 		"",
-		"## Guards",
-		"Give long installs/builds a generous timeout. If the output starts with `<repl_engine_reset>`, the " +
-			"kernel was rebuilt: your defs and imports are gone — recreate only what you need and re-verify " +
-			"variables before trusting them.",
+		"## Environment boundary",
+		"The evaluator runs in a project-local venv, not the system Python. Do not install a target project's " +
+			"dependencies into the evaluator just to make that project run there. Run external projects " +
+			"through their own interface and normal commands.",
+		"",
+		"## Engine reset guard",
+		"If the output begins with `<repl_engine_reset>`, the kernel was rebuilt from the last snapshot. " +
+			"Some variables may be revived, some lost, and anything defined after the snapshot is gone. " +
+			"Re-verify variables before reusing them — never interpolate a restored variable into a shell " +
+			"command until you have confirmed it still holds what you expect. Functions, classes, and live " +
+			"handles cannot be snapshotted and must be redefined.",
 	];
 }
