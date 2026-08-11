@@ -21,7 +21,7 @@ the kernel stayed alive.
 
 ```bash
 # from a clone, one-time setup
-just setup            # npm install + a project-local .venv with the guest deps
+just setup            # npm install + a project-local .venv with ipykernel
 
 # run a session
 pi --repl

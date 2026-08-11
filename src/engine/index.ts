@@ -1,31 +1,31 @@
-// --- EngineManager: the host half; one python3 guest over a private fd3 line-JSON pipe ---
+// --- EngineManager: the host half of pi-repl's evaluator ---
+//
+// Orchestration over KernelClient (src/engine/kernel.ts), which speaks the
+// standard Jupyter protocol directly to a real ipykernel subprocess over ZMTP
+// (src/engine/zmtp.ts + session.ts). There is no guest.py middleman anymore:
+// the fd3 JSON protocol and its nonce existed only because the host did not
+// speak the kernel's own protocol, and are gone with it.
+//
+// This class keeps the parts that are about *managing* the evaluator, not
+// about the wire: the venv resolution, lazy spawn, the execution queue,
+// snapshot debounce + file persistence, output truncation markers, abort
+// grace (interrupt, then kill as backstop), and process-wide teardown.
 
-import { type ChildProcess, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import {
-	decodeMessage,
-	encodeMessage,
-	type GuestToHostMessage,
-	type HostToGuestMessage,
-	NONCE_ENV,
-	PROTOCOL_FD,
-} from "./protocol.js";
+import { KernelClient } from "./kernel.js";
 
-const GUEST_PATH = fileURLToPath(new URL("./guest.py", import.meta.url));
+const GUEST_REL = fileURLToPath(new URL("./kernel.js", import.meta.url));
 
-// --- venv created by the package postinstall ---
 function installVenvPython(): string {
 	return join(homedir(), ".pi", "agent", "pi-repl", "venv", "bin", "python3");
 }
 
-// --- prefer a venv with ipykernel; else PYTHON or python3 ---
+/** Prefer a venv with ipykernel; else $PYTHON or python3. */
 function resolvePythonPath(cwd: string | undefined): string {
-	const repoVenv = join(dirname(GUEST_PATH), "..", "..", ".venv", "bin", "python3");
+	const repoVenv = join(dirname(GUEST_REL), "..", "..", ".venv", "bin", "python3");
 	if (existsSync(repoVenv)) return repoVenv;
 	const cwdVenv = cwd ? join(cwd, ".venv", "bin", "python3") : "";
 	if (cwdVenv && existsSync(cwdVenv)) return cwdVenv;
@@ -33,12 +33,10 @@ function resolvePythonPath(cwd: string | undefined): string {
 	if (existsSync(installVenv)) return installVenv;
 	return process.env.PYTHON ?? "python3";
 }
+
 const DEFAULT_MAX_OUTPUT_CHARS = 65536;
-const READY_TIMEOUT_MS = 30_000;
 const ABORT_GRACE_MS = 500;
-const PING_TIMEOUT_MS = 5_000;
 const DEFAULT_SNAPSHOT_DEBOUNCE_MS = 1500;
-const SNAPSHOT_REQUEST_TIMEOUT_MS = 30_000;
 
 interface EngineExecuteError {
 	/** Error class name, e.g. "TypeError". */
@@ -59,7 +57,7 @@ export interface ExecuteResult {
 }
 
 export interface ExecuteOptions {
-	/** Aborting cancels the cell cooperatively; namespace is preserved. */
+	/** Aborting cancels the cell via kernel interrupt; the namespace is preserved. */
 	signal?: AbortSignal;
 	onStream?: (chunk: string, name: "stdout" | "stderr") => void;
 	/** Cap stdout / stderr / result at this many characters. Default 65536. */
@@ -91,44 +89,8 @@ export interface EngineOptions {
 	};
 }
 
-/**
- * Thrown when a cancelled cell is still occupying the evaluator. Cancellation is
- * cooperative; the caller recovers by killing the engine and restoring.
- */
-export class EngineBusyError extends Error {
-	constructor() {
-		super("Engine is still running the previously interrupted cell. Kill the engine to start fresh.");
-		this.name = "EngineBusyError";
-	}
-}
-
-interface ActiveExecution {
-	cellId: string;
-	code: string;
-	started: number;
-	maxChars: number;
-	opts: ExecuteOptions;
-	stdout: string;
-	stderr: string;
-	stdoutTruncated: boolean;
-	stderrTruncated: boolean;
-	result?: string;
-	error?: EngineExecuteError;
-	status: ExecuteResult["status"];
-	settled: boolean;
-	/** Set on cancellation: a cancelled cell must stop contributing output at once. */
-	abortRequested: boolean;
-	/** Cumulative chars forwarded to onStream; capped so the live view can't grow unbounded. */
-	streamedChars: number;
-	/**
-	 * Aborts host-side work done on this cell's behalf.
-	 */
-	hostAbort: AbortController;
-	resolve(result: ExecuteResult): void;
-	reject(error: Error): void;
-}
-
-// --- process-wide cleanup: guests killed on exit; the guest self-exits on stdin EOF ---
+// --- process-wide cleanup: kernels killed on exit (a child does not die with
+// its parent; the old guest self-exited on stdin EOF, a plain ipykernel won't) ---
 
 const liveEngines = new Set<EngineManager>();
 let cleanupHandlersInstalled = false;
@@ -141,12 +103,6 @@ function installProcessCleanupOnce(): void {
 	});
 }
 
-interface PendingRequest {
-	resolve(message: GuestToHostMessage): void;
-	reject(error: Error): void;
-	timer?: ReturnType<typeof setTimeout>;
-}
-
 function truncateWithMarker(text: string, maxChars: number, wasTruncated: boolean): string {
 	if (!wasTruncated && text.length <= maxChars) return text;
 	return `${text.slice(0, maxChars)}\n[... output truncated at ${maxChars} chars ...]`;
@@ -154,27 +110,19 @@ function truncateWithMarker(text: string, maxChars: number, wasTruncated: boolea
 
 export class EngineManager {
 	private readonly options: EngineOptions;
-	private child?: ChildProcess;
+	private kernel?: KernelClient;
 	private state: "idle" | "starting" | "running" | "shutdown" = "idle";
 	private startPromise?: Promise<void>;
 	private executionQueue: Promise<unknown> = Promise.resolve();
-	private activeExecution?: ActiveExecution;
-	private readonly pendingRequests = new Map<string, PendingRequest>();
-	private readonly nonce = randomUUID().replaceAll("-", ""); // --- per-process protocol nonce ---
-	private guestStderr = ""; // --- tail of the guest's stderr, for unexpected-death reports ---
-	private childClosed?: Promise<void>;
-	/** Held so the protocol reader is not garbage-collected mid-session, which
-	 * would close the guest's write end and kill it with EPIPE. */
-	private protocolReader?: ReturnType<typeof createInterface>;
-	private maybeWedged = false;
 	private snapshotTimer?: ReturnType<typeof setTimeout>;
+	private pythonPath?: string;
 
 	constructor(options: EngineOptions = {}) {
 		this.options = options;
 	}
 
 	get isRunning(): boolean {
-		return this.state === "running";
+		return this.state === "running" && (this.kernel?.isRunning ?? false);
 	}
 
 	//--- lifecycle ---
@@ -197,246 +145,48 @@ export class EngineManager {
 		this.state = "starting";
 		installProcessCleanupOnce();
 		liveEngines.add(this);
-		const pythonPath = resolvePythonPath(this.options.cwd);
-		const child = spawn(pythonPath, [GUEST_PATH], {
-			cwd: this.options.cwd,
-			env: {
-				...process.env,
-				...(this.options.env ?? {}),
-				[NONCE_ENV]: this.nonce,
-			},
-			// --- fd 3 is the protocol pipe; stdout/stderr stay user output ---
-			stdio: ["pipe", "pipe", "pipe", "pipe"],
-		});
-		this.child = child;
-		this.childClosed = new Promise((resolve) => child.once("close", () => resolve()));
-
-		const ready = new Promise<void>((resolve, reject) => {
-			const timer = setTimeout(() => reject(new Error("Engine guest did not become ready in time")), READY_TIMEOUT_MS);
-			timer.unref?.();
-			this.pendingRequests.set("__ready__", {
-				resolve: () => {
-					clearTimeout(timer);
-					resolve();
-				},
-				reject: (error) => {
-					clearTimeout(timer);
-					reject(error);
-				},
+		this.pythonPath = resolvePythonPath(this.options.cwd);
+		const timeoutMs = Number(process.env.PI_REPL_TIMEOUT_MS ?? this.options.env?.PI_REPL_TIMEOUT_MS ?? 0) || 0;
+		try {
+			this.kernel = await KernelClient.start(this.pythonPath, {
+				cwd: this.options.cwd,
+				env: this.options.env,
+				timeoutMs,
 			});
-		});
-
-		const protocolStream = child.stdio[PROTOCOL_FD] as NodeJS.ReadableStream | null;
-		if (!protocolStream) {
-			throw new Error("Engine guest was spawned without a protocol pipe on fd 3");
-		}
-		this.protocolReader = createInterface({ input: protocolStream });
-		this.protocolReader.on("line", (line) => this.handleGuestLine(line));
-		// --- guest stdout/stderr are subprocess output; attach to the running cell ---
-		child.stdout!.on("data", (buffer: Buffer) => this.appendActiveOutput("stdout", buffer.toString()));
-		child.stderr!.on("data", (buffer: Buffer) => {
-			const text = buffer.toString();
-			this.guestStderr = (this.guestStderr + text).slice(-4000);
-			this.appendActiveOutput("stderr", text);
-		});
-
-		child.on("error", (error) => {
-			// --- ENOENT names a missing python; say what to install ---
-			const message =
-				(error as NodeJS.ErrnoException).code === "ENOENT"
-					? "Engine process failed: '" +
-						pythonPath +
-						"' was not found on PATH. pi-repl runs its evaluator in Python; ensure python3 is installed and " +
-						"on your PATH, or set $PYTHON to point at the interpreter."
-					: `Engine process failed: ${error.message}`;
-			this.failAllPending(new Error(message));
-			this.transitionToShutdown(message);
-		});
-		child.on("exit", (code, signal) => {
-			// --- a killed child's exit arrives after teardown already moved on ---
-			if (this.child !== child) return;
-			if (this.state !== "shutdown") {
-				const tail = this.guestStderr.trim();
-				const reason =
-					`Engine process exited unexpectedly (code=${code} signal=${signal})` +
-					(tail ? `\nguest stderr:\n${tail.slice(-1500)}` : "");
-				this.failAllPending(new Error(reason));
-				this.transitionToShutdown(reason);
-			}
-		});
-
-		// --- on a boot timeout tear down the child and reset state, or a retried start orphans it ---
-		await ready.catch((error) => {
-			if (this.child === child) this.child = undefined;
-			this.protocolReader?.close();
-			this.protocolReader = undefined;
-			child.kill("SIGKILL");
+		} catch (error) {
 			if (this.state === "starting") this.state = "idle";
+			liveEngines.delete(this);
 			throw error;
-		});
+		}
 		// --- win the shutdown race: don't resurrect a killed engine as running ---
-		if ((this.state as string) === "shutdown") throw new Error("Engine has been shut down");
+		if (this.state === "shutdown") {
+			this.kernel?.kill();
+			this.kernel = undefined;
+			throw new Error("Engine has been shut down");
+		}
 		this.state = "running";
 	}
 
-	private transitionToShutdown(reason: string): void {
-		this.state = "shutdown";
+	/** Abrupt teardown: SIGKILL the kernel; safe from process.on("exit"). */
+	killSync(): void {
 		this.clearSnapshotTimer();
-		const active = this.activeExecution;
-		if (active && !active.settled) {
-			this.activeExecution = undefined;
-			active.settled = true;
-			active.reject(new Error(reason));
-		}
-	}
-
-	private failAllPending(error: Error): void {
-		for (const [, pending] of this.pendingRequests) {
-			if (pending.timer) clearTimeout(pending.timer);
-			pending.reject(error);
-		}
-		this.pendingRequests.clear();
+		this.state = "shutdown";
+		liveEngines.delete(this);
+		this.kernel?.kill();
+		this.kernel = undefined;
 	}
 
 	async kill(): Promise<void> {
-		const closed = this.childClosed;
 		this.killSync();
-		// --- wait for pipes to close so a fast respawn doesn't recycle descriptors ---
-		if (closed) {
-			await Promise.race([closed, new Promise<void>((resolve) => setTimeout(resolve, 2000).unref?.())]);
-		}
 	}
 
-	/** Synchronous teardown, safe from process.on("exit"). */
-	killSync(): void {
-		this.clearSnapshotTimer();
-		const active = this.activeExecution;
-		if (active && !active.settled) {
-			active.status = "aborted";
-			this.settleActiveExecution(active);
-		}
-		this.state = "shutdown";
-		liveEngines.delete(this);
-		this.failAllPending(new Error("Engine has been shut down"));
-		this.child?.kill("SIGKILL");
-		this.child = undefined;
-		this.protocolReader?.close();
-		this.protocolReader = undefined;
-	}
-
-	/** Graceful cleanup: flush a final snapshot, then terminate the guest. */
+	/** Graceful cleanup: flush a final snapshot, then terminate the kernel. */
 	async dispose(): Promise<void> {
 		if (this.state === "running") {
 			await this.snapshotState().catch(() => null);
 		}
-		await this.kill();
-	}
-
-	//--- guest messaging ---
-
-	private sendToGuest(message: HostToGuestMessage): void {
-		// --- a write into a dying child can throw; callers learn via the exit path ---
-		try {
-			this.child?.stdin?.write(encodeMessage(message, this.nonce));
-		} catch {}
-	}
-
-	private request(message: HostToGuestMessage & { id: string }, timeoutMs: number): Promise<GuestToHostMessage> {
-		const pending = new Promise<GuestToHostMessage>((resolve, reject) => {
-			const timer = setTimeout(() => {
-				this.pendingRequests.delete(message.id);
-				reject(new Error(`Engine request ${message.type} timed out`));
-			}, timeoutMs);
-			timer.unref?.();
-			this.pendingRequests.set(message.id, { resolve, reject, timer });
-			this.sendToGuest(message);
-		});
-		// --- a caller that moved on isn't listening; that rejection could escape as unhandled ---
-		pending.catch(() => {});
-		return pending;
-	}
-
-	private handleGuestLine(line: string): void {
-		// --- fd 3 is protocol-only; undecodable lines are discarded ---
-		const message = decodeMessage<GuestToHostMessage>(line, this.nonce);
-		if (!message) return;
-		switch (message.type) {
-			case "ready": {
-				const pending = this.pendingRequests.get("__ready__");
-				if (pending) {
-					this.pendingRequests.delete("__ready__");
-					pending.resolve(message);
-				}
-				break;
-			}
-			case "stream": {
-				const active = this.activeExecution;
-				// --- untagged output belongs to no cell; don't attribute it ---
-				if (!active || active.settled || message.cellId !== active.cellId) return;
-				this.appendOutput(active, message.name, message.chunk);
-				break;
-			}
-			case "done": {
-				const active = this.activeExecution;
-				if (!active || active.settled || active.cellId !== message.cellId) return;
-				if (message.status === "error") {
-					active.status = "error";
-					active.error = message.error;
-				} else if (message.status === "aborted") {
-					active.status = "aborted";
-				} else {
-					active.result = message.result;
-				}
-				this.settleActiveExecution(active);
-				break;
-			}
-			case "pong": {
-				this.resolveRequest(message.id, message);
-				break;
-			}
-			case "snapshot_result":
-			case "restore_result":
-			case "names_result": {
-				this.resolveRequest(message.id, message);
-				break;
-			}
-		}
-	}
-
-	private resolveRequest(id: string, message: GuestToHostMessage): void {
-		const pending = this.pendingRequests.get(id);
-		if (!pending) return;
-		this.pendingRequests.delete(id);
-		if (pending.timer) clearTimeout(pending.timer);
-		pending.resolve(message);
-	}
-
-	//--- output accumulation ---
-
-	private appendActiveOutput(name: "stdout" | "stderr", text: string): void {
-		const active = this.activeExecution;
-		if (!active || active.settled) return;
-		this.appendOutput(active, name, text);
-	}
-
-	private appendOutput(active: ActiveExecution, name: "stdout" | "stderr", text: string): void {
-		if (active.abortRequested) return;
-		const key = name === "stdout" ? "stdout" : "stderr";
-		const truncatedKey = name === "stdout" ? "stdoutTruncated" : "stderrTruncated";
-		if (active[key].length < active.maxChars) {
-			active[key] += text;
-			if (active[key].length > active.maxChars) {
-				active[key] = active[key].slice(0, active.maxChars);
-				active[truncatedKey] = true;
-			}
-		} else {
-			active[truncatedKey] = true;
-		}
-		// --- cap the live stream feed, so partial content can't grow past the output budget ---
-		const room = active.maxChars - active.streamedChars;
-		const forward = Math.min(text.length, Math.max(0, room));
-		if (forward > 0) active.opts.onStream?.(text.slice(0, forward), name);
-		active.streamedChars += forward;
+		await this.kernel?.shutdown();
+		this.killSync();
 	}
 
 	//--- execute ---
@@ -458,126 +208,68 @@ export class EngineManager {
 				throw new Error("Engine has been shut down");
 			}
 			await this.start();
-			if ((this.state as string) === "shutdown") {
+			if (this.state === "shutdown") {
 				throw new Error("Engine has been shut down");
 			}
-			if (this.maybeWedged) {
-				await this.assertGuestResponsive();
-			}
-			const result = await this.executeInner(code, opts);
-			if (result.status === "ok") this.scheduleSnapshot();
-			return result;
-		} finally {
-			release();
-		}
-	}
 
-	private async assertGuestResponsive(): Promise<void> {
-		try {
-			await this.request({ type: "ping", id: randomUUID() }, PING_TIMEOUT_MS);
-			this.maybeWedged = false;
-		} catch (error) {
-			if (this.state === "shutdown" || !this.child) {
-				throw new Error("Engine has been shut down");
-			}
-			void error;
-			throw new EngineBusyError();
-		}
-	}
-
-	private executeInner(code: string, opts: ExecuteOptions): Promise<ExecuteResult> {
-		const cellId = randomUUID();
-		const started = Date.now();
-
-		return new Promise<ExecuteResult>((resolve, reject) => {
-			const active: ActiveExecution = {
-				cellId,
-				code,
-				started,
-				maxChars: opts.maxOutputChars ?? DEFAULT_MAX_OUTPUT_CHARS,
-				opts,
-				stdout: "",
-				stderr: "",
-				stdoutTruncated: false,
-				stderrTruncated: false,
-				status: "ok",
-				settled: false,
-				abortRequested: false,
-				streamedChars: 0,
-				hostAbort: new AbortController(),
-				resolve,
-				reject,
-			};
-			this.activeExecution = active;
-
+			const started = Date.now();
+			const maxChars = opts.maxOutputChars ?? DEFAULT_MAX_OUTPUT_CHARS;
+			let aborted = false;
 			let graceTimer: ReturnType<typeof setTimeout> | undefined;
 			const onAbort = () => {
-				active.abortRequested = true;
-				active.hostAbort.abort();
-				this.sendToGuest({ type: "abort", cellId });
-				this.maybeWedged = true;
+				aborted = true;
+				this.kernel?.interrupt();
+				// --- interrupt is real (KeyboardInterrupt in the kernel), but a
+				// cell wedged in C code ignores it; then kill and rebuild ---
 				graceTimer = setTimeout(() => {
-					if (this.activeExecution === active && !active.settled) {
-						active.status = "aborted";
-						this.settleActiveExecution(active);
+					if (this.state === "running" && this.kernel) {
+						this.state = "shutdown";
+						this.kernel.kill();
+						this.kernel = undefined;
 					}
 				}, ABORT_GRACE_MS);
 				graceTimer.unref?.();
 			};
 			opts.signal?.addEventListener("abort", onAbort, { once: true });
 
-			const originalResolve = active.resolve;
-			active.resolve = (result) => {
+			try {
+				const r = await this.kernel!.executeCell(code, {
+					signal: opts.signal,
+					onStream: opts.onStream,
+					maxOutputChars: maxChars,
+				});
+				if (r.status === "ok") this.scheduleSnapshot();
+				const status: ExecuteResult["status"] = opts.signal?.aborted ? "aborted" : r.status;
+				const truncate = (text: string, truncated: boolean) => truncateWithMarker(text, maxChars, truncated);
+				return {
+					stdout: truncate(r.stdout, r.truncated?.stdout ?? false),
+					stderr: truncate(r.stderr, r.truncated?.stderr ?? false),
+					result: r.result !== undefined ? truncate(String(r.result), String(r.result).length > maxChars) : undefined,
+					error: r.error,
+					status,
+					durationMs: Date.now() - started,
+				};
+			} catch (error) {
+				if (aborted) {
+					return { stdout: "", stderr: "", status: "aborted", durationMs: Date.now() - started };
+				}
+				throw error;
+			} finally {
 				opts.signal?.removeEventListener("abort", onAbort);
 				if (graceTimer) clearTimeout(graceTimer);
-				originalResolve(result);
-			};
-			const originalReject = active.reject;
-			active.reject = (error) => {
-				opts.signal?.removeEventListener("abort", onAbort);
-				if (graceTimer) clearTimeout(graceTimer);
-				originalReject(error);
-			};
-
-			this.sendToGuest({ type: "run", cellId, code });
-		});
-	}
-
-	private settleActiveExecution(active: ActiveExecution): void {
-		if (active.settled) return;
-		active.settled = true;
-		if (this.activeExecution === active) this.activeExecution = undefined;
-
-		// --- a cancelled cell reports "aborted" even if it finished first (caller withdrew) ---
-		let status = active.status;
-		if (active.opts.signal?.aborted) status = "aborted";
-		if (status !== "aborted") this.maybeWedged = false;
-
-		const stdout = truncateWithMarker(active.stdout, active.maxChars, active.stdoutTruncated);
-		const stderr = truncateWithMarker(active.stderr, active.maxChars, active.stderrTruncated);
-		let result = active.result;
-		if (result != null && String(result).length > active.maxChars) {
-			result = truncateWithMarker(String(result), active.maxChars, true);
+			}
+		} finally {
+			release();
 		}
-
-		active.resolve({
-			stdout,
-			stderr,
-			result,
-			error: active.error,
-			status,
-			durationMs: Date.now() - active.started,
-		});
 	}
 
 	//--- snapshot / restore / names ---
 
 	async snapshotState(): Promise<SnapshotResult | null> {
 		const config = this.options.snapshot;
-		if (!config || this.state !== "running") return null;
+		if (!config || this.state !== "running" || !this.kernel) return null;
 		try {
-			const reply = await this.request({ type: "snapshot", id: randomUUID() }, SNAPSHOT_REQUEST_TIMEOUT_MS);
-			if (reply.type !== "snapshot_result") return null;
+			const reply = await this.kernel.snapshot();
 			// --- an incomplete snapshot must not overwrite the last good file ---
 			if (reply.complete === false) return null;
 			mkdirSync(dirname(config.path), { recursive: true });
@@ -594,12 +286,9 @@ export class EngineManager {
 		if (!existsSync(config.path)) return null;
 		await this.start();
 		try {
-			const payload = JSON.parse(readFileSync(config.path, "utf8")) as {
-				vars?: Record<string, string>;
-			};
+			const payload = JSON.parse(readFileSync(config.path, "utf8")) as { vars?: Record<string, string> };
 			const vars = payload.vars ?? {};
-			const reply = await this.request({ type: "restore", id: randomUUID(), vars }, SNAPSHOT_REQUEST_TIMEOUT_MS);
-			if (reply.type !== "restore_result") return null;
+			const reply = await this.kernel!.restore(vars);
 			return { path: config.path, restored: reply.restored, failed: reply.failed };
 		} catch {
 			return null;
@@ -607,10 +296,9 @@ export class EngineManager {
 	}
 
 	async listNamespaceNames(): Promise<string[] | null> {
-		if (this.state !== "running") return null;
+		if (this.state !== "running" || !this.kernel) return null;
 		try {
-			const reply = await this.request({ type: "list_names", id: randomUUID() }, PING_TIMEOUT_MS);
-			return reply.type === "names_result" ? reply.names : null;
+			return await this.kernel.listNames();
 		} catch {
 			return null;
 		}

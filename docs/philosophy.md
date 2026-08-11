@@ -37,7 +37,10 @@ the current step needs.
 ## Why a real kernel
 
 pi-repl does not hand-roll an `exec` loop. It drives a genuine `ipython`
-kernel in a subprocess via `jupyter_client`. That buys:
+kernel in a subprocess, speaking the standard Jupyter protocol directly over
+ZMTP (the host implements the small client-side slice of the wire protocol
+itself — DEALER for shell/control, SUB for iopub — because libzmq's native
+bindings crash bun). That buys:
 
 - rich, real tracebacks instead of a wrapped `except`;
 - the full standard library and real `import` semantics;
@@ -54,7 +57,7 @@ notice. More in `ARCHITECTURE.md`.
 ## The venv as part of the design
 
 Because the evaluator is real Python, it needs a real Python environment with
-`ipykernel` + `jupyter_client`. You cannot conjure that from nothing.
+`ipykernel`. You cannot conjure that from nothing.
 
 The package's `postinstall` creates it once, at a stable user path
 (`~/.pi/agent/pi-repl/venv`), so a `pi install` ends with a working evaluator

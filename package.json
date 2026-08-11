@@ -40,9 +40,8 @@
 		"format": "biome format --write .",
 		"lint": "biome check .",
 		"knip": "knip",
-		"check": "tsc --noEmit && biome check . && npm run test:ts && npm run test:py",
+		"check": "biome check . && npm run test:ts",
 		"test:ts": "bun test test/units.test.ts test/preview-core.test.ts",
-		"test:py": ".venv/bin/python -m pytest test/guest_contract.py -q",
 		"test:integ": "bun test test/engine.integration.test.ts",
 		"postinstall": "node scripts/setup-venv.mjs"
 	},

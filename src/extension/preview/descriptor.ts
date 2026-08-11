@@ -1,5 +1,5 @@
 // --- descriptor: collapse the raw line into one readable, safe, width-capped string ---
-export const DESCRIPTOR_MAX_WIDTH = 64;
+const DESCRIPTOR_MAX_WIDTH = 64;
 
 function collapseWhitespace(text: string): string {
 	return text.replace(/\s+/g, " ").trim();

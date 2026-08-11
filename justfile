@@ -1,43 +1,38 @@
-# pi-repl — TypeScript host + Python guest.
-# Host tooling (bun test, bunx biome) is driven by Bun; guest tooling is ruff + pytest.
+# pi-repl — TypeScript host driving a real ipykernel over the Jupyter protocol.
+# Host tooling (bun test, bunx biome) is driven by Bun; there is no Python guest anymore.
 
-PY := ".venv/bin/python"
 BIOME := "bunx biome"
-RUF := "{{PY}} -m ruff"
+KNIP := "bunx knip"
 
 # ── format ────────────────────────────────────────────────────────────────
 fmt:
 	{{BIOME}} format --write .
-	{{RUF}} format src/ test/ 2>/dev/null || true
 
-# ── lint ──────────────────────────────────────────────────────────────────
+# ── lint (biome) + dead-code (knip) ────────────────────────────────────────
 lint:
 	{{BIOME}} check .
-	{{RUF}} check src/ test/ 2>/dev/null || true
+	{{KNIP}}
 
 # ── typecheck ← flaky on node in this env; kept as a standalone recipe, not in check
+# (the kernel process itself is Python; the host resolves a venv at runtime)
 types:
 	bunx tsc --noEmit
 
 # ── security ──────────────────────────────────────────────────────────────
 security:
 	-npm audit --audit-level=high
-	{{PY}} --version
+	.venv/bin/python --version
 
-# ── check (the gate: fmt + lint + test) ───────────────────────────────────
+# ── check (the gate: fmt + lint[+knip] + test) ─────────────────────────────
 check: fmt lint test
 
 # ── test (the real spec) ──────────────────────────────────────────────────
 test:
-	# Host: the TS host with its own (bun-native) runner.
 	bun test test/units.test.ts test/preview-core.test.ts
-	# Guest: the Python evaluator contract.
-	{{PY}} -m pytest test/guest_contract.py -q
 
-# ── integration (slow: boots a real kernel per engine) ────────────────────
+# ── integration (slow: boots a real kernel per engine; replaces the old guest contract) ──
 integration:
 	bun test test/engine.integration.test.ts
-	{{PY}} -m pytest test/guest_contract.py -q
 
 # ── ci (full gate) ────────────────────────────────────────────────────────
 ci: check
@@ -49,12 +44,13 @@ clean:
 
 # ── setup (from clone to dev-ready) ────────────────────────────────────
 # Creates a project-local venv (system python3 ≥3.11) if missing, then installs
-# deps. CI calls this before running the gate.
+# ipykernel (the host speaks the kernel protocol directly; jupyter_client is not
+# needed by this repo anymore). CI calls this before running the gate.
 setup:
 	npm install
 	# Prefer an existing repo venv; otherwise build one from a system python.
-	if [ ! -x {{PY}} ]; then \
+	if [ ! -x .venv/bin/python ]; then \
 	  python3 -m venv .venv && \
-	  {{PY}} -m pip install --upgrade pip; \
+	  .venv/bin/python -m pip install --upgrade pip; \
 	fi
-	{{PY}} -m pip install pytest ruff ipykernel jupyter_client
+	.venv/bin/python -m pip install ipykernel

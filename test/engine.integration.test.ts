@@ -1,16 +1,16 @@
 /**
- * engine.integration.test.ts — the real host ↔ Python guest seam.
+ * engine.integration.test.ts — the real host ↔ real ipykernel seam.
  *
- * Verifies the engine's auto-snapshot / restore round-trip against the real
- * `ipykernel` guest: a variable set in one engine survives into a freshly
- * spawned engine via the snapshot file (the "survive a restart" guarantee),
- * and that an aborted long cell does not wedge the next engine.
- *
- * These are the slow integration cases (each boots a real Python kernel); they
- * are kept separate from `units.test.ts` on purpose.
+ * These are the guarantees the Python guest contract suite (guest_contract.py)
+ * used to pin: persistence across cells, error survival, output attribution,
+ * helpers loading, snapshot/restore round-trips, output caps, and the per-cell
+ * silence timeout. The guest.py middleman is gone; the host now speaks the
+ * Jupyter protocol directly, so the same guarantees are proven here against a
+ * real kernel — each test boots one or more genuine ipykernel subprocesses,
+ * which is why this suite is slow and kept out of `just check`.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EngineManager } from "../src/engine/index.ts";
@@ -35,13 +35,92 @@ afterAll(async () => {
 	for (const d of tempDirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-describe("host × python-guest integration", () => {
+describe("host × python-kernel integration", () => {
+	test("variables and functions survive across cells", { timeout: 60_000 }, async () => {
+		const d = tempDir();
+		const m = engine({ cwd: d });
+
+		const r1 = await m.execute("x = 10");
+		expect(r1.status).toBe("ok");
+		const r2 = await m.execute("def double(n): return n * 2");
+		expect(r2.status).toBe("ok");
+		const r3 = await m.execute("print('x is', x, 'double is', double(x))");
+		expect(r3.status).toBe("ok");
+		expect(r3.stdout).toContain("x is 10");
+		expect(r3.stdout).toContain("20");
+	});
+
+	test("a raising cell reports a real traceback and does not kill the namespace", { timeout: 60_000 }, async () => {
+		const d = tempDir();
+		const m = engine({ cwd: d });
+
+		await m.execute("x = 7");
+		const bad = await m.execute("1 / 0");
+		expect(bad.status).toBe("error");
+		expect(bad.error?.name).toBe("ZeroDivisionError");
+		expect((bad.error?.stack ?? []).join("\n")).toContain("ZeroDivisionError");
+
+		const ok = await m.execute("y = x + 1");
+		expect(ok.status).toBe("ok");
+		const print = await m.execute("print(y)");
+		expect(print.stdout).toContain("8");
+	});
+
+	test("only printed output and the final result return", { timeout: 60_000 }, async () => {
+		const d = tempDir();
+		const m = engine({ cwd: d });
+
+		const assign = await m.execute("z = 100");
+		expect(assign.status).toBe("ok");
+		expect(assign.stdout).toBe("");
+		expect(assign.result).toBeUndefined();
+
+		const print = await m.execute("print('saw', z)");
+		expect(print.stdout).toContain("saw 100");
+		const result = await m.execute("z * 2");
+		expect(result.result).toBeDefined();
+		expect(result.result).toContain("200");
+	});
+
+	test("ls() and help() are always available and hide IPython noise", { timeout: 60_000 }, async () => {
+		const d = tempDir();
+		// hermetic helpers dir: nothing preloaded
+		const m = engine({ cwd: d, env: { PI_HELPERS_DIR: tempDir() } });
+
+		const ls = await m.execute("print(ls())");
+		expect(ls.status).toBe("ok");
+		for (const noise of ["exit", "quit", "get_ipython", "open"]) {
+			expect(ls.stdout).not.toContain(noise);
+		}
+		expect(ls.stdout).toContain("ls");
+		expect(ls.stdout).toContain("help");
+
+		const help = await m.execute("print(help('ls'))");
+		expect(help.status).toBe("ok");
+	});
+
+	test("a custom helper file loads into the kernel and appears in ls()", { timeout: 60_000 }, async () => {
+		const d = tempDir();
+		const helpers = tempDir();
+		writeFileSync(join(helpers, "double.py"), "def double(n):\n    return n * 2\n");
+		const m = engine({ cwd: d, env: { PI_HELPERS_DIR: helpers } });
+
+		const r = await m.execute("print(double(21))");
+		expect(r.status).toBe("ok");
+		expect(r.stdout).toContain("42");
+
+		const ls = await m.execute("print(ls())");
+		expect(ls.stdout).toContain("double");
+		for (const stale of ["shell", "edit", "read", "write", "bash"]) {
+			expect(ls.stdout).not.toContain(stale);
+		}
+	});
+
 	test("a variable set in one engine survives restart via the snapshot file", { timeout: 60_000 }, async () => {
 		const d = tempDir();
 		const snap = { path: join(d, "ns.snapshot"), debounceMs: 200 };
 		const m1 = engine({ cwd: d, snapshot: snap });
 
-		// set state in a real Python cell
 		const r1 = await m1.execute("saved = {'a': 42, 'b': 'hello'}");
 		expect(r1.status).toBe("ok");
 
@@ -49,48 +128,139 @@ describe("host × python-guest integration", () => {
 		await new Promise((resolve) => setTimeout(resolve, 800));
 		await m1.snapshotState();
 
-		// fresh engine over the same snapshot file → restore the state
 		const m2 = engine({ cwd: d, snapshot: snap });
 		const restore = await m2.restoreState();
 		expect(restore?.restored).toContain("saved");
 
-		// and the value is genuinely readable in the new kernel
 		const r2 = await m2.execute("print(saved['a'], saved['b'])");
 		expect(r2.status).toBe("ok");
 		expect(r2.stdout).toContain("42");
+		expect(r2.stdout).toContain("hello");
 	});
 
-	test("an aborted long cell does not wedge the next engine", { timeout: 90_000 }, async () => {
+	test("snapshot excludes helper metadata and flags completeness", { timeout: 60_000 }, async () => {
+		const d = tempDir();
+		const helpers = tempDir();
+		writeFileSync(
+			join(helpers, "web.py"),
+			'helper_description = """web(query) — stub."""\ndef web(query):\n    return query\n',
+		);
+		const snap = { path: join(d, "ns.snapshot"), debounceMs: 200 };
+		const m = engine({ cwd: d, env: { PI_HELPERS_DIR: helpers }, snapshot: snap });
+
+		await m.execute("data = {'count': 42}");
+		const result = await m.snapshotState();
+		expect(result?.saved).toContain("data");
+		expect(result?.saved).not.toContain("helper_description");
+		expect(result?.saved).not.toContain("web"); // helpers are kernel-side, not user state
+	});
+
+	test("restore reports failed values without crashing the kernel", { timeout: 60_000 }, async () => {
 		const d = tempDir();
 		const snap = { path: join(d, "ns.snapshot"), debounceMs: 200 };
 		const m1 = engine({ cwd: d, snapshot: snap });
-
-		// remember some state, then wait for its debounced snapshot to land
-		const r0 = await m1.execute("notes = {'keep': True}");
-		expect(r0.status).toBe("ok");
+		await m1.execute("good = {'ok': True}");
 		await new Promise((resolve) => setTimeout(resolve, 800));
 		await m1.snapshotState();
+		await m1.kill();
 
-		// kick off a cell that runs past the snapshot, then abort it mid-flight
+		// inject a corrupt entry into the snapshot file, then revive from it
+		const file = JSON.parse(readFileSync(snap.path, "utf8")) as { vars: Record<string, string> };
+		file.vars["junk"] = "not-valid-pickle-base64!!!";
+		writeFileSync(snap.path, JSON.stringify(file));
+
+		const m2 = engine({ cwd: d, snapshot: snap });
+		const restore = await m2.restoreState();
+		expect(restore?.restored).toContain("good");
+		expect(restore?.failed.some((f) => f.name === "junk")).toBe(true);
+
+		const r = await m2.execute("print('still alive', good['ok'])");
+		expect(r.status).toBe("ok");
+		expect(r.stdout).toContain("True");
+	});
+
+	test("output beyond the cap is truncated with a marker, not dropped silently", { timeout: 60_000 }, async () => {
+		const d = tempDir();
+		const m = engine({ cwd: d });
+
+		const r = await m.execute("print('x' * 10_000_000)", { maxOutputChars: 4096 });
+		expect(r.status).toBe("ok");
+		expect(r.stdout.length).toBeGreaterThan(4000);
+		expect(r.stdout).toContain("output truncated at 4096 chars");
+	});
+
+	test("listNamespaceNames lists user state and excludes helpers", { timeout: 60_000 }, async () => {
+		const d = tempDir();
+		const helpers = tempDir();
+		writeFileSync(join(helpers, "double.py"), "def double(n):\n    return n * 2\n");
+		const m = engine({ cwd: d, env: { PI_HELPERS_DIR: helpers } });
+
+		await m.execute("alpha = 1; beta = 2");
+		const names = await m.listNamespaceNames();
+		expect(names).toContain("alpha");
+		expect(names).toContain("beta");
+		expect(names).not.toContain("double");
+	});
+
+	test("a cell that exceeds the silence window is reported as an error", { timeout: 60_000 }, async () => {
+		const d = tempDir();
+		const m = engine({ cwd: d, env: { PI_REPL_TIMEOUT_MS: "400" } });
+
+		const r = await m.execute("import time; time.sleep(1.5); print('late')");
+		expect(r.status).toBe("error");
+		expect(r.error?.name).toBe("Timeout");
+		expect(r.error?.message.toLowerCase()).toContain("did not finish");
+	});
+
+	test("the silence watchdog allows a cell that keeps producing output", { timeout: 60_000 }, async () => {
+		const d = tempDir();
+		const m = engine({ cwd: d, env: { PI_REPL_TIMEOUT_MS: "800" } });
+
+		const r = await m.execute(
+			"import time\nfor _ in range(20):\n    print('beat')\n    time.sleep(0.05)\nprint('done')",
+		);
+		expect(r.status).toBe("ok");
+		expect(r.stdout).toContain("done");
+	});
+
+	test("an aborted cell interrupts the kernel and keeps the namespace alive", { timeout: 90_000 }, async () => {
+		const d = tempDir();
+		const m = engine({ cwd: d });
+
+		await m.execute("notes = {'keep': True}");
+
 		const ac = new AbortController();
 		const start = Date.now();
-		const p1 = m1.execute("import time; time.sleep(60)", { signal: ac.signal });
+		const p = m.execute("import time; time.sleep(60)", { signal: ac.signal });
 		await new Promise((resolve) => setTimeout(resolve, 1200));
 		ac.abort();
-		const r1 = await p1;
-		// the abort must be reported promptly, not after the 60s sleep finishes
+		const r1 = await p;
 		expect(r1.status).toBe("aborted");
 		expect(Date.now() - start).toBeLessThan(10_000);
 
-		// the host's recovery is discard→rebuild: a fresh engine over the same
-		// snapshot must be responsive AND still hold the pre-abort state.
-		await m1.kill();
-		const m2 = engine({ cwd: d, snapshot: snap });
-		const restore2 = await m2.restoreState();
-		expect(restore2?.restored).toContain("notes");
-		const r2 = await m2.execute("print('alive', notes['keep'])");
+		// the kernel was interrupted, not killed: fresh state survives
+		const r2 = await m.execute("print('alive', notes['keep'])");
 		expect(r2.status).toBe("ok");
 		expect(r2.stdout).toContain("alive");
 		expect(r2.stdout).toContain("True");
+	});
+
+	test("a dead kernel settles the next cell with a rebuild from the last snapshot", { timeout: 90_000 }, async () => {
+		const d = tempDir();
+		const snap = { path: join(d, "ns.snapshot"), debounceMs: 200 };
+		const m = engine({ cwd: d, snapshot: snap });
+
+		await m.execute("notes = {'keep': True}");
+		await new Promise((resolve) => setTimeout(resolve, 800));
+		await m.snapshotState();
+
+		await m.kill();
+		const m2 = engine({ cwd: d, snapshot: snap });
+		const restore = await m2.restoreState();
+		expect(restore?.restored).toContain("notes");
+		const r = await m2.execute("print('rebuilt', notes['keep'])");
+		expect(r.status).toBe("ok");
+		expect(r.stdout).toContain("rebuilt");
+		expect(r.stdout).toContain("True");
 	});
 });

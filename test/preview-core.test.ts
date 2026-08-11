@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { descriptor, previewCell, previewShellCommand } from "../src/extension/preview-core.js";
+import { descriptor, previewCell, previewShellCommand } from "../src/extension/preview/index.js";
 
 interface Case {
 	name: string;

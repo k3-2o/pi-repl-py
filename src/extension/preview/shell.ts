@@ -64,7 +64,7 @@ export const SHELL_SETUP_WORDS = new Set([
 	"sync",
 ]);
 
-export const SHELL_ACTION_WORDS = new Set([
+const SHELL_ACTION_WORDS = new Set([
 	"rm",
 	"mv",
 	"cp",

@@ -21,7 +21,7 @@ export interface ExecuteRenderState {
 	hasResult: boolean;
 }
 
-import { previewCell } from "./preview-core.js";
+import { previewCell } from "./preview/index.js";
 
 export type StatusKind = "error" | "aborted" | "running" | "queued" | "done";
 export type BgKind = "toolPendingBg" | "toolSuccessBg" | "toolErrorBg";

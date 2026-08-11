@@ -37,7 +37,7 @@ function parseDescription(source: string): string {
 }
 
 /** Load {name → entry} for each non-underscore *.py in the helpers dir. */
-export function loadHelperEntries(dir?: string): HelperEntry[] {
+function loadHelperEntries(dir?: string): HelperEntry[] {
 	const d = dir ?? DEFAULT_HELPERS_DIR;
 	if (!existsSync(d)) return [];
 	const entries: HelperEntry[] = [];

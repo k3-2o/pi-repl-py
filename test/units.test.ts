@@ -10,7 +10,8 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { decodeMessage, encodeMessage } from "../src/engine/protocol.js";
+import { JupyterSession } from "../src/engine/session.js";
+import { encodeFrame, ZmtpFrameParser } from "../src/engine/zmtp.js";
 import { buildHelpersMap } from "../src/extension/helpers.js";
 import {
 	backgroundFor,
@@ -70,25 +71,88 @@ describe("helpers loader: description is the truth", () => {
 	});
 });
 
-describe("protocol framing", () => {
-	test("encode produces exactly one newline-terminated envelope line", () => {
-		const line = encodeMessage({ type: "ping", id: "p1" });
-		expect(line.endsWith("\n")).toBe(true);
-		expect(line.trimEnd().split("\n")).toHaveLength(1);
-		expect(line).toContain('"__repl":1');
+describe("jupyter session framing", () => {
+	test("buildFrames emits exactly [DELIM, sig, header, parent, metadata, content]", () => {
+		const s = new JupyterSession({ key: "testkey" });
+		const frames = s.buildFrames("kernel_info_request", {});
+		expect(frames).toHaveLength(6);
+		expect(frames[0].toString("utf8")).toBe("<IDS|MSG>");
+		expect(frames[1]).toHaveLength(64); // hex SHA-256
+		const header = JSON.parse(frames[2].toString("utf8"));
+		expect(header.msg_type).toBe("kernel_info_request");
+		expect(header.version).toBe("5.3");
+		expect(header.session).toBe(s.sessionId);
 	});
 
-	test("round-trips a message", () => {
-		const decoded = decodeMessage<{ type: string; id: string }>(encodeMessage({ type: "pong", id: "abc" }));
-		expect(decoded).toMatchObject({ type: "pong", id: "abc" });
+	test("a message round-trips with a verified signature", () => {
+		const s = new JupyterSession({ key: "testkey" });
+		const frames = s.buildFrames("execute_request", { code: "x = 1" });
+		const parsed = s.parseMessage(frames);
+		expect(parsed?.msg_type).toBe("execute_request");
+		expect(parsed?.signatureOk).toBe(true);
+		expect(parsed?.content.code).toBe("x = 1");
 	});
 
-	test("rejects non-envelope, malformed, and typeless lines", () => {
-		expect(decodeMessage("plain subprocess output")).toBeNull();
-		expect(decodeMessage('{"__repl":1, broken json')).toBeNull();
-		expect(decodeMessage(JSON.stringify({ __repl: 1 }))).toBeNull();
-		expect(decodeMessage(JSON.stringify({ __repl: 2, type: "done" }))).toBeNull();
-		expect(decodeMessage("")).toBeNull();
+	test("a tampered payload fails signature verification", () => {
+		const s = new JupyterSession({ key: "testkey" });
+		const frames = s.buildFrames("execute_request", { code: "x = 1" });
+		const tampered = [...frames];
+		tampered[5] = Buffer.from(JSON.stringify({ code: "x = 2" }));
+		const parsed = s.parseMessage(tampered);
+		expect(parsed?.content.code).toBe("x = 2");
+		expect(parsed?.signatureOk).toBe(false);
+	});
+
+	test("an explicit msg_id is used verbatim (the kernel echoes it as parent)", () => {
+		const s = new JupyterSession({ key: "k" });
+		const frames = s.buildFrames("kernel_info_request", {}, null, "probe-1");
+		expect(JSON.parse(frames[2].toString("utf8")).msg_id).toBe("probe-1");
+	});
+
+	test("malformed inbound messages are rejected", () => {
+		const s = new JupyterSession({ key: "k" });
+		expect(s.parseMessage([Buffer.from("no delim here")])).toBeNull();
+		expect(s.parseMessage([Buffer.from("<IDS|MSG>"), Buffer.from("only-two")])).toBeNull();
+		expect(s.parseMessage([Buffer.from("<IDS|MSG>"), Buffer.alloc(0), Buffer.from("not json")])).toBeNull();
+	});
+});
+
+describe("zmtp framing", () => {
+	test("short frames: flags byte + 1-byte length + body", () => {
+		const frame = encodeFrame(Buffer.from("hello"), false);
+		expect(frame).toHaveLength(7);
+		expect(frame[0]).toBe(0);
+		expect(frame[1]).toBe(5);
+		expect(frame.subarray(2).toString("utf8")).toBe("hello");
+	});
+
+	test("the 'more' flag survives encoding", () => {
+		const frame = encodeFrame(Buffer.from("part"), true);
+		expect(frame[0] & 0x01).toBe(0x01);
+	});
+
+	test("long frames use the 8-byte length with the long flag", () => {
+		const body = Buffer.alloc(300, 0x61);
+		const frame = encodeFrame(body, false);
+		expect(frame[0] & 0x02).toBe(0x02);
+		expect(frame.readUInt32BE(5)).toBe(300);
+		expect(frame.length).toBe(9 + 300);
+	});
+
+	test("the parser reassembles multipart messages from chunked input", () => {
+		const parser = new ZmtpFrameParser();
+		const a = encodeFrame(Buffer.from("one"), true);
+		const b = encodeFrame(Buffer.from("two"), false);
+		const wire = Buffer.concat([a, b]);
+		const messages = parser.feed(wire.subarray(0, 4)).concat(parser.feed(wire.subarray(4)));
+		expect(messages).toHaveLength(1);
+		expect(messages[0].map((f) => f.toString("utf8"))).toEqual(["one", "two"]);
+	});
+
+	test("the parser holds partial frames until the bytes arrive", () => {
+		const parser = new ZmtpFrameParser();
+		expect(parser.feed(Buffer.from([0x00, 0x05, 0x68]))).toHaveLength(0); // 2 header bytes + 1 of 5 body bytes
+		expect(parser.feed(Buffer.from("ello"))).toHaveLength(1);
 	});
 });
 

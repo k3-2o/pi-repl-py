@@ -1,5 +1,5 @@
 // --- shared preview types; tiny module so every consumer imports only the shape it needs ---
-export type CellPreviewKind = "shell" | "ts";
+type CellPreviewKind = "shell" | "ts";
 
 export interface CellPreview {
 	kind: CellPreviewKind;

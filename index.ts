@@ -4,7 +4,7 @@ import { basename, join } from "node:path";
 import { homedir } from "node:os";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
-import { EngineBusyError, EngineManager } from "./src/engine/index.js";
+import { EngineManager } from "./src/engine/index.js";
 import { ExecuteCellComponent, type ExecuteDetails, type ExecuteRenderState } from "./src/extension/render.js";
 import { EngineLifecycle, summarizeNames } from "./src/extension/session-engine.js";
 import { EXECUTE_DESCRIPTION, buildExecutePromptGuidelines, EXECUTE_PROMPT_SNIPPET } from "./src/extension/tool-meta.js";
@@ -183,22 +183,12 @@ export default function (pi: ExtensionAPI) {
 				pendingErrorResults.set(toolCallId, { details });
 				throw new Error(text || "(no output)");
 			}
-			if (r.status === "aborted") {
-				// --- a busy kernel can't be interrupted mid-cell; discard+rebuild so the next run doesn't queue ---
-				await lifecycle.discard();
-			}
+			// --- an aborted cell was interrupted, not wedged: the kernel keeps
+			//     running with its namespace, so there is nothing to discard ---
 			return result;
 		} catch (error) {
-			if (error instanceof EngineBusyError) {
-				// --- discard the wedged engine; the next cell revives from the last snapshot ---
-				await lifecycle.discard();
-				throw new Error(
-					"The evaluator was wedged by a previously interrupted cell and has been killed. " +
-						"Run the next cell to get a fresh evaluator revived from the last snapshot; " +
-						"anything newer than that snapshot is gone, so re-verify variables before reusing them.",
-				);
-			}
-			// --- a guest that died leaves the engine shutdown; drop it so the next cell rebuilds fresh ---
+			// --- a kernel that died (or was killed as the abort backstop) leaves the
+			//     engine down; drop it so the next cell rebuilds from the snapshot ---
 			if (m.isRunning === false) {
 				await lifecycle.discard();
 			}
