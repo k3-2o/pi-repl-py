@@ -158,31 +158,31 @@ class shell:
 
   "edit.py": String.raw`# edit — a low-power block that owns the fragile part of editing a file.
 #
-# It is NOT a tool. It decides none of the work: not what to change, not the new
-# text, not where. That is plain string ops on ed.text, or ed.edit(old, new) for
-# a guarded single change. The block owns the murky parts that a hand-rolled
-# open(path,'w') gets wrong: exact-match safety (ed.edit only fires when old is
-# unique — it never edits the wrong one of several), an atomic commit (temp file
-# + os.replace, so a crash leaves either the old file or the new, never a half
-# one), a stale-write abort, and a printed unified diff to verify. No .bak —
-# the atomic write plus your version control already cover recovery.
+# It is NOT a tool. It decides none of the work — not what to change, not the
+# new text, not where. That is all plain string ops on ed.text (replace, count,
+# splitlines... ordinary Python). The block only owns the murky WRITE half that
+# a hand-rolled open(path,'w') gets wrong: it reads the file fresh once, and on
+# commit writes ATOMICALLY (temp file + os.replace), backs the previous version
+# up to <path>.bak, aborts if the file changed on disk since the block opened,
+# and prints a unified diff so a small edit is as safe as a full rewrite.
 
-helper_description = """edit(path) — a with-block for small safe in-place file edits.
-It is NOT a tool that does the edit for you: you choose what to change and the
-new text. Read the file via ed.text; make the change with ed.edit(old, new) or
-with plain string ops on ed.text. The block owns the fragile parts — ed.edit
-only replaces old when it appears EXACTLY ONCE, and otherwise errors with the
-line numbers (ambiguous) or the closest real text (not found); the commit is
-atomic (temp file + os.replace); the file is left untouched on any failure or
-exception; and a unified diff is printed so you can verify what landed.
-Instead of: hand-rolled read-modify-write with open(path,'w') or a bare
-str.replace with no uniqueness check — a silent multi-replace, a truncating
-write, or a stale read quietly corrupts the file.
+helper_description = """edit(path) — a block-scoped file transaction. A safe in-place edit so you
+fix a few lines instead of rewriting the whole file.
+It is NOT a tool that does the edit for you: you pick what to change and the
+new text, with plain string ops on ed.text (replace/count/splitlines/...).
+Look at the file by printing ed.text first. On exit the block owns the fragile
+WRITE part: an atomic write (temp + os.replace), a <path>.bak backup of the old
+version, an abort if the file changed on disk since you opened it, and it
+prints a unified diff so you can verify exactly what landed. If an exception
+escapes the block, nothing is written.
+Instead of: hand-rolled read-modify-write with open(path,'w') — that truncates
+then writes, so a crash or a stale read silently clobbers the file, and you get
+no verification without re-reading the whole file.
 Usage:
     with edit("src/app.py") as ed:
-        ed.edit("print('old', 1)", "print('new', 1)")   # guarded: must appear once
-        ed.text = ed.text.replace(old, new)                # or custom string ops
-        # on exit: atomic commit + printed diff (ed.quiet=True to suppress)"""
+        print(ed.text)                            # read the current content
+        ed.text = ed.text.replace("old", "new")   # your exact old + new text
+        # on exit: atomic commit + .bak + printed diff (ed.quiet=True to suppress)"""
 
 import difflib as _difflib
 import os as _os
@@ -190,24 +190,12 @@ import tempfile as _tf
 from pathlib import Path as _Path
 
 
-def _line_numbers(text, needle):
-    """1-indexed line numbers of every occurrence of needle in text."""
-    positions = []
-    start = 0
-    while True:
-        idx = text.find(needle, start)
-        if idx == -1:
-            break
-        positions.append(text.count("\\n", 0, idx) + 1)
-        start = idx + 1
-    return positions
-
-
 class edit:
-    def __init__(self, path, *, quiet=False):
+    def __init__(self, path, *, quiet=False, backup=True):
         self.path = _Path(path)
         self.text = ""
         self.quiet = quiet
+        self.backup = backup
         self.diff = ""
         self.committed = False
         self._original = ""
@@ -224,31 +212,6 @@ class edit:
         self._original = self.text
         return self
 
-    def edit(self, old, new):
-        """Replace old in the current content — only when it appears exactly once.
-
-        Raises ValueError if old is not unique (with the line numbers) or not
-        present (with the closest real text), so a bad anchor is never silently
-        applied to the wrong location.
-        """
-        if not old:
-            raise ValueError("edit(): old text is empty; give the exact text to change.")
-        n = self.text.count(old)
-        if n == 0:
-            hint = self._closest(old)
-            raise ValueError(
-                f"edit(): text not found in the file"
-                + (f" — closest real text: {hint!r}" if hint else "")
-                + ". Re-read ed.text and retry with what is actually there."
-            )
-        if n > 1:
-            lines = ", ".join(str(i) for i in _line_numbers(self.text, old))
-            raise ValueError(
-                f"edit(): found {n} occurrences (lines {lines}) — the anchor is not unique. "
-                "Add surrounding context so it matches once."
-            )
-        self.text = self.text.replace(old, new, 1)
-
     def __exit__(self, exc_type, exc_value, traceback):
         if exc_type is not None:
             return False  # an error escaped the block — never touch the file
@@ -263,6 +226,10 @@ class edit:
                     f"edit: {self.path} changed on disk since this block opened — "
                     f"nothing was written. Re-read the file fresh and retry."
                 )
+
+        # backup the old version before the swap
+        if self.backup and self._original:
+            self.path.with_suffix(self.path.suffix + ".bak").write_text(self._original, encoding="utf-8")
 
         self._atomic_write(self.text)
         self.committed = True
@@ -293,12 +260,6 @@ class edit:
             except _os.error:
                 pass
             raise
-    def _closest(self, old):
-        """Nearest real line to a not-found anchor (stdlib difflib)."""
-        if not old or "\n" in old or not self.text:
-            return None
-        matches = _difflib.get_close_matches(old, self.text.splitlines(), n=1, cutoff=0.5)
-        return matches[0] if matches else None
 `,
 };
 

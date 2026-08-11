@@ -44,8 +44,7 @@ clear notice. How the interpreter is resolved is in [docs/philosophy.md](docs/ph
 - **Building blocks for the awkward bits.** `shell` (a `with` block) owns the fragile
   subprocess teardown — commands run in their own process group, killed wholesale on
   timeout, so no hung command leaves orphaned children. `edit` (a `with` block) owns the
-  fragile file write — atomic commit, a stale-file abort, and a guarded single-match
-  edit that never silently replaces the wrong one of several, plus a printed diff.
+  fragile file write — atomic commit, `.bak` backup, stale-file abort, and a printed diff.
   Both leave every decision (the command, the exact text change, the parsing) to the model.
 - **Error survival.** A cell that throws reports the traceback and the kernel keeps going.
 - **An honest evaluator.** If it restarts, it names what state it could revive and what it lost, so you don't trust memory that's gone.
