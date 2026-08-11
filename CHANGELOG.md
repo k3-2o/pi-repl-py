@@ -2,6 +2,44 @@
 
 All notable changes to pi-repl, grouped by day and by type.
 
+## 2026-08-12 — Workspace prompt rewrite; drop the ls()/help() discovery intrinsics
+
+### Changed
+
+- **Rewrote the `execute` tool contract into a workspace manual.** `executeToolDescription`
+  is now a short capability statement (one persistent Python workspace, everything done
+  in Python); `executePromptSnippet` is a one-line behavioral trigger; and
+  `buildPromptGuidelines` carries the full doctrine: this workspace is the only tool,
+  the generate → execute → observe → iterate loop, state reuse, chaining big tasks into
+  verifiable steps, safe Python file edits (read full → modify → write → verify),
+  batching independent work vs keeping exploratory cells small, output/discipline,
+  the environment boundary, and the engine reset guard. Discovery, helper loading,
+  and the runtime guarantees are unchanged; the wording is grounded in external
+  practitioner guidance on code-executing agents and REPL harnesses.
+- **Empty helpers dir no longer injects a placeholder line.** `tool-meta.ts` now passes
+  an empty array, so the prompt simply omits the Helpers section instead of telling the
+  model to "build your own."
+
+### Removed
+
+- **Deleted the custom `ls()` and `help()` discovery intrinsics.** The tool guidance
+  already injects every helper's description verbatim, so bespoke discovery helpers were
+  their own folder of duplicated mechanism, and a bespoke filter that races the
+  project's "everything is plain Python" stance. The kernel no longer preloads
+  `INTRINSIC`; the skip-list no longer names `ls`/`help`; the prompt now points the
+  model at plain `[k for k in globals() if not k.startswith('_')]` and `name.__doc__`.
+  The two contract tests were rewritten (not weakened) to pin the new guarantee — no
+  injected intrinsics; helpers appear under `globals()`.
+
+### Fixes
+
+- **Kernel startup no longer races the connection file.** `KernelClient.start` polled
+  with `!existsSync()`, which returns the instant the file is created, before ipykernel
+  finishes writing it; reading that partial JSON threw `Unexpected EOF` and
+  intermittently failed an integration test (a different one each run). The poll now
+  retries `readConnectionFile` until it parses as valid JSON, keeping the child-exit
+  and deadline guards. Integration suite confirms 5/5 full runs green.
+
 ## 2026-08-11 — Evict the shell() and edit() helpers; the REPL is plain Python
 
 ### Removed
