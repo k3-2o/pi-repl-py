@@ -41,30 +41,28 @@ clear notice. How the interpreter is resolved is in [docs/philosophy.md](docs/ph
 - **A persistent namespace.** Variables, functions, imports, and data survive across cells and
   turns; snapshots preserve them across a best-effort restart.
 - **A real `ipython` kernel**, not a hand-rolled `exec` loop.
-- **Building blocks for the awkward bits.** `shell` (a `with` block) owns the fragile
-  subprocess teardown — commands run in their own process group, killed wholesale on
-  timeout, so no hung command leaves orphaned children. `edit` (a `with` block) owns the
-  fragile file write — atomic commit, a stale-file abort, and a guarded single-match
-  edit that never silently replaces the wrong one of several, plus a printed diff.
-  Both leave every decision (the command, the exact text change, the parsing) to the model.
+- **Shell and file IO as plain Python.** `!cmd` and `%%bash` run shell fire-and-forget,
+  `subprocess.run(...)` brings the result back into a variable, and `open()` / `pathlib`
+  read and write files — no wrapper API to learn, and nothing extra to describe to the model.
 - **Error survival.** A cell that throws reports the traceback and the kernel keeps going.
 - **An honest evaluator.** If it restarts, it names what state it could revive and what it lost, so you don't trust memory that's gone.
 
 ## Helpers
 
-The one helpers directory preloads low-power Python building blocks into every kernel and
-surfaces each one to the model through the `execute` tool's prompt guidance (each
+The one helpers directory lets you preload your own Python building blocks into every kernel
+and surfaces each one to the model through the `execute` tool's prompt guidance (each
 `helper_description` verbatim, and `ls()`/`help()` discover them at runtime). They are
-**building blocks, not finished tools**: `shell` owns only the fragile subprocess teardown and
-`edit` only the safe file write; the model
-writes the command / the text change, the arguments, and the decisions around them. What's in the one helpers dir is everything that loads.
+**additions you choose**, for things the REPL does not already give as ordinary Python — a
+`web_search` with provider failover, a client wrapper, anything you reach for often. The
+directory ships **empty**: shell and file IO are already native, so a fresh install preloads
+nothing until you add one. What's in the one helpers dir is everything that loads.
 
 Everything the extension keeps lives under one folder in your home directory:
 
 ```
 ~/.pi/agent/pi-repl/
   venv/         the Python interpreter + ipykernel
-  helpers/      your helpers (shell.py + edit.py auto-seeded on install)
+  helpers/      your helpers (created empty on install; every *.py loads)
   state/        per-session namespace snapshots
 ```
 
@@ -91,7 +89,7 @@ The Python interpreter is auto-resolved (the venv, else `$PYTHON`/`python3`).
 ## It is not
 
 - A sandbox. The kernel runs with your permissions; the toolbox trusts you.
-- A subagent framework. There is no `repl.run` API; spawn a process with the shell helper.
+- A subagent framework. There is no `repl.run` API; spawn a process with `subprocess.run`.
 - A pi tool-rack. It is one `execute` tool with functions inside.
 
 ## License

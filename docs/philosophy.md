@@ -25,9 +25,8 @@ In a persistent kernel, that work happens once and stays put:
 
 - a variable assigned in one cell is there in the next, and the next turn;
 - a function defined once is reusable for the whole session;
-- the shell helper returns a structured result (`returncode`/`.stdout`/`.stderr`)
-  the agent branches on with normal code, while owning the fragile subprocess
-  teardown so a hung command can't orphan children.
+- `subprocess.run(...)` returns a structured result (`returncode`/`.stdout`/`.stderr`)
+  the agent branches on with normal code — no re-parsing a tool's text output.
 
 The savings compound harder for small models. Holding a whole file in context
 to avoid re-reading it is expensive precisely when context is scarce; the
@@ -66,7 +65,7 @@ where it would vanish). At runtime the host resolves the interpreter in a
 short deterministic order (repo venv, cwd venv, the install venv, then
 `$PYTHON`/`python3`). The system interpreter is the fallback, never the
 assumption, because the whole tool quietly breaks if it silently runs in the
-wrong environment. This is a fact the helpers keep visible through `help()`.
+wrong environment. This is a fact the tool's prompt keeps visible.
 
 ## Trust, not a sandbox
 
@@ -79,7 +78,7 @@ The philosophy prefers a sharp, honest tool over a pretend-safe one.
 ## What it isn't
 
 - A subagent framework. There is no `repl.run`. To delegate, the model spawns
-  a process with the shell helper.
+  a process with `subprocess.run` (or `!cmd` / `%%bash`).
 - A drop-in pi-tool parcel. It exposes one `execute` tool; everything else is
   inside that workspace.
 - A replacement for your own editing/browsing tools required. It is there
