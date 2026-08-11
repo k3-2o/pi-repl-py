@@ -39,7 +39,8 @@ export function buildPromptGuidelines(preloaded: string[]): string[] {
 			"them. The shell helper is a block (`with <shell>() as s:` then `s.run(cmd)`) that only handles the " +
 			"shell plumbing; you decide the command and what the structured result (returncode/stdout/stderr) " +
 			"means. The edit helper is a block too (`with edit(path) as ed:` then mutate `ed.text`) that only " +
-			"handles a SAFE save (atomic write, .bak backup, stale-file abort) — you decide exactly what text to " +
+			"handles a SAFE save (atomic write, a stale-file abort, and ed.edit which fails unless " +
+			"the target text is unique) — you decide exactly what text to " +
 			"change. A small in-place edit beats rewriting the whole file. `!cmd` runs a shell command " +
 			"fire-and-forget; `%%bash`/`%timeit` and the other magics work.",
 		"Set a timeout deliberately: pass a GENEROUS timeout to a helper for long-running installs or builds " +

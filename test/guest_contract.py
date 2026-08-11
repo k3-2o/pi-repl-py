@@ -198,14 +198,13 @@ import pathlib as _p
 
 
 class edit:
-    def __init__(self, path, *, quiet=False, backup=True):
+    def __init__(self, path, *, quiet=False):
         self.path = _p.Path(path)
         self.quiet = quiet
-        self.backup = backup
         self.text = ""
         self.diff = ""
         self.committed = False
-        self._orig = ""
+        self._offset = ""
         self._sig = None
 
     def __enter__(self):
@@ -216,24 +215,30 @@ class edit:
         else:
             self.text = ""
             self._sig = None
-        self._orig = self.text
+        self._offset = self.text
         return self
+
+    def edit(self, old, new):
+        n = self.text.count(old)
+        if n == 0:
+            raise ValueError("edit(): text not found in the file")
+        if n > 1:
+            raise ValueError(f"edit(): found {n} occurrences — anchor not unique")
+        self.text = self.text.replace(old, new, 1)
 
     def __exit__(self, exc_type, exc_value, tb):
         if exc_type is not None:
             return False
-        if self.text == self._orig:
+        if self.text == self._offset:
             return False
         if self._sig is not None:
             st = self.path.stat()
             if (st.st_mtime_ns, st.st_size) != self._sig:
                 raise RuntimeError("edit: changed on disk since block opened")
-        if self.backup and self._orig:
-            self.path.with_suffix(self.path.suffix + ".bak").write_text(self._orig)
         self.path.write_text(self.text)
         self.committed = True
         self.diff = "".join(
-            _d.unified_diff(self._orig.splitlines(keepends=True),
+            _d.unified_diff(self._offset.splitlines(keepends=True),
                             self.text.splitlines(keepends=True))
         )
         if self.diff and not self.quiet:
@@ -418,20 +423,21 @@ def test_help_and_ls_are_always_available(guest_with_shell):
 
 
 # --- edit block contract ---
-def test_edit_block_applies_and_backs_up(guest_with_edit):
+def test_edit_applies_exactly_once_and_makes_no_backup(guest_with_edit):
     code = (
         "from pathlib import Path\n"
         "p = Path('target.txt')\n"
         "p.write_text('hello\\nworld\\n')\n"
         "with edit(p) as ed:\n"
-        "    ed.text = ed.text.replace('world', 'everyone')\n"
-        "print(p.read_text().strip(), '|bak|', p.with_suffix(p.suffix + '.bak').read_text().strip())"
+        "    ed.edit('world', 'everyone')\n"
+        "print(p.read_text().strip(), '|bak?', Path(str(p) + '.bak').exists())"
     )
     d, streams = run_cell(guest_with_edit, code, "c1")
     assert d["status"] == "ok", d
     joined = " ".join(m["chunk"] for m in streams)
     assert "everyone" in joined
-    assert "hello" in joined  # .bak preserved the old text
+    # atomic write + git cover recovery: no .bak is ever auto-created
+    assert "bak? False" in joined
 
 
 def test_edit_commits_and_prints_a_diff(guest_with_edit):
@@ -440,7 +446,7 @@ def test_edit_commits_and_prints_a_diff(guest_with_edit):
         "p = Path('diffed.txt')\n"
         "p.write_text('line1\\nline2\\n')\n"
         "with edit(p) as ed:\n"
-        "    ed.text = ed.text.replace('line2', 'CHANGED')\n"
+        "    ed.edit('line2', 'CHANGED')\n"
     )
     d, streams = run_cell(guest_with_edit, code, "c1")
     assert d["status"] == "ok", d
@@ -448,25 +454,55 @@ def test_edit_commits_and_prints_a_diff(guest_with_edit):
     assert "CHANGED" in joined  # the diff surfaced the new content
 
 
+def test_edit_guard_rejects_an_ambiguous_or_missing_anchor(guest_with_edit):
+    # ed.edit must never silently edit the wrong one of many, nor apply a stale
+    # anchor that is no longer in the file — it raises and leaves the file alone.
+    code = (
+        "from pathlib import Path\n"
+        "p = Path('guard.txt')\n"
+        "p.write_text('x\\ny\\nx\\n')\n"
+        "try:\n"
+        "    with edit(p) as ed:\n"
+        "        ed.edit('x', 'X')\n"
+        "        raise ValueError('no')\n"
+        "except ValueError as e:\n"
+        "    print('AMBIG', 'not unique' in str(e))\n"
+        "print('file1', repr(p.read_text()))\n"
+        "try:\n"
+        "    with edit(p) as ed:\n"
+        "        ed.edit('zz', 'Z')\n"
+        "except ValueError:\n"
+        "    print('NOTFOUND', 'true')\n"
+        "print('file2', repr(p.read_text()))"
+    )
+    d, streams = run_cell(guest_with_edit, code, "c1")
+    assert d["status"] == "ok", d
+    joined = " ".join(m["chunk"] for m in streams)
+    assert "AMBIG True" in joined
+    assert "file1 'x\\ny\\nx\\n'" in joined
+    assert "NOTFOUND true" in joined
+    assert "file2 'x\\ny\\nx\\n'" in joined  # untouched after both failures
+
+
 def test_edit_aborts_without_writing_on_exception(guest_with_edit):
     # An exception inside the block must propagate AND leave the file untouched
-    # (no commit, no .bak, no temp residue).
+    # (no commit, no temp residue).
     code = (
         "from pathlib import Path\n"
         "p = Path('abort.txt')\n"
         "p.write_text('original')\n"
         "try:\n"
         "    with edit(p) as ed:\n"
-        "        ed.text = ed.text.replace('original', 'should-not-write')\n"
+        "        ed.edit('original', 'should-not-write')\n"
         "        raise ValueError('stop')\n"
-        "except ValueError:\n"
+        "except Exception:\n"
         "    pass\n"
-        "print(p.read_text(), '|bak?', Path(str(p) + '.bak').exists())"
+        "print(p.read_text())"
     )
     d, streams = run_cell(guest_with_edit, code, "c1")
     assert d["status"] == "ok", d
     joined = " ".join(m["chunk"] for m in streams)
-    assert "original |bak? False" in joined
+    assert "original" in joined
 
 
 def test_edit_refuses_to_clobber_a_stale_file(guest_with_edit):
