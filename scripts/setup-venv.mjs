@@ -167,22 +167,27 @@ class shell:
 # one), a stale-write abort, and a printed unified diff to verify. No .bak —
 # the atomic write plus your version control already cover recovery.
 
-helper_description = """edit(path) — a with-block for small safe in-place file edits.
-It is NOT a tool that does the edit for you: you choose what to change and the
-new text. Read the file via ed.text; make the change with ed.edit(old, new) or
-with plain string ops on ed.text. The block owns the fragile parts — ed.edit
-only replaces old when it appears EXACTLY ONCE, and otherwise errors with the
-line numbers (ambiguous) or the closest real text (not found); the commit is
-atomic (temp file + os.replace); the file is left untouched on any failure or
-exception; and a unified diff is printed so you can verify what landed.
-Instead of: hand-rolled read-modify-write with open(path,'w') or a bare
-str.replace with no uniqueness check — a silent multi-replace, a truncating
-write, or a stale read quietly corrupts the file.
+helper_description = """edit(path) -- the edit you reach for instead of walking the whole
+REPL-edit dance by hand in five fragile steps.
+
+To edit a file you usually have to: (1) read it into a string, (2) find the
+old text and convince yourself it's unique and the right one -- a bare
+str.replace silently changes the wrong copy, or several at once, (3) splice in
+the new text, (4) write it back -- and an open(path,'w') truncates first, so a
+crash or a stale read quietly corrupts the file, (5) re-read the whole file just
+to see what landed.
+The edit block collapses that whole dance into one guarded step. With
+with edit(...) as ed:, ed.edit(old, new) applies the change ONLY when old
+appears exactly once -- otherwise it raises with the line numbers (ambiguous)
+or the closest real text (not found) instead of corrupting a spot. On leaving
+the block the commit is atomic (temp + os.replace, no truncation), refuses to
+clobber a file that changed on disk since you opened it, and prints a unified
+diff so verifying is one glance rather than a full re-read. Nothing is written
+if an exception escapes the block.
 Usage:
     with edit("src/app.py") as ed:
-        ed.edit("print('old', 1)", "print('new', 1)")   # guarded: must appear once
-        ed.text = ed.text.replace(old, new)                # or custom string ops
-        # on exit: atomic commit + printed diff (ed.quiet=True to suppress)"""
+        ed.text = ed.text.replace("print('old', 1)", "print('new', 1)")  # a plain swap
+        # or ed.edit(old, new) for the uniqueness-guarded form; ed.quiet=True silences the diff"""
 
 import difflib as _difflib
 import os as _os
