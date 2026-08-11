@@ -198,7 +198,7 @@ def _line_numbers(text, needle):
         idx = text.find(needle, start)
         if idx == -1:
             break
-        positions.append(text.count("\\n", 0, idx) + 1)
+        positions.append(text.count("\n", 0, idx) + 1)
         start = idx + 1
     return positions
 

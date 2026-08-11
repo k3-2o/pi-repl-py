@@ -223,7 +223,15 @@ class edit:
         if n == 0:
             raise ValueError("edit(): text not found in the file")
         if n > 1:
-            raise ValueError(f"edit(): found {n} occurrences — anchor not unique")
+            positions, start = [], 0
+            while True:
+                idx = self.text.find(old, start)
+                if idx == -1:
+                    break
+                positions.append(self.text.count("\\n", 0, idx) + 1)
+                start = idx + 1
+            lines = ", ".join(str(i) for i in positions)
+            raise ValueError(f"edit(): found {n} occurrences (lines {lines}) — anchor not unique")
         self.text = self.text.replace(old, new, 1)
 
     def __exit__(self, exc_type, exc_value, tb):
@@ -466,7 +474,7 @@ def test_edit_guard_rejects_an_ambiguous_or_missing_anchor(guest_with_edit):
         "        ed.edit('x', 'X')\n"
         "        raise ValueError('no')\n"
         "except ValueError as e:\n"
-        "    print('AMBIG', 'not unique' in str(e))\n"
+        "    print('AMBIG', str(e))\n"
         "print('file1', repr(p.read_text()))\n"
         "try:\n"
         "    with edit(p) as ed:\n"
@@ -478,7 +486,8 @@ def test_edit_guard_rejects_an_ambiguous_or_missing_anchor(guest_with_edit):
     d, streams = run_cell(guest_with_edit, code, "c1")
     assert d["status"] == "ok", d
     joined = " ".join(m["chunk"] for m in streams)
-    assert "AMBIG True" in joined
+    assert "AMBIG edit(): found 2 occurrences (lines 1, 3)" in joined  # 1-indexed
+    assert "not unique" in joined
     assert "file1 'x\\ny\\nx\\n'" in joined
     assert "NOTFOUND true" in joined
     assert "file2 'x\\ny\\nx\\n'" in joined  # untouched after both failures
