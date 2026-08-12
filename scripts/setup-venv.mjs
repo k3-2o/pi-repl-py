@@ -2,30 +2,18 @@
 /**
  * postinstall: build the stable per-user Python venv the evaluator needs.
  *
- * The evaluator (src/engine/kernel.ts) drives a real ipykernel directly over
- * the Jupyter protocol; `ipykernel` is the only hard runtime dependency. When
- * this is installed as a pi package there is no repo-local `.venv` (gitignored
- * and excluded from the npm tarball), so we create one at a stable path the
- * engine also knows about:
+ * On a package install the venv is built at a stable path the engine knows:
  *
  *   ~/.pi/agent/pi-repl/venv/bin/python3
  *
- * HELPERS live ONLY in the user-owned config dir:
- *
- *   ~/.pi/agent/pi-repl/helpers/
- *
- * There is no helper/config folder anywhere in this package (no
- * src/engine/helpers, no templates/). The helpers dir is created if missing,
- * but no default helpers are seeded — the REPL itself already provides shell
- * (via `!cmd`, `%%bash`, `subprocess`) and file IO (via `open`, `pathlib`).
- * Users add their own helper .py files freely; existing files are never clobbered.
- *
- * Failures are non-fatal: if there's no system python3 or no network we print a
- * clear notice and let the engine fall back to '$PYTHON' or 'python3' at runtime.
+ * The venv is repaired in place: if it exists but ipykernel is not importable,
+ * this reflushes the venv and reinstalls rather than trusting a half-built one.
+ * Failures are NOT silent: a bad build exits non-zero so `npm install` / `pi
+ * install` visibly fails instead of leaving a broken evaluator.
  */
 
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -33,6 +21,17 @@ const VENV_DIR = join(homedir(), ".pi", "agent", "pi-repl", "venv");
 const PY = join(VENV_DIR, "bin", "python3");
 const DEPS = ["ipykernel"];
 const HELPERS_DIR = join(homedir(), ".pi", "agent", "pi-repl", "helpers");
+
+// A venv that exists but can't import ipykernel is broken. Never trust the
+// binary alone — a half-built venv otherwise looks "already up" forever.
+function ipykernelOk() {
+  try {
+    execSync(`${PY} -c "import ipykernel"`, { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function log(m) {
   process.stdout.write(`[pi-repl] ${m}\n`);
@@ -65,29 +64,41 @@ function seedHelpersDir() {
 
 function main() {
   seedHelpersDir();
-  if (existsSync(PY)) {
-    log(`venv already present at ${VENV_DIR}`);
+  if (ipykernelOk()) {
+    log(`venv ready (ipykernel present) at ${VENV_DIR}`);
     return;
   }
   const systemPython = findSystemPython();
   if (!systemPython) {
-    warn(
+    fail(
       `no python3 found on PATH; could not create the evaluator venv. ` +
-        `Install python3 and run '${PY.slice(-60)} -m venv' manually, or set $PYTHON to point at one.`
+        `Install python3 and run '${PY.slice(-60)} -m venv' manually.`
     );
     return;
   }
-  log(`creating evaluator venv at ${VENV_DIR} (uses ${systemPython})...`);
+  log(`building evaluator venv at ${VENV_DIR} (uses ${systemPython})...`);
   try {
     mkdirSync(join(VENV_DIR, ".."), { recursive: true });
-    execSync(`${systemPython} -m venv ${VENV_DIR}`, { stdio: "inherit" });
+    // flush a half-built venv so pip starts from a clean, knowable slate
+    execSync(`${systemPython} -m venv --clear ${VENV_DIR}`, { stdio: "inherit" });
     execSync(`${PY} -m pip install --upgrade pip`, { stdio: "inherit" });
     execSync(`${PY} -m pip install ${DEPS.join(" ")}`, { stdio: "inherit" });
+    if (!ipykernelOk()) {
+      fail(`ipykernel still not importable after install; the evaluator won't start.`);
+      return;
+    }
     log("done. The pi-repl evaluator will use this venv.");
   } catch (error) {
-    warn(`could not build the evaluator venv (${error && error.message ? error.message : error}). `);
-    warn("You must install ipykernel in that venv before the evaluator runs.");
+    // A real failure must not exit 0 with a broken venv. npm/pi will see the
+    // nonzero exit and report the install as failed instead of silently
+    // handing the user a dead evaluator.
+    fail(`could not build the evaluator venv (${error && error.message ? error.message : error}). `);
   }
+}
+
+function fail(m) {
+  process.stderr.write(`[pi-repl] ERROR: ${m}\n`);
+  process.exit(1);
 }
 
 main();

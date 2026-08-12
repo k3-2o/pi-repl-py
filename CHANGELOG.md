@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.2] - 2026-08-12
+
+### Fixed
+
+- The venv postinstall no longer silently leaves a broken evaluator. It now verifies `ipykernel` is importable (not just that the venv binary exists), repairs a half-built venv, and exits non-zero on a failed build so `npm install` / `pi install` fails loudly instead of installing a dead evaluator. Existing helpers and per-session state are never touched.
+
 ## [0.2.1] - 2026-08-12
 
 ### Changed
