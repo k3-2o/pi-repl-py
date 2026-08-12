@@ -31,7 +31,7 @@ import { join } from "node:path";
 
 const VENV_DIR = join(homedir(), ".pi", "agent", "pi-repl", "venv");
 const PY = join(VENV_DIR, "bin", "python3");
-const DEPS = ["ipykernel", "jupyter_client"];
+const DEPS = ["ipykernel"];
 const HELPERS_DIR = join(homedir(), ".pi", "agent", "pi-repl", "helpers");
 
 function log(m) {
@@ -86,7 +86,7 @@ function main() {
     log("done. The pi-repl evaluator will use this venv.");
   } catch (error) {
     warn(`could not build the evaluator venv (${error && error.message ? error.message : error}). `);
-    warn("You must install ipykernel and jupyter_client in that venv before the evaluator runs.");
+    warn("You must install ipykernel in that venv before the evaluator runs.");
   }
 }
 
