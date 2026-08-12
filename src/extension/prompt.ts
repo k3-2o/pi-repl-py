@@ -31,9 +31,10 @@ export function buildPromptGuidelines(preloaded: string[]): string[] {
 			"code that depends on them.",
 		"",
 		"## Shell & files are plain Python",
-		"`!cmd` / `%%bash` for fire-and-forget shell; `subprocess.run(...)` when you need the result back as " +
-			"a value. `open()` / `pathlib` read and write files. For safe edits: read the full file, modify " +
-			"in memory, write once, then re-read to verify.",
+		"`!cmd` / `%%bash` for fire-and-forget shell; `subprocess.run(..., timeout=...)` when you need the result back " +
+			"as a value — always set a `timeout` on anything that could hang (the evaluator does not kill a " +
+			"silent cell automatically). `open()` / `pathlib` read and write files. For safe edits: read the full " +
+			"file, modify in memory, write once, then re-read to verify.",
 		"",
 		"## Batch independent work, keep exploratory cells small",
 		"Batch independent reads, searches, and setup steps in one cell to reduce round-trips. Keep " +
