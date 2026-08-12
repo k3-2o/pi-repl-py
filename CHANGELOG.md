@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.3] - 2026-08-12
+
+### Changed
+
+- Rewrote the `execute` tool prompt contract: the Python workspace is framed as the model's working memory and action language rather than a stateless tool rack. Trimmed redundant guidance, kept the two load-bearing rules (set `timeout` on hanging shell; re-verify after an `<repl_engine_reset>`) and carried verbatim, source-trimmed clauses from CodeAct and RLM prompts.
+
 ## [0.2.2] - 2026-08-12
 
 ### Fixed
