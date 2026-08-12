@@ -49,13 +49,12 @@ clear notice. How the interpreter is resolved is in [docs/philosophy.md](docs/ph
 
 ## Helpers
 
-The one helpers directory lets you preload your own Python building blocks into every kernel
-and surfaces each one to the model through the `execute` tool's prompt guidance (each
-`helper_description` verbatim). They are
-**additions you choose**, for things the REPL does not already give as ordinary Python — a
-`web_search` with provider failover, a client wrapper, anything you reach for often. The
-directory ships **empty**: shell and file IO are already native, so a fresh install preloads
-nothing until you add one. What's in the one helpers dir is everything that loads.
+A **helper** is a Python function you preload into every kernel. Drop a file in the one
+helpers directory, restart the session, and the function is callable from the workspace —
+for example, `helpers/double.py` exposing `def double` becomes `double(...)`. It ships
+**empty** (shell and file IO are already plain Python), so a fresh install preloads nothing
+until you add one. Each helper's `helper_description` is shown to the model verbatim;
+the full contract lives in [docs/how-to-functions.md](docs/how-to-functions.md).
 
 Everything the extension keeps lives under one folder in your home directory:
 
@@ -66,14 +65,11 @@ Everything the extension keeps lives under one folder in your home directory:
   state/        per-session namespace snapshots
 ```
 
-The helpers directory is fixed at `~/.pi/agent/pi-repl/helpers` — there is no config file to set.
+The helpers directory is fixed at `~/.pi/agent/pi-repl/helpers` — no config file.
 
-The helper list shown to the model is built when the `execute` tool is
-registered, so changing the helpers (adding/removing a file, renaming one with a
-`_` prefix) needs a **session restart / `/reload`** for the prompt to reflect it —
-the kernel also only loads helpers at boot.
-
-- Adding a helper (the file contract, docstrings, disabling): [docs/how-to-functions.md](docs/how-to-functions.md)
+Changing a helper (adding/removing a file, renaming one with a `_` prefix) needs a
+**session restart / `/reload`**: the prompt list is built when `execute` is registered and
+the kernel execs helpers only at boot.
 
 ## Configuration
 
