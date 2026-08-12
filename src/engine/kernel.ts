@@ -3,7 +3,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	type ConnectionFile,
@@ -55,7 +55,8 @@ export interface SnapshotReply {
 
 /** Read the helpers dir (same skip rules as the extension's prompt loader). */
 export function readHelperSources(dir?: string): { name: string; source: string }[] {
-	const d = dir ?? join(process.env.HOME ?? "", ".pi", "agent", "pi-repl", "helpers");
+	// --- one fixed dir, resolved like the prompt side (helpers.ts) so both always agree ---
+	const d = dir ?? join(homedir(), ".pi", "agent", "pi-repl", "helpers");
 	if (!existsSync(d)) return [];
 	const out: { name: string; source: string }[] = [];
 	for (const file of readdirSync(d).sort()) {
