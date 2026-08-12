@@ -1,12 +1,12 @@
 # How to write a helper
 
-A **helper** is a Python function you write once that becomes available to the agent in
-every `pi --repl` session. You drop a `.py` file into one folder, restart the session, and
-the function is callable from the workspace — like a bookmark for code the agent keeps
-reaching for.
+A **helper** is a `.py` file that gets exec'd into every kernel, so anything it defines —
+functions, classes, constants, imports, or a module that owns a fragile or opaque piece of
+work — becomes part of the agent's workspace; you drop the file into one folder, restart
+the session, and it's available. Like a bookmark for code the agent keeps reaching for.
 
-This guide shows the smallest helper that works, then explains the three parts every
-helper file has and the habits that make a helper useful.
+This guide shows the smallest callable helper that works, then explains the parts of a
+helper file and the habits that make a helper useful.
 
 ## Prerequisites
 

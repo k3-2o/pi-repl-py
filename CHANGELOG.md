@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1] - 2026-08-12
+
+### Changed
+
+- Corrected the helper definition to a preloaded `.py` file (not strictly a function): it can define functions, classes, constants, imports, or manage a tricky piece of complexity. Applied to `README.md` and `docs/helpers.md`.
+- Renamed `docs/how-to-functions.md` → `docs/helpers.md`; repointed README and ARCHITECTURE links.
+
 ## [0.2.0] - 2026-08-12
 
 ### Added
@@ -8,7 +15,7 @@
 
 ### Changed
 
-- Rewrote `docs/philosophy.md`, `docs/ARCHITECTURE.md`, and `docs/how-to-functions.md` for readability, aligned to their Diátaxis type; corrected over-strong claims (helper callable-name vs prompt-label, the stdlib/import advantage of a real kernel, a package-path in ARCHITECTURE).
+- Rewrote `docs/philosophy.md`, `docs/ARCHITECTURE.md`, and `docs/helpers.md` for readability, aligned to their Diátaxis type; corrected over-strong claims (helper callable-name vs prompt-label, the stdlib/import advantage of a real kernel, a package-path in ARCHITECTURE).
 - Replaced the shipped `shell()`/`edit()` helpers with plain Python (shell and file IO are native to the REPL) and no longer seed helpers on install.
 - Consolidated the execute prompt into a pure contract (`prompt.ts`) plus a thin adapter (`tool-meta.ts`).
 - Split the preview logic into single-concern `preview/` modules.

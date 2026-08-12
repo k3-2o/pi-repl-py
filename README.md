@@ -49,12 +49,13 @@ clear notice. How the interpreter is resolved is in [docs/ARCHITECTURE.md](docs/
 
 ## Helpers
 
-A **helper** is a Python function you preload into every kernel. Drop a file in the one
-helpers directory, restart the session, and the function is callable from the workspace —
-for example, `helpers/double.py` exposing `def double` becomes `double(...)`. It ships
-**empty** (shell and file IO are already plain Python), so a fresh install preloads nothing
-until you add one. Each helper's `helper_description` is shown to the model verbatim;
-the full contract lives in [docs/how-to-functions.md](docs/how-to-functions.md).
+A **helper** is a `.py` file that gets exec'd into every kernel, so whatever it defines —
+functions, classes, constants, imports, or a module that manages a tricky piece of
+complexity — is available in the workspace. Drop a file in the one helpers directory and
+restart the session; e.g. `helpers/double.py` defining `def double(x)` becomes callable as
+`double(...)`. It ships **empty** (shell and file IO are already plain Python), so a fresh
+install preloads nothing until you add one. Each helper's `helper_description` is shown to
+the model verbatim; the full contract lives in [docs/helpers.md](docs/helpers.md).
 
 Everything the extension keeps lives under one folder in your home directory:
 

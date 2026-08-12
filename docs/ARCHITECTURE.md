@@ -121,7 +121,7 @@ The model discovers what is loaded by listing the namespace with ordinary Python
 ```
 
 For the full helper contract — the description, the docstring, disabling — see
-[how-to-functions.md](how-to-functions.md).
+[helpers.md](helpers.md).
 
 ## Snapshots & honest resets
 
@@ -179,4 +179,4 @@ but working cell may run on).
 ## Reference documentation
 
 - Philosophy and design rationale: [philosophy.md](philosophy.md)
-- Adding a helper: [how-to-functions.md](how-to-functions.md)
+- Adding a helper: [helpers.md](helpers.md)
