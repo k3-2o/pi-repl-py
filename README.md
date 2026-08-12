@@ -43,15 +43,15 @@ clear notice. How the interpreter is resolved is in [docs/ARCHITECTURE.md](docs/
 - **A real `ipython` kernel**, not a hand-rolled `exec` loop.
 - **Shell and file IO as plain Python.** `!cmd` and `%%bash` run shell fire-and-forget,
   `subprocess.run(...)` brings the result back into a variable, and `open()` / `pathlib`
-  read and write files — no wrapper API to learn, and nothing extra to describe to the model.
+  read and write files. No wrapper API to learn, and nothing extra to describe to the model.
 - **Error survival.** A cell that throws reports the traceback and the kernel keeps going.
 - **An honest evaluator.** If it restarts, it names what state it could revive and what it lost, so you don't trust memory that's gone.
 
 ## Helpers
 
-A **helper** is a `.py` file that gets exec'd into every kernel, so whatever it defines —
-functions, classes, constants, imports, or a module that manages a tricky piece of
-complexity — is available in the workspace. Drop a file in the one helpers directory and
+A **helper** is a `.py` file that gets exec'd into every kernel, so whatever it defines
+(like functions, classes, constants, imports, or a module that manages a tricky piece of
+complexity) is available in the workspace. Drop a file in the one helpers directory and
 restart the session; e.g. `helpers/double.py` defining `def double(x)` becomes callable as
 `double(...)`. It ships **empty** (shell and file IO are already plain Python), so a fresh
 install preloads nothing until you add one. Each helper's `helper_description` is shown to
@@ -66,7 +66,7 @@ Everything the extension keeps lives under one folder in your home directory:
   state/        per-session namespace snapshots
 ```
 
-The helpers directory is fixed at `~/.pi/agent/pi-repl/helpers` — no config file.
+The helpers directory is fixed at `~/.pi/agent/pi-repl/helpers`. No config file.
 
 Changing a helper (adding/removing a file, renaming one with a `_` prefix) needs a
 **session restart / `/reload`**: the prompt list is built when `execute` is registered and
@@ -91,4 +91,4 @@ The Python interpreter is auto-resolved (the venv, else `$PYTHON`/`python3`).
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
