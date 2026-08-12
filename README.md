@@ -34,7 +34,7 @@ A plain `pi` session is untouched; the extension is dormant until `--repl` is pa
 
 `npm install` runs a `postinstall` that creates the Python venv the evaluator needs, at a stable
 per-user path (`~/.pi/agent/pi-repl/venv`). If `python3` or the network is missing, it prints a
-clear notice. How the interpreter is resolved is in [docs/philosophy.md](docs/philosophy.md).
+clear notice. How the interpreter is resolved is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## What you get
 
