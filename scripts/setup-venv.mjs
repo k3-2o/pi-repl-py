@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
- * postinstall: build the stable per-user Python venv the guest evaluator needs.
+ * postinstall: build the stable per-user Python venv the evaluator needs.
  *
- * The guest (src/engine/guest.py) runs a real ipykernel, which requires
- * `ipykernel` + `jupyter_client` installed in a Python environment. When this
- * is installed as a pi package there is no repo-local `.venv` (gitignored and
- * excluded from the npm tarball), so we create one at a stable path the engine
- * also knows about:
+ * The evaluator (src/engine/kernel.ts) drives a real ipykernel directly over
+ * the Jupyter protocol; `ipykernel` is the only hard runtime dependency. When
+ * this is installed as a pi package there is no repo-local `.venv` (gitignored
+ * and excluded from the npm tarball), so we create one at a stable path the
+ * engine also knows about:
  *
  *   ~/.pi/agent/pi-repl/venv/bin/python3
  *
