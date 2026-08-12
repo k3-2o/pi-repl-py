@@ -1,17 +1,4 @@
-// --- KernelClient: one real ipykernel subprocess, driven over the standard ---
-// --- Jupyter protocol directly from the host (no middleman process). ---
-//
-// This file is what guest.py used to be — but instead of a Python process
-// translating a private fd3 JSON protocol into the Jupyter protocol, the host
-// spawns `python -m ipykernel -f <connection-file>` itself and speaks the
-// standard protocol over ZMTP (zmtp.ts + session.ts). The fd3 protocol, its
-// nonce, and the whole middle process existed only because the host did not
-// speak the kernel's own protocol; they are gone.
-//
-// Responsibilities: spawn + connect + readiness, boot preload (helpers), cell
-// execution with output routed by msg_id, silence
-// watchdog timeout, real cancellation via control-channel interrupt,
-// snapshot/restore/names over private-MIME display payloads, teardown.
+// --- KernelClient: one ipykernel subprocess driven directly over ZMTP (no guest middleman). ---
 
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -64,9 +51,7 @@ export interface SnapshotReply {
 	complete: boolean;
 }
 
-// --- boot preload: every helper source is exec'd into the namespace. No ls()/help()
-// intrinsics — the model lists what's loaded with plain Python (globals()), and the
-// tool guidance already surfaces each helper's description verbatim. ---
+// --- boot preload: exec each helper; ls()/help() are gone, discovery is globals() ---
 
 /** Read the helpers dir (same skip rules as the extension's prompt loader). */
 export function readHelperSources(dir?: string): { name: string; source: string }[] {
@@ -89,7 +74,6 @@ function buildSkipList(helperNames: string[]): string {
 	return JSON.stringify([...names]);
 }
 
-/** Snapshot cell: pickle each global that will survive, publish as JSON. */
 function snapshotCode(helperNames: string[]): string {
 	const skip = buildSkipList(helperNames);
 	return (
@@ -205,9 +189,7 @@ export class KernelClient {
 		});
 
 		const deadline = Date.now() + KERNEL_READY_TIMEOUT_MS;
-		// --- poll until the connection file is present AND fully written: existsSync
-		// returns as soon as the file is created, before ipykernel finishes writing,
-		// so reading an invalid JSON there races the write and throws "Unexpected EOF."
+		// --- poll until present AND fully written: existsSync fires before the write finishes ---
 		let conn: ConnectionFile;
 		while (true) {
 			if (child.exitCode !== null) {
@@ -224,7 +206,7 @@ export class KernelClient {
 				conn = readConnectionFile(connPath);
 				break;
 			} catch {
-				// --- file not present yet, or mid-write: retry ---
+				// --- not present yet, or mid-write: retry ---
 				await new Promise((resolve) => setTimeout(resolve, 25));
 			}
 		}
@@ -281,16 +263,12 @@ export class KernelClient {
 		return this.executeCell(code, { maxOutputChars: DEFAULT_MAX_OUTPUT_CHARS }).then(() => {});
 	}
 
-	// --- channel routing ---
-
 	private onShellMessage(frames: Buffer[]): void {
 		const msg = this.session.parseMessage(frames);
 		if (!msg) return;
 		const active = this.activeCell;
-		if (msg.msg_type === "execute_reply" && active && msg.parent["msg_id"] === active.msgId) {
-			// --- the shell reply races the iopub stream (different connections,
-			//     and a 10 MB output drains slower than a 1 KB reply): record it
-			//     but only settle once the iopub idle confirms all output flowed ---
+		if (msg.msg_type === "execute_reply" && active && msg.parent.msg_id === active.msgId) {
+			// --- the shell reply races the iopub stream: record it, settle only after idle ---
 			active.reply = msg;
 			active.replySeen = true;
 			this.maybeSettle(active);
@@ -302,8 +280,7 @@ export class KernelClient {
 	private onControlMessage(frames: Buffer[]): void {
 		const msg = this.session.parseMessage(frames);
 		if (!msg) return;
-		// interrupt_reply / shutdown_reply — nothing awaits them, but keep the
-		// connection draining; replies are routed by parent msg_id if any.
+		// interrupt_reply / shutdown_reply — nothing awaits them; keep draining.
 		this.resolveReply(msg);
 	}
 
@@ -311,17 +288,17 @@ export class KernelClient {
 		const msg = this.session.parseMessage(frames);
 		if (!msg) return;
 		const active = this.activeCell;
-		if (!active || msg.parent["msg_id"] !== active.msgId) return;
+		if (!active || msg.parent.msg_id !== active.msgId) return;
 		active.lastActivity = Date.now();
 		const c = msg.content;
 		switch (msg.msg_type) {
 			case "stream": {
-				const text = (c["text"] as string) ?? "";
-				this.accumulate(active, c["name"] === "stderr" ? "stderr" : "stdout", text);
+				const text = (c.text as string) ?? "";
+				this.accumulate(active, c.name === "stderr" ? "stderr" : "stdout", text);
 				break;
 			}
 			case "execute_result": {
-				const data = c["data"] as Record<string, unknown> | undefined;
+				const data = c.data as Record<string, unknown> | undefined;
 				const plain = data?.["text/plain"];
 				if (typeof plain === "string") active.result = plain;
 				this.collectPayload(active, c);
@@ -331,19 +308,17 @@ export class KernelClient {
 				this.collectPayload(active, c);
 				break;
 			case "error": {
-				const traceback = Array.isArray(c["traceback"]) ? (c["traceback"] as string[]) : [];
+				const traceback = Array.isArray(c.traceback) ? (c.traceback as string[]) : [];
 				active.error = {
-					name: (c["ename"] as string) ?? "Error",
-					message: (c["evalue"] as string) ?? traceback.join("\n"),
+					name: (c.ename as string) ?? "Error",
+					message: (c.evalue as string) ?? traceback.join("\n"),
 					stack: traceback,
 				};
 				break;
 			}
 			case "status":
-				// --- the idle marker is published after every byte of this cell's
-				//     output; the cell is only complete once we have it (see
-				//     settleFromReply / maybeSettle) ---
-				if (c["execution_state"] === "idle") {
+				// --- status idle is published after every byte; the cell is complete only once we have it ---
+				if (c.execution_state === "idle") {
 					active.idleSeen = true;
 					this.maybeSettle(active);
 				}
@@ -371,18 +346,14 @@ export class KernelClient {
 			if (name === "stdout") active.outLen += keep;
 			else active.errLen += keep;
 		}
-		// --- one oversized message (10 MB print in a single stream frame)
-		//     overflows the cap within this call; flag it here, not only when
-		//     a *later* message finds the budget exhausted ---
+		// --- one oversized stream frame (10 MB print) overflows the cap within this call ---
 		if (text.length > keep) {
 			if (name === "stdout") active.stdoutTruncated = true;
 			else active.stderrTruncated = true;
 		}
-		// --- beyond the cap we drop text but keep draining; stream only the kept part ---
+		// --- beyond the cap we drop text but keep draining ---
 		active.onStream?.(text.slice(0, keep), name);
 	}
-
-	// --- request plumbing ---
 
 	private waitForReply(msgId: string, timeoutMs: number, expectedType: string): Promise<ParsedMessage> {
 		return new Promise<ParsedMessage>((resolve, reject) => {
@@ -396,14 +367,12 @@ export class KernelClient {
 	}
 
 	private resolveReply(msg: ParsedMessage): void {
-		const pending = this.pendingReplies.get(msg.parent["msg_id"] as string);
+		const pending = this.pendingReplies.get(msg.parent.msg_id as string);
 		if (!pending) return;
-		this.pendingReplies.delete(msg.parent["msg_id"] as string);
+		this.pendingReplies.delete(msg.parent.msg_id as string);
 		if (pending.timer) clearTimeout(pending.timer);
 		pending.resolve(msg);
 	}
-
-	// --- cell execution ---
 
 	executeCell(code: string, opts: CellOptions = {}): Promise<CellResult> {
 		return this.enqueue(() => this.executeCellNow(code, opts)).then(({ payloads: _payloads, ...rest }) => rest);
@@ -417,8 +386,7 @@ export class KernelClient {
 
 	private executeCellNow(code: string, opts: CellOptions): Promise<CellResult & { payloads: Record<string, string> }> {
 		const maxChars = opts.maxOutputChars ?? DEFAULT_MAX_OUTPUT_CHARS;
-		// --- one msg_id per request: the kernel echoes our header as the reply's
-		//     parent, so routing (iopub + execute_reply) matches on this id ---
+		// --- one msg_id per request; the kernel echoes it as the reply's parent for routing ---
 		const msgId = this.session.nextMsgId();
 		const active: ActiveCell = {
 			msgId,
@@ -467,9 +435,7 @@ export class KernelClient {
 	}
 
 	private maybeSettle(active: ActiveCell): void {
-		// --- a cell is complete only when the shell reply AND the iopub idle
-		//     have both arrived; settling on the reply alone would drop output
-		//     still draining on the slower iopub connection ---
+		// --- settle only once the shell reply AND the idle iopub stream arrive, else output is dropped ---
 		if (active.settled || !active.replySeen || !active.idleSeen) return;
 		this.settleFromReply(active, active.reply!);
 	}
@@ -478,11 +444,11 @@ export class KernelClient {
 		if (active.settled) return;
 		active.settled = true;
 		const content = msg.content;
-		const replyStatus = (content["status"] as string) ?? "ok";
+		const replyStatus = (content.status as string) ?? "ok";
 		if (replyStatus === "error" && !active.error) {
 			active.error = {
-				name: (content["ename"] as string) ?? "Error",
-				message: (content["evalue"] as string) ?? "error",
+				name: (content.ename as string) ?? "Error",
+				message: (content.evalue as string) ?? "error",
 				stack: [],
 			};
 		}
@@ -511,8 +477,6 @@ export class KernelClient {
 		});
 	}
 
-	// --- silence watchdog (old PI_REPL_TIMEOUT_MS semantics, host-side now) ---
-
 	private startWatchdog(active: ActiveCell): void {
 		this.stopWatchdog();
 		if (!this.timeoutMs) return;
@@ -536,17 +500,12 @@ export class KernelClient {
 		}
 	}
 
-	/** Real cancellation: interrupt_request on the control channel raises
-	 * KeyboardInterrupt in the running cell; the kernel survives with its
-	 * namespace intact. Backstop (engine-side): if the cell never settles,
-	 * kill the kernel and rebuild from the last snapshot. */
+	/** Genuine KeyboardInterrupt via control-channel interrupt_request; the kernel survives. */
 	interrupt(): void {
 		const active = this.activeCell;
 		if (!active || active.settled) return;
 		this.control?.send(this.session.buildFrames("interrupt_request", {}, null));
 	}
-
-	// --- snapshot / restore / names (private cells, payload over the protocol) ---
 
 	snapshot(): Promise<SnapshotReply> {
 		return this.enqueue(async () => {
@@ -597,8 +556,6 @@ export class KernelClient {
 			}
 		});
 	}
-
-	// --- teardown ---
 
 	/** Graceful stop: shutdown_request on control, then SIGKILL as backstop. */
 	async shutdown(): Promise<void> {

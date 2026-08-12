@@ -1,4 +1,4 @@
-// --- pure layout, free of pi imports so unit tests can drive it directly ---
+/** Pure layout, free of pi imports so unit tests drive it directly. */
 
 export interface ExecuteDetails {
 	status?: "ok" | "error" | "aborted" | string;
@@ -49,11 +49,7 @@ export function formatDuration(durationMs: number | undefined): string | undefin
 
 const SGR_PATTERN = /\x1b\[([0-9;]*)m/g;
 
-/**
- * Append a reset when `line` ends with a foreground or background color still
- * open, so a span that wrapping split across lines cannot bleed into the
- * trailing padding or the next row.
- */
+/** Close an open color so a line wrapped across words can't bleed into padding or the next row. */
 export function closeOpenSgr(line: string): string {
 	let fgOpen = false;
 	let bgOpen = false;

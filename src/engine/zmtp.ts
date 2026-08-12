@@ -1,27 +1,5 @@
-// --- ZMTP 3.0 (rfc.zeromq.org/spec/23): the ZeroMQ wire protocol, by hand ---
-//
-// Why this file exists: the Jupyter kernel protocol is the standard way to
-// talk to a kernel, and ZMTP is its transport. The host runtime (bun) cannot
-// load libzmq's native bindings (`zeromq` crashes bun with an unsupported
-// uv_async_init), so we speak ZMTP 3.0 directly over node:net. That keeps the
-// architecture honest: one process boundary (pi → ipykernel), one protocol
-// (the standard one), zero middleman, zero invented framing.
-//
-// Scope is deliberately tiny: a Jupyter *client* needs exactly two socket
-// roles, and no more — DEALER (shell / control) and SUB (iopub). There is no
-// ROUTER, no PUB, no REQ/REP state machine, no multiplexing.
-//
-// Wire facts (verified against pyzmq and a real ipykernel, see the git log):
-//   - connect → both peers send a 64-byte greeting: a 10-byte signature
-//     (ff 00 00 00 00 00 00 00 01 7f), then version 3.0, mechanism "NULL"
-//     padded to 20, as-server flag, filler to 64.
-//   - after the greeting each peer sends one READY metadata frame naming its
-//     socket type; data flows only after both READYs are exchanged.
-//   - a DEALER sends/receives plain multipart messages — the routing identity
-//     lives in the READY metadata, not in per-message frames, so a client
-//     never sees identity frames on the wire.
-//   - a SUB subscribes by sending a frame whose first byte is 0x01 (subscribe)
-//     followed by the topic prefix (empty = everything).
+// --- ZMTP 3.0 wire protocol, by hand (bun can't load libzmq's bindings). ---
+// DEALER for shell/control, SUB for iopub; greeting 0xff..0x7f + READY each side.
 
 import { connect, type Socket } from "node:net";
 
@@ -60,20 +38,7 @@ export function encodeFrame(body: Uint8Array, more: boolean): Buffer {
 	Buffer.from(body).copy(out, 9);
 	return out;
 }
-/**
- * Incremental frame parser over a TCP byte stream. Feeds chunks from
- * `socket.data` and yields complete ZMTP messages (a run of frames ending on
- * a non-"more" frame).
- *
- * Two state traps here, both easy to get wrong:
- *   - `current` (the in-progress message) must survive across `feed` calls:
- *     a message whose body spans several TCP chunks would otherwise lose every
- *     frame parsed before the break, and the tail would be delivered as a
- *     one-frame "message" on its own.
- *   - accumulation must not be quadratic: a 10 MB frame arriving as ~160
- *     chunks must be copied once (when its body is materialized), not once per
- *     chunk. A flat `Buffer.concat` per chunk is O(n²) in the frame size.
- */
+/** Incremental parser: `current` persists across feed() and accumulation is once-per-frame (avoid O(n²)). */
 export class ZmtpFrameParser {
 	private chunks: Buffer[] = [];
 	private total = 0;
@@ -96,8 +61,7 @@ export class ZmtpFrameParser {
 			const length = long ? header.readUInt32BE(5) : header[1];
 			if (this.total < headerLen + length) break;
 			const frame = this.take(headerLen + length);
-			// `take` returns a subarray view sharing a receive chunk, or a fresh
-			// concat for a multi-chunk frame; neither is ever mutated, so no copy.
+			// `take` returns a subarray (or a fresh concat for multi-chunk frames); never mutated, so no copy
 			this.current.push(frame.subarray(headerLen));
 			if ((flags & FRAME_MORE) === 0) {
 				messages.push(this.current);
@@ -163,10 +127,7 @@ interface ReadReady {
 	reject(error: Error): void;
 }
 
-/**
- * One ZMTP connection in the client role. Owns the TCP socket, performs the
- * greeting + READY handshake, then delivers complete multipart messages.
- */
+/** One ZMTP client connection: TCP socket + greeting/READY handshake → complete multipart messages. */
 export class ZmtpSocket {
 	private socket?: Socket;
 	private parser = new ZmtpFrameParser();
@@ -183,8 +144,7 @@ export class ZmtpSocket {
 	static connect(opts: { host: string; port: number; socketType: ZmtpSocketType }): Promise<ZmtpSocket> {
 		const socket = connect({ host: opts.host, port: opts.port });
 		const z = new ZmtpSocket(socket);
-		// --- the peer's 64-byte greeting is NOT frame-formatted; collect it
-		//     separately before the frame parser is allowed to see bytes ---
+		// --- the peer's 64-byte greeting is not frame-formatted; collect it before the parser sees bytes ---
 		let greeting = Buffer.alloc(0);
 
 		socket.on("data", (chunk) => {

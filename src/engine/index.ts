@@ -1,15 +1,6 @@
-// --- EngineManager: the host half of pi-repl's evaluator ---
-//
-// Orchestration over KernelClient (src/engine/kernel.ts), which speaks the
-// standard Jupyter protocol directly to a real ipykernel subprocess over ZMTP
-// (src/engine/zmtp.ts + session.ts). There is no guest.py middleman anymore:
-// the fd3 JSON protocol and its nonce existed only because the host did not
-// speak the kernel's own protocol, and are gone with it.
-//
-// This class keeps the parts that are about *managing* the evaluator, not
-// about the wire: the venv resolution, lazy spawn, the execution queue,
-// snapshot debounce + file persistence, output truncation markers, abort
-// grace (interrupt, then kill as backstop), and process-wide teardown.
+// --- EngineManager: the host half of pi-repl's evaluator, driving a real ipykernel over ---
+// --- ZMTP directly (no guest.py middleman). Owns venv resolution, spawn, queue,   ---
+// --- snapshots, abort grace, and teardown — the wire lives in kernel.ts.         ---
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -89,8 +80,7 @@ export interface EngineOptions {
 	};
 }
 
-// --- process-wide cleanup: kernels killed on exit (a child does not die with
-// its parent; the old guest self-exited on stdin EOF, a plain ipykernel won't) ---
+// --- process-wide cleanup: a child does not die with its parent, so SIGKILL live kernels on exit ---
 
 const liveEngines = new Set<EngineManager>();
 let cleanupHandlersInstalled = false;
@@ -125,7 +115,13 @@ export class EngineManager {
 		return this.state === "running" && (this.kernel?.isRunning ?? false);
 	}
 
-	//--- lifecycle ---
+	// -- state can change to "shutdown" from kill()/dispose() at any time; read it
+	// through a method so TS doesn't narrow the union and flag a false "no overlap" --
+	private isShutdown(): boolean {
+		return this.state === "shutdown";
+	}
+
+	//lifecycle
 
 	async start(): Promise<void> {
 		if (this.state === "shutdown") throw new Error("Engine has been shut down");
@@ -159,7 +155,7 @@ export class EngineManager {
 			throw error;
 		}
 		// --- win the shutdown race: don't resurrect a killed engine as running ---
-		if (this.state === "shutdown") {
+		if (this.isShutdown()) {
 			this.kernel?.kill();
 			this.kernel = undefined;
 			throw new Error("Engine has been shut down");
@@ -189,8 +185,6 @@ export class EngineManager {
 		this.killSync();
 	}
 
-	//--- execute ---
-
 	async execute(code: string, opts: ExecuteOptions = {}): Promise<ExecuteResult> {
 		// --- claim the queue slot synchronously so order == submission order ---
 		const previous = this.executionQueue;
@@ -204,11 +198,11 @@ export class EngineManager {
 			if (opts.signal?.aborted) {
 				return { stdout: "", stderr: "", status: "aborted", durationMs: 0 };
 			}
-			if (this.state === "shutdown") {
+			if (this.isShutdown()) {
 				throw new Error("Engine has been shut down");
 			}
 			await this.start();
-			if (this.state === "shutdown") {
+			if (this.isShutdown()) {
 				throw new Error("Engine has been shut down");
 			}
 
@@ -219,8 +213,7 @@ export class EngineManager {
 			const onAbort = () => {
 				aborted = true;
 				this.kernel?.interrupt();
-				// --- interrupt is real (KeyboardInterrupt in the kernel), but a
-				// cell wedged in C code ignores it; then kill and rebuild ---
+				// --- interrupt is a real KeyboardInterrupt, but a C-wedged cell ignores it; then kill+rebuild ---
 				graceTimer = setTimeout(() => {
 					if (this.state === "running" && this.kernel) {
 						this.state = "shutdown";
@@ -262,8 +255,6 @@ export class EngineManager {
 			release();
 		}
 	}
-
-	//--- snapshot / restore / names ---
 
 	async snapshotState(): Promise<SnapshotResult | null> {
 		const config = this.options.snapshot;

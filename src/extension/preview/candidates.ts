@@ -5,7 +5,7 @@ import { maskSpan, scanTemplate, substituteVars } from "./scan.js";
 import { previewShellCommand, previewShellCommandScored, SHELL_SETUP_WORDS, shellWords } from "./shell.js";
 import { BACKTICK, type Candidate } from "./types.js";
 
-const SHELL_OPEN_PATTERN = new RegExp("Bun\\s*\\.\\s*\\$\\s*(?:\\([^)]*\\)\\s*)?" + BACKTICK, "g");
+const SHELL_OPEN_PATTERN = new RegExp(`Bun\\s*\\.\\s*\\$\\s*(?:\\([^)]*\\)\\s*)?${BACKTICK}`, "g");
 
 export function shellCandidates(
 	source: string,
@@ -58,7 +58,7 @@ const FILE_EFFECT_VERBS: ReadonlyArray<[string, string]> = [
 // --- resolve a quoted literal, a known const, or an interpolated template into a plain string ---
 function resolveArgText(arg: string, vars: ReadonlyMap<string, string>): string | undefined {
 	const trimmed = arg.trim();
-	const literalPattern = new RegExp("^[\"'" + BACKTICK + "]([^\"'" + BACKTICK + "]*)[\"'" + BACKTICK + "]$");
+	const literalPattern = new RegExp(`^["'${BACKTICK}]([^"'${BACKTICK}]*)["'${BACKTICK}]$`);
 	const literal = trimmed.match(literalPattern);
 	if (literal?.[1]) return literal[1];
 	if (/^[A-Za-z_$][\w$]*$/.test(trimmed)) return vars.get(trimmed);
@@ -75,15 +75,15 @@ export function fileCandidates(source: string, vars: ReadonlyMap<string, string>
 		const verb = FILE_EFFECT_VERBS.find(([name]) => call.includes(name))?.[1];
 		if (!verb) continue;
 		const path = resolveArgText(match[1] ?? "", vars);
-		if (path) candidates.push({ kind: "ts", text: descriptor(verb + " " + path), score: 95 });
+		if (path) candidates.push({ kind: "ts", text: descriptor(`${verb} ${path}`), score: 95 });
 	}
 	for (const match of source.matchAll(FILE_READ_PATTERN)) {
 		const path = resolveArgText(match[1] ?? "", vars);
-		if (path) candidates.push({ kind: "ts", text: descriptor("read " + path), score: 70 });
+		if (path) candidates.push({ kind: "ts", text: descriptor(`read ${path}`), score: 70 });
 	}
 	for (const match of source.matchAll(/\bfetch\s*\(\s*([^,)\n]+)/g)) {
 		const url = resolveArgText(match[1] ?? "", vars);
-		if (url) candidates.push({ kind: "ts", text: descriptor("fetch " + url), score: 75 });
+		if (url) candidates.push({ kind: "ts", text: descriptor(`fetch ${url}`), score: 75 });
 	}
 	return candidates;
 }
@@ -105,11 +105,11 @@ export function bridgedToolCandidates(source: string, vars: ReadonlyMap<string, 
 		const spec = BRIDGED_TOOLS[match[1] ?? ""];
 		if (!spec) continue;
 		const props = match[2] ?? "";
-		const argMatch = props.match(new RegExp(spec.arg + "\\s*:\\s*([^,}]+)"));
+		const argMatch = props.match(new RegExp(`${spec.arg}\\s*:\\s*([^,}]+)`));
 		const target = argMatch ? resolveArgText(argMatch[1] ?? "", vars) : undefined;
 		if (!target) continue;
 		// --- a bridged bash call is a command like any other ---
-		const text = spec.verb ? spec.verb + " " + target : previewShellCommand(target) || target;
+		const text = spec.verb ? `${spec.verb} ${target}` : previewShellCommand(target) || target;
 		candidates.push({ kind: "ts", text: descriptor(text), score: spec.score });
 	}
 	return candidates;

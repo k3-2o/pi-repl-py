@@ -1,9 +1,4 @@
-/**
- * TUI adapter for the `execute` cell renderer.
- *
- * Binds pi's theme, syntax highlighting, key hints, and width primitives to the
- * pure layout in render-core.ts, which is unit-tested outside pi's runtime.
- */
+/** TUI adapter binding pi's theme/width to the unit-tested pure layout in render-core.ts. */
 
 import { highlightCode, keyHint, keyText, rawKeyHint, type Theme } from "@mariozechner/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
@@ -35,11 +30,7 @@ function makeDeps(theme: Theme): RenderDeps {
 	};
 }
 
-/**
- * The layout of a cell only changes when its state or the spinner frame does,
- * but the TUI repaints on every frame. Rendering from a key of both stops the
- * recompute-per-frame (and with it, flicker on wide panes).
- */
+/** The layout only changes on state/spinner change, but the TUI repaints every frame; key by both to avoid recompute flicker. */
 function renderVersion(state: ExecuteRenderState): string {
 	const details = state.details ? JSON.stringify(state.details) : "";
 	return [

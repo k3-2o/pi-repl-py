@@ -7,7 +7,7 @@ function collapseWhitespace(text: string): string {
 
 function truncateDescriptor(text: string): string {
 	if (text.length <= DESCRIPTOR_MAX_WIDTH) return text;
-	return text.slice(0, DESCRIPTOR_MAX_WIDTH - 1).trimEnd() + "…";
+	return `${text.slice(0, DESCRIPTOR_MAX_WIDTH - 1).trimEnd()}…`;
 }
 
 // --- strip blobs, secrets, and sk- keys before a line reaches the header ---

@@ -24,7 +24,7 @@ function simplifyRunnerCommand(line: string): string | undefined {
 	if (words[0] === "npm" || words[0] === "pnpm") {
 		const runIndex = words.indexOf("run");
 		if (runIndex >= 0 && words[runIndex + 1]) {
-			return (words[0] + " " + words.slice(runIndex + 1).join(" ")).trim();
+			return `${words[0]} ${words.slice(runIndex + 1).join(" ")}`.trim();
 		}
 	}
 	if (line.includes("node_modules/.bin/")) {
@@ -36,7 +36,7 @@ function simplifyRunnerCommand(line: string): string | undefined {
 function simplifyMutationCommand(line: string): string | undefined {
 	const words = shellWords(line);
 	if (words.length === 0) return undefined;
-	if (words[0] === "cat" && words[1] === ">" && words[2]) return "write " + pathTail(words[2]);
+	if (words[0] === "cat" && words[1] === ">" && words[2]) return `write ${pathTail(words[2])}`;
 	if (words[0] === "tee" && words.at(-1)) {
 		return (words.includes("-a") ? "append " : "write ") + pathTail(words.at(-1) ?? "");
 	}
@@ -151,6 +151,6 @@ export function previewShellCommandScored(command: string): { text: string; stre
 	// --- trailing redirections are plumbing, not intent ---
 	const cleaned = best.text.replace(/(?:\s*(?:2>&1|[12]?>\s*\/dev\/null|&>\s*\/dev\/null))+\s*$/, "");
 	// --- a stripped cd prefix still matters when it names a non-default dir ---
-	const text = cwdSuffix && !cleaned.includes(cwdSuffix) ? cleaned + " (" + cwdSuffix + ")" : cleaned;
+	const text = cwdSuffix && !cleaned.includes(cwdSuffix) ? `${cleaned} (${cwdSuffix})` : cleaned;
 	return { text: descriptor(text), strength: best.score };
 }

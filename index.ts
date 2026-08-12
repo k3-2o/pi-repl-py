@@ -183,12 +183,10 @@ export default function (pi: ExtensionAPI) {
 				pendingErrorResults.set(toolCallId, { details });
 				throw new Error(text || "(no output)");
 			}
-			// --- an aborted cell was interrupted, not wedged: the kernel keeps
-			//     running with its namespace, so there is nothing to discard ---
+			// --- an aborted cell was interrupted, not wedged: the kernel keeps running, nothing to discard ---
 			return result;
 		} catch (error) {
-			// --- a kernel that died (or was killed as the abort backstop) leaves the
-			//     engine down; drop it so the next cell rebuilds from the snapshot ---
+			// --- a kernel that died (or was killed as the abort backstop) is down; drop it so the next cell rebuilds ---
 			if (m.isRunning === false) {
 				await lifecycle.discard();
 			}

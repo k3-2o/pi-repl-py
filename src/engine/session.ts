@@ -1,18 +1,7 @@
-// --- Jupyter Kernel Protocol messaging over ZMTP (the standard, by hand) ---
-//
-// A Jupyter message on the wire is a ZMTP multipart message:
-//
-//   [identities...]  <IDS|MSG>  [signature, header, parent, metadata, content]
-//
-// - identities are empty for a client's own channels: the kernel's ROUTER
-//   replies arrive with no identity frames (verified against ipykernel 7).
-// - signature = hex(HMAC-SHA256(key, header || parent || metadata || content))
-//   over the *exact serialized bytes* of the four JSON parts; a receiver
-//   verifies over the received bytes, so the sender's JSON style need not
-//   match Python's. `key` comes from the kernel's connection file.
-//
-// Reference: jupyter-client messaging docs; the installed session.py is the
-// ground truth this module was checked against.
+// --- Jupyter messaging over ZMTP: [identities] <IDS|MSG> [sig, h, p, m, c] ---
+// ids are empty for a client's own channels (kernel ROUTER strips them);
+// sig = hex(HMAC-SHA256(key, h||p||m||c)) over the exact bytes; key from the
+// connection file. Checked against jupyter_client's session.py.
 
 import { createHmac, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -77,8 +66,7 @@ export class JupyterSession {
 	}
 
 	nextMsgId(): string {
-		// --- msg_ids only need uniqueness; a monotone counter over a session id
-		//     is enough and keeps ids short (jupyter_client uses a counter too) ---
+		// --- ids only need uniqueness; a monotone counter over a session id keeps them short ---
 		return `${this.sessionId}_${process.pid}_${this.counter++}`;
 	}
 
@@ -112,12 +100,9 @@ export class JupyterSession {
 		return [DELIM, signature, h, p, m, c];
 	}
 
-	/**
-	 * Parse an inbound multipart message (identity frames already stripped by
-	 * the ZMTP layer). Returns null if the framing is malformed.
-	 */
+	/** Parse an inbound multipart message (identities stripped by ZMTP); null if malformed. */
 	parseMessage(frames: Buffer[]): ParsedMessage | null {
-		// --- indexOf uses ===; frames are distinct Buffer objects, so match by value ---
+		// --- indexOf uses ===; frames are distinct Buffers, so match by value ---
 		const delimIdx = frames.findIndex((f) => f.equals(DELIM));
 		if (delimIdx < 0) return null;
 		const rest = frames.slice(delimIdx + 1);
@@ -137,8 +122,6 @@ export class JupyterSession {
 	}
 }
 
-// --- content shapes for the message types we emit ---
-
 export function executeRequest(code: string, silent: boolean): Record<string, unknown> {
 	return {
 		code,
@@ -157,7 +140,7 @@ export const NAMES_MIME = "application/vnd.pi-repl.names+json";
 
 /** Read a private-MIME payload out of an execute_result/display_data content. */
 export function readPayload(content: Record<string, unknown>, mime: string): string | null {
-	const data = content["data"];
+	const data = content.data;
 	if (data && typeof data === "object") {
 		const value = (data as Record<string, unknown>)[mime];
 		if (typeof value === "string") return value;
