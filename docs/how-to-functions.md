@@ -1,120 +1,110 @@
 # How to write a helper
 
-A helper is one `.py` file in the **helpers directory** (`~/.pi/agent/pi-repl/helpers`
-by default). pi-repl exec's every file there into every kernel and surfaces it to the
-model through the `execute` tool's prompt — its `helper_description` appears **verbatim**
-in the prompt. The file is the single source of truth for what the model is told; the
-loader parses nothing.
+A **helper** is a Python function you write once that becomes available to the agent in
+every `pi --repl` session. You drop a `.py` file into one folder, restart the session, and
+the function is callable from the workspace — like a bookmark for code the agent keeps
+reaching for.
 
-The philosophy: helpers are **additions the user chooses**, for things the REPL
-doesn't already provide natively (e.g. a `web_search` with provider failover).
-Shell and file IO are **not** helpers — the REPL gives those as ordinary
-Python (`subprocess`, `!cmd`, `%%bash`, `open`, `pathlib`). A helper owns only
-the fragile or opaque part the model can't reliably reconstruct.
+This guide shows the smallest helper that works, then explains the three parts every
+helper file has and the habits that make a helper useful.
 
-> **When a change shows up.** The kernel loads the helpers at boot, and the `execute`
-> tool builds its list at registration, so a change (add/remove a file, edit a
-> description) is picked up by a **session restart / `/reload`** — not mid-session.
+## Prerequisites
 
-## Where helpers live
+- A working `pi --repl` session (the extension is installed — see the README).
+- The helpers folder, `~/.pi/agent/pi-repl/helpers/`. It is created empty on install.
 
-There is exactly **one** helpers directory — fixed at `~/.pi/agent/pi-repl/helpers`. There is
-no config file and no knob; this is the only helpers dir and the only source — its content
-is everything that loads (add a `.py`, edit one, delete one freely). There is no helper
-folder anywhere in the repo or package; the dir is created empty on install. Shell and file
-IO are native (not helpers), so a new pi-repl install has **no** preloaded helpers until
-you add one.
+## The smallest helper
 
-## The anatomy of a helper file
-
-Every file has three parts; only the first reaches the prompt:
+Create this file:
 
 ```python
-# in ~/.pi/agent/pi-repl/helpers/my_step.py
-helper_description = """my_step(...) — a small building block that owns one fragile part.
-It decides nothing; you write the command, the conversion, the decisions around it.
-Instead of: <the stdlib call this replaces>."""
+# ~/.pi/agent/pi-repl/helpers/double.py
+helper_description = """double(x) — multiply a value by two."""
 
-def _private_helper(x):
-    return x * 2        # underscore names never load, never advertise
-
-def my_step(a, b):
-    """Deep detail lives here: args, return, gotchas, env facts."""
-    return a + b
+def double(x):
+    """Return x * 2. Works on ints, floats, and lists."""
+    return x * 2
 ```
 
-| Part | What it is | Where it goes |
-|---|---|---|
-| `helper_description` | Everything the model sees in the prompt | Prompt bullet (verbatim) |
-| the code | The real implementation | Loaded into every kernel |
-| docstrings | Deep detail | Available via plain-Python introspection (`print(name.__doc__)`) |
+Restart the session (`/reload`, or relaunch `pi --repl`), then check it loaded:
 
-The public name comes from the filename: `my_step.py` loads as `my_step`; keep the `def`
-name identical. Underscore-prefixed files/names are neither loaded nor advertised.
+```python
+print([k for k in globals() if not k.startswith('_')])
+# ['double', ...]
 
-## Writing the description (it IS the prompt)
+print(double(21))
+# 42
+```
 
-The description is the model's whole first impression — the loader renders it verbatim
-and interprets nothing. This is everything it reads, every turn, all session.
+If `double` appears in the namespace and runs, it's loaded. That is the whole loop: write
+the file, restart, use it.
 
-**Rule 1: the first line is the call shape.** `name(args)`, or the block form for a
-context-style helper (`with <name>() as x:`). Then one line on what it's for.
+## How it actually works
 
-**Rule 2: an "Instead of:" line names the hand-roll it replaces.** This is what kills the
-trained habit of rebuilding the raw stdlib call:
+Two things happen with the file you wrote:
 
-- Good: `Instead of: subprocess.run(cmd, shell=True) with hand-rolled kill-on-timeout.`
-- Bad: `Instead of: doing it manually.` — names nothing, changes nothing.
+1. **The kernel execs it at boot.** The file's source runs in the kernel before the first
+   cell, so `def double` defines a callable `double` in the workspace. Separately, the
+   filename sets the label the prompt uses to advertise it — `double.py` is listed as
+   `double`. Keep the two identical (see *Common mistakes*).
 
-**Rule 3: keep it short.** Call shape + one consequence is plenty, for the model. Deep
-detail lives in the docstring. The description is billed into context every turn; a few
-words over can be fine, a flood is a waste.
+2. **The model sees the description.** The `execute` tool's prompt lists each helper's
+   `helper_description`, rendered **verbatim**. Nothing is parsed: the text you put between
+   the triple-quotes is exactly what the model reads.
 
-## Writing the docstring (the kernel-side truth)
+Shell and file IO are not helpers — they are already ordinary Python
+(`subprocess.run`, `!cmd`, `%%bash`, `open`, `pathlib`). A helper is only worth writing for
+the fragile or opaque part the model can't reliably reconstruct on its own: a `web_search`
+with provider failover, a client wrapper, a conversion it keeps getting wrong.
 
-Plain Python introspection (`print(name.__doc__)` or the builtin `help()`) shows the
-real object. That's where depth lives: argument notes (types, defaults, units), return and
-error behavior, environment facts ("this evaluator runs in a project-local venv, not the
-system python"), anything a caller needs. The docstring never appears in the prompt; it's
-the on-demand backstop the model reaches when the description isn't enough.
+## The three parts of a helper file
+
+| Part | Required? | What it does | Who sees it |
+|---|---|---|---|
+| `def name(...)` | yes | the implementation | runs in the kernel |
+| `helper_description` | no | one line the model reads first | the prompt, verbatim |
+| a docstring | no | the full detail | `print(name.__doc__)` on demand |
+
+**The function** is the implementation. Its public name must match the filename: `double.py`
+exposes `double`. Keep the `def` name identical so callers and the namespace agree.
+
+**The description** is the model's first impression. It is the only part that reaches the
+prompt, and it is billed into context every turn, so it wants to be short. Two habits help
+(not requirements — the loader parses nothing):
+
+- Start with the call shape: `double(x) — multiply a value by two.`
+- Add an "Instead of:" line naming the hand-rolled code it replaces, so the model reaches
+  for the helper rather than rewriting the raw call. *Good:* `Instead of: subprocess.run
+  with a hand-rolled kill-on-timeout.` *Weak:* `Instead of: doing it manually.`
+
+**The docstring** holds the depth — argument types and defaults, return value, error
+behaviour, environment facts ("this runs in a project-local venv, not the system Python").
+It never enters the prompt. The model reads it on demand with `print(name.__doc__)` or
+`help(name)` when the description is not enough.
 
 ## Common mistakes
 
-- **First line isn't the shape** — the bullet becomes prose with no clear call form.
-- **The helper makes the model lazy** — it decides the command, the parsing, the routing.
-  The helper owns the murk; reasoning stays with the caller.
-- **Deep detail stuffed into the description** — bloats every turn's context; move it to
-  the docstring.
-- **No docstring** — the model sees nothing but a signature; gotchas vanish.
-- **Top-level side effects** — the file is exec'd into every kernel at boot; keep
-  module-level code to definitions (no prints, no network, no slow imports at module scope).
-- **Filename ≠ public name** — a mismatch confuses the namespace and prompts.
+- **Description buried in detail.** Move anything beyond the call shape and one consequence
+  into the docstring. A long description bills into every turn.
+- **The helper decides too much.** A helper should own the murky part (the call, the
+  parsing), not the decision. If it picks the command, the routing, or the judgement, the
+  model stops reasoning.
+- **No docstring.** Without one, the model sees only a signature and the gotchas vanish.
+- **Top-level side effects.** The file runs at boot in every kernel. Keep module-level code
+  to definitions — no prints, no network, no slow imports at module scope.
+- **Filename and `def` name differ.** `helpers/foo.py` exposing `def bar` confuses callers
+  and the prompt. Keep them identical.
 
-## Disabling a file without deleting it
+## Disable a file without deleting it
 
-Rename it to a leading underscore (`_scratch.py`). The loader and the prompt skip
-underscore-prefixed files, so it never reaches the kernel or the model. Great for scratch
-helpers.
+Rename it with a leading underscore (`_scratch.py`). The loader skips any file whose name
+starts with `_`, so it never reaches the kernel or the prompt. Handy for scratch work.
 
 ## Checklist
 
-- [ ] Public name matches the filename
-- [ ] `helper_description` starts with the call shape / block form
-- [ ] An `Instead of:` line names the stdlib call it replaces
-- [ ] It owns only the murk, not the decision
-- [ ] Deep detail lives in the docstring, not the description
+- [ ] Filename matches the public `def` name
+- [ ] `helper_description` is short and starts with the call shape
+- [ ] Depth lives in the docstring, not the description
 - [ ] No top-level side effects
-- [ ] Restart / `/reload` the session
-
-## Confirming it worked
-
-At a `pi --repl` prompt, run a cell:
-
-```python
-print([k for k in globals() if not k.startswith('_')])  # what's loaded
-print(double(3))                                          # call it
-```
-
-If the helper's name shows in the printed namespace and it runs, it loaded. The
-`execute` tool's prompt guidance also shows its `helper_description` verbatim
-after the next restart.
+- [ ] Session restarted or `/reload`-ed
+- [ ] Name appears in `globals()` and the function runs
