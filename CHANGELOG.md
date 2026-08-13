@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.4] - 2026-08-13
+
+### Added
+
+- Documented the **Termux / Android** install path: `ipykernel`'s `psutil>=5.7` dependency has no PyPI Android wheel, so the venv build fails with `platform android is not supported`. Notes the two non-fixes (`python-psutil`, `psutil-android` ABI mismatch) and the working patched-source build of `psutil`, then installs it into the venv before `ipykernel`.
+
 ## [0.2.3] - 2026-08-12
 
 ### Changed
