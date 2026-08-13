@@ -4,24 +4,18 @@ node_modules/
 .pi-repl/
 dist/
 
-# Local experiment artifacts (session transcripts, A/B runs)
 rig/
 
-# Editor / project config
-.vscode/
+.nvim/
 
-# Python (guest)
 __pycache__/
 *.pyc
 .venv/
 .pytest_cache/
 .ruff_cache/
 *.egg-info/
-# internal contributor guide (not shipped)
 AGENTS.md
 
-# local audit working artifact (see AGENTS/adversarial-audit)
 AUDIT-FINDINGS.md
 
-# GitHub Actions (not used; releases are manual)
 .github/
