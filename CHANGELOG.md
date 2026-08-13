@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.5] - 2026-08-13
+
+### Changed
+
+- Clarified the README, architecture, design, helper, and Termux documentation.
+- Added a provider-backed web helper example.
+
 ## [0.2.4] - 2026-08-13
 
 ### Added
