@@ -1,110 +1,185 @@
-# How to write a helper
+# Helpers
 
-A **helper** is a `.py` file that gets exec'd into every kernel, so anything it defines —
-functions, classes, constants, imports, or a module that owns a fragile or opaque piece of
-work — becomes part of the agent's workspace; you drop the file into one folder, restart
-the session, and it's available. Like a bookmark for code the agent keeps reaching for.
+Helpers are optional Python files that pi-repl loads into the persistent workspace. Use one when
+code is worth reusing. A helper can also give the model a reliable wrapper instead of making it
+rebuild the same plumbing in every cell.
 
-This guide shows the smallest callable helper that works, then explains the parts of a
-helper file and the habits that make a helper useful.
+A helper can define a function, class, constant, import, or configured object. The filename labels the helper entry shown in the prompt. It does not have to match a function
+name or any other public name in the file.
 
-## Prerequisites
+## Where helpers live
 
-- A working `pi --repl` session (the extension is installed — see the README).
-- The helpers folder, `~/.pi/agent/pi-repl/helpers/`. It is created empty on install.
+```text
+~/.pi/agent/pi-repl/helpers/
+```
 
-## The smallest helper
+The directory is created empty when pi-repl is installed. Every `.py` file in it is loaded when the evaluator starts. Files whose names begin with `_` are ignored.
 
-Create this file:
+After adding, changing, renaming, or disabling a helper, run `/reload` or start a new `pi --repl` session. The running evaluator does not watch the directory for changes.
+
+## A small function helper
+
+Create `double.py`:
 
 ```python
-# ~/.pi/agent/pi-repl/helpers/double.py
 helper_description = """double(x) — multiply a value by two."""
+
 
 def double(x):
     """Return x * 2. Works on ints, floats, and lists."""
     return x * 2
 ```
 
-Restart the session (`/reload`, or relaunch `pi --repl`), then check it loaded:
+Reload pi, then call it from `execute`:
 
 ```python
-print([k for k in globals() if not k.startswith('_')])
-# ['double', ...]
-
 print(double(21))
 # 42
 ```
 
-If `double` appears in the namespace and runs, it's loaded. That is the whole loop: write
-the file, restart, use it.
+The evaluator runs the file in its global namespace, so `double` is directly available. You do not register or separately install an individual helper.
 
-## How it actually works
+## A helper can expose an object
 
-Two things happen with the file you wrote:
+A helper does not need to expose a function with the same name as its file. For example, `web.py` can create a configured `web` object:
 
-1. **The kernel execs it at boot.** The file's source runs in the kernel before the first
-   cell, so `def double` defines a callable `double` in the workspace. Separately, the
-   filename sets the label the prompt uses to advertise it — `double.py` is listed as
-   `double`. Keep the two identical (see *Common mistakes*).
+```python
+helper_description = """web — search, read, and map websites."""
 
-2. **The model sees the description.** The `execute` tool's prompt lists each helper's
-   `helper_description`, rendered **verbatim**. Nothing is parsed: the text you put between
-   the triple-quotes is exactly what the model reads.
 
-Shell and file IO are not helpers — they are already ordinary Python
-(`subprocess.run`, `!cmd`, `%%bash`, `open`, `pathlib`). A helper is only worth writing for
-the fragile or opaque part the model can't reliably reconstruct on its own: a `web_search`
-with provider failover, a client wrapper, a conversion it keeps getting wrong.
+class Web:
+    def search(self, query):
+        """Search the web and return normalized results."""
+        raise NotImplementedError
 
-## The three parts of a helper file
 
-| Part | Required? | What it does | Who sees it |
-|---|---|---|---|
-| `def name(...)` | yes | the implementation | runs in the kernel |
-| `helper_description` | no | one line the model reads first | the prompt, verbatim |
-| a docstring | no | the full detail | `print(name.__doc__)` on demand |
+web = Web()
+```
 
-**The function** is the implementation. Its public name must match the filename: `double.py`
-exposes `double`. Keep the `def` name identical so callers and the namespace agree.
+The model calls `web.search(...)`, not `web(...)`. See [`example/helper/web.py`](../example/helper/web.py) for the full provider-backed example.
 
-**The description** is the model's first impression. It is the only part that reaches the
-prompt, and it is billed into context every turn, so it wants to be short. Two habits help
-(not requirements — the loader parses nothing):
+## What the model sees
 
-- Start with the call shape: `double(x) — multiply a value by two.`
-- Add an "Instead of:" line naming the hand-rolled code it replaces, so the model reaches
-  for the helper rather than rewriting the raw call. *Good:* `Instead of: subprocess.run
-  with a hand-rolled kill-on-timeout.` *Weak:* `Instead of: doing it manually.`
+A helper may define `helper_description`:
 
-**The docstring** holds the depth — argument types and defaults, return value, error
-behaviour, environment facts ("this runs in a project-local venv, not the system Python").
-It never enters the prompt. The model reads it on demand with `print(name.__doc__)` or
-`help(name)` when the description is not enough.
+```python
+helper_description = """double(x) — multiply a value by two."""
+```
+
+The host reads this value and puts it in the `execute` tool description verbatim. It is guidance for the model, not a registration mechanism or generated API. Keep it short: it
+is included in the model's context on every turn.
+
+A useful description answers three questions:
+
+1. What does this helper provide?
+2. How should the model call it?
+3. What important behavior or limitation should it know before calling it?
+
+For a helper that replaces hand-written plumbing, an `Instead of:` line can be useful:
+
+```python
+helper_description = """web — search, read, and map websites.
+Use web.search(query), web.read(url), and web.map(url).
+Instead of: writing provider requests and parsing each response by hand."""
+```
+
+Do not put the complete API contract in the description. Long explanations consume context on every call. Put detailed behavior in docstrings instead.
+
+## Docstrings are on-demand detail
+
+Docstrings stay in the Python workspace and do not appear in the tool description automatically:
+
+```python
+def double(x):
+    """Return x * 2.
+
+    Accepts numbers and lists. Raises no custom exceptions.
+    """
+    return x * 2
+```
+
+When the description is not enough, inspect the helper in the workspace:
+
+```python
+help(double)
+print(double.__doc__)
+```
+
+Use docstrings for argument details, defaults, return values, errors, environment requirements, and side effects.
+
+## How loading works
+
+At startup, two parts of pi-repl read the same helper directory:
+
+1. The kernel executes each eligible `.py` file. Its definitions become names in the Python workspace.
+2. The host reads `helper_description` to build the helper guidance shown to the model.
+
+The host does not inspect `def` lines or infer signatures from filenames. A helper does not need to define one particular symbol. The file is the unit of loading; its public names are the names it defines or imports for use in
+the workspace.
+
+Because helpers execute at kernel startup, top-level code has consequences. Definitions are fine; imports should be reasonable; network calls, prints, subprocesses, and expensive work should usually happen inside an explicit function or method call.
+
+## Choosing what belongs in a helper
+
+Write a helper when it owns a part of the work that is easy to get wrong or tedious to repeat:
+
+- a web client that handles authentication, fallback, and response normalization;
+- a conversion with awkward edge cases;
+- a project-specific API client;
+- a small collection of related operations with shared configuration.
+
+Do not make a helper for ordinary Python that the model can write clearly in one cell. File access and subprocess work are already available through normal Python:
+
+```python
+from pathlib import Path
+import subprocess
+
+text = Path("notes.txt").read_text()
+result = subprocess.run(["git", "status", "--short"], capture_output=True, text=True, check=False)
+```
+
+The helper should handle the plumbing. The model should still decide what to inspect, which sources matter, and what the evidence supports.
 
 ## Common mistakes
 
-- **Description buried in detail.** Move anything beyond the call shape and one consequence
-  into the docstring. A long description bills into every turn.
-- **The helper decides too much.** A helper should own the murky part (the call, the
-  parsing), not the decision. If it picks the command, the routing, or the judgement, the
-  model stops reasoning.
-- **No docstring.** Without one, the model sees only a signature and the gotchas vanish.
-- **Top-level side effects.** The file runs at boot in every kernel. Keep module-level code
-  to definitions — no prints, no network, no slow imports at module scope.
-- **Filename and `def` name differ.** `helpers/foo.py` exposing `def bar` confuses callers
-  and the prompt. Keep them identical.
+### Description too long
 
-## Disable a file without deleting it
+The description is repeated in the tool prompt. Put the call shape and the few facts needed to choose the helper there; put examples and edge cases in docstrings.
 
-Rename it with a leading underscore (`_scratch.py`). The loader skips any file whose name
-starts with `_`, so it never reaches the kernel or the prompt. Handy for scratch work.
+### Public names are unclear
+
+If `web.py` exposes `web`, document `web.search()` and `web.read()`. Do not describe it as `web()` unless the file actually defines a callable named `web`.
+
+### Side effects happen during loading
+
+The file is executed before the first cell. A top-level print pollutes every new session, and a top-level network request can make startup slow or fail before the model calls anything. Constructing a lightweight object is usually fine; defer expensive work to a method.
+
+### A changed helper is not visible
+
+The prompt guidance and kernel namespace are established during startup. Run `/reload` after editing the file.
+
+### A helper hides the decision
+
+A helper can normalize responses or manage retries. For example, the web helper can hide
+provider authentication and fallback. It should not silently decide which source proves a claim
+or which file should be edited; those decisions belong to the model.
+
+## Disable a helper without deleting it
+
+Rename the file with a leading underscore:
+
+```text
+web.py → _web.py
+```
+
+The loader skips it. Rename it back and reload when you want it again.
 
 ## Checklist
 
-- [ ] Filename matches the public `def` name
-- [ ] `helper_description` is short and starts with the call shape
-- [ ] Depth lives in the docstring, not the description
-- [ ] No top-level side effects
-- [ ] Session restarted or `/reload`-ed
-- [ ] Name appears in `globals()` and the function runs
+- [ ] The file is in `~/.pi/agent/pi-repl/helpers/`.
+- [ ] Its public names and call shapes are clear.
+- [ ] `helper_description` is short enough for every-turn context.
+- [ ] Detailed behavior is in docstrings.
+- [ ] Top-level code has no unnecessary side effects.
+- [ ] The helper keeps plumbing separate from model judgment.
+- [ ] Pi was reloaded after the file changed.

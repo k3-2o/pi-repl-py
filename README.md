@@ -4,9 +4,9 @@ A [pi](https://pi.dev) extension that gives the agent a single `execute` tool ba
 **persistent Python evaluator**: a real `ipython` kernel that keeps variables, functions, imports,
 and data alive across every call and turn.
 
-There is no interactive shell. The agent batches code into a Python workspace that lives for the
-whole session, and only the printed result comes back. That is the part of a REPL an agent wants:
-lasting state and code-as-a-workspace, without the interactive loop in the way.
+There is no interactive shell. The agent sends batches of Python code to a workspace that stays
+alive for the session. Only the output comes back to the conversation. This keeps state in Python
+without requiring an interactive prompt.
 
 ```
 ✓ repl · data = load_json("records.json")       · done
@@ -38,53 +38,19 @@ clear notice. How the interpreter is resolved is in [docs/ARCHITECTURE.md](docs/
 
 ### Termux / Android
 
-On **Termux (Android)** the `postinstall` venv build can fail: `ipykernel` depends on
-`psutil>=5.7`, and PyPI ships no Android wheel, so a source build aborts with
-`platform android is not supported`. Two near-misses do **not** fix it:
-
-- `pkg install python-psutil` — Termux's `.deb` post-install runs the same failing `pip install
-  psutil`, so no usable psutil is left.
-- `pip install psutil-android` — the prebuilt `.so` links `libpython3.14.so`; on an older
-  Termux Python it fails with `dlopen failed: library "libpython3.14.so" not found`. It only
-  works when Termux's Python matches the wheel's ABI (currently 3.14).
-
-The reliable route is to build `psutil` from source with an Android-aware guard, then install the
-venv:
-
-```bash
-# 1. show a compiler + Python headers
-pkg install clang python
-
-# 2. fetch and patch the psutil source so Android counts as Linux
-curl -sL -o psutil.tar.gz https://files.pythonhosted.org/packages/source/p/psutil/psutil-7.2.2.tar.gz && tar -xzf psutil.tar.gz
-cd psutil-7.2.2
-sed -i 's/LINUX = sys.platform.startswith("linux")/LINUX = sys.platform.startswith(("linux", "android"))/' psutil/_common.py
-python3 setup.py bdist_wheel
-
-# 3. (re)build the evaluator venv and install the patched wheel first
-python3 -m venv --clear ~/.pi/agent/pi-repl/venv
-~/.pi/agent/pi-repl/venv/bin/pip install dist/psutil-7.2.2-*.whl
-~/.pi/agent/pi-repl/venv/bin/pip install ipykernel
-
-# 4. finish the package install
-pi install npm:pi-repl-py
-
-# 5. verify
-~/.pi/agent/pi-repl/venv/bin/python3 -c "import psutil, ipykernel; print(psutil.__version__, ipykernel.__version__)"
-```
-
-Then `pi --repl` starts correctly because the venv already has a working `ipykernel`.
+On **Termux (Android)**, the `postinstall` venv build can fail because `ipykernel` depends on
+`psutil`, and PyPI does not provide a compatible Android wheel. The [Termux / Android setup guide](docs/termux.md) shows how to build `psutil` from source and finish the installation.
 
 ## What you get
 
 - **A persistent namespace.** Variables, functions, imports, and data survive across cells and
   turns; snapshots preserve them across a best-effort restart.
 - **A real `ipython` kernel**, not a hand-rolled `exec` loop.
-- **Shell and file IO as plain Python.** `!cmd` and `%%bash` run shell fire-and-forget,
-  `subprocess.run(...)` brings the result back into a variable, and `open()` / `pathlib`
-  read and write files. No wrapper API to learn, and nothing extra to describe to the model.
+- **Shell and file IO as plain Python.** Use `!cmd` or `%%bash` for shell commands. Use
+  `subprocess.run(...)` when you need the result in a variable, and use `open()` or `pathlib`
+  for files. There is no extra wrapper API to learn.
 - **Error survival.** A cell that throws reports the traceback and the kernel keeps going.
-- **An honest evaluator.** If it restarts, it names what state it could revive and what it lost, so you don't trust memory that's gone.
+- **Explicit recovery.** If it restarts, pi-repl reports which state it restored and which state it lost.
 
 ## Helpers
 
@@ -119,8 +85,10 @@ The Python interpreter is auto-resolved (the venv, else `$PYTHON`/`python3`).
 
 ## More
 
-- Why this design: [docs/philosophy.md](docs/philosophy.md)
-- How it works, the venv, config reference: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- Why this design: [docs/design.md](docs/design.md)
+- How it works, the venv, and the kernel: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- How to write and load helpers: [docs/helpers.md](docs/helpers.md)
+- Termux / Android installation: [docs/termux.md](docs/termux.md)
 
 ## It is not
 

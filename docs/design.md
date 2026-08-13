@@ -1,4 +1,4 @@
-# Philosophy: why a persistent Python workspace
+# Design rationale: why a persistent Python workspace
 
 ## The bet
 
@@ -7,13 +7,12 @@ a search tool, each with its own schema, its own failure modes, and its own toke
 describe. The model spends context deciding *which* tool to call, then *how* to thread one
 tool's output into the next.
 
-pi-repl makes the opposite bet: **give the model one persistent Python workspace, and let it
-write the composition itself.** Reading, running, searching, and editing all happen in code,
-in a single living namespace. The model's interface to the world never grows — the *code* it
-writes adapts instead.
+pi-repl makes the opposite choice: **give the model one persistent Python workspace and let it
+compose the work there.** Reading, running, searching, and editing happen in code inside one
+namespace. The interface stays small while the code changes to fit the task.
 
-This is what an agent actually wants from a "REPL". Not an interactive prompt to type into,
-but long-lived working memory the model owns.
+This project assumes an agent benefits from a REPL that keeps working state alive. It is not an
+interactive prompt for a person to type into; it is long-lived working memory for the model.
 
 ## What persistence buys
 
@@ -28,8 +27,7 @@ In a persistent kernel that work happens once and stays put:
 - `subprocess.run(...)` returns a structured result (`.returncode`, `.stdout`, `.stderr`)
   the agent branches on with normal code — no re-parsing a tool's text output.
 
-The savings compound for small models. Holding a whole file in context to avoid re-reading
-it is expensive precisely when context is scarce. The kernel lets the model load, filter,
+Holding a whole file in context just to avoid re-reading it is expensive when context is scarce. The kernel lets the model load, filter,
 and store in code, printing only what the current step needs.
 
 ## Why a real kernel
@@ -43,7 +41,7 @@ separate process. That buys four things a script string passed to `exec` cannot 
 - **a namespace that survives errors** — a cell that throws leaves the kernel, and
   everything defined before it, intact.
 
-It is also an honest isolation boundary. The kernel is its own process, not part of pi. A
+The kernel is a separate process, not part of pi. This is a process boundary, not a security sandbox. A
 cell that raises leaves pi answering and the namespace intact, because pi is not the process
 that failed. A cell that wedges the *whole* kernel instead stops cells from running until
 the next call notices the dead kernel and rebuilds it from the last completed snapshot.
@@ -56,31 +54,23 @@ revived and what it lost, so the model re-verifies before trusting state that ma
 Because the evaluator is real Python, it needs a real Python environment with `ipykernel`.
 You cannot conjure that from a script; it is a hard runtime dependency.
 
-The package's `postinstall` creates it once, at a stable per-user path
+The package's `postinstall` creates it once at a stable per-user path
 (`~/.pi/agent/pi-repl/venv`), so a `pi install` normally ends with a working evaluator. If
 `python3` or the network is missing at install time, `postinstall` prints a clear notice and
 the host falls back to `$PYTHON` or `python3` at runtime. Updates never lose it, because the
 venv lives outside the ephemeral package directory where it would vanish on every update.
 
-At runtime the host resolves the interpreter in a short, fixed order:
-
-1. the repo's own `.venv` (development)
-2. a venv in the current directory (per-project)
-3. the install venv at `~/.pi/agent/pi-repl/venv`
-4. `$PYTHON`, then `python3` (the fallback)
-
-The first one that exists wins. The system interpreter is the fallback, never the
-assumption, because the whole tool quietly breaks if it silently runs in the wrong
-environment. The tool's prompt tells the model this, so it does not leak the wrong
-assumption into commands.
+The host has a fallback order for finding Python, with the project and installed environments
+preferred over the system interpreter. The exact order and the reasons for it are documented in
+[ARCHITECTURE.md](ARCHITECTURE.md). This keeps the design rationale here focused on why the
+venv is persistent rather than on runtime lookup details.
 
 ## Trust, not a sandbox
 
 This is deliberately **not a sandbox.** The kernel runs with your user's permissions, can
 read and write anywhere you can, and helpers are trusted as written. If you need to guard
 against an untrusted model, this is the wrong tool — reach for a real sandbox the way you
-would for any untrusted code. The philosophy here prefers a sharp, honest tool over a
-pretend-safe one.
+would for any untrusted code. The design favors a clear limitation over a false promise of safety.
 
 ## What it isn't
 

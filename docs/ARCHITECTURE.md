@@ -1,8 +1,8 @@
 # Architecture
 
-pi-repl runs in **two processes**: the host lives inside pi and talks the standard Jupyter
-protocol directly to a real `ipykernel` subprocess. There is no middleman and no invented
-framing between them.
+pi-repl runs in **two processes**. pi hosts the TypeScript extension, and the extension manages a
+separate Python `ipykernel` process where user code runs. The host talks to that kernel using the
+standard Jupyter protocol. There is no Python middleman and no private framing layer between them.
 
 ```
 pi
@@ -16,9 +16,9 @@ pi
              └─ python -m ipykernel -f <connection-file>   the evaluator
 ```
 
-The host is TypeScript; the evaluator is Python in its own process. That split is what makes
-a bad cell survivable: a cell can raise, leak memory, or wedge the kernel without taking pi
-down — and the host, being not the thing that failed, always gets to report what happened.
+The host is TypeScript, and the evaluator is Python in a separate process. This means a cell can
+raise an exception or make the kernel unusable without taking pi down. The host can still report
+what happened.
 
 ## Why the host speaks ZMTP itself
 
@@ -28,16 +28,17 @@ design put a Python middleman (`guest.py`) between the host and the kernel, tran
 private JSON protocol over a file descriptor into the real Jupyter protocol.
 
 The current design removes the middleman. Instead of working around the missing library, the
-host implements the small slice of ZMTP 3.0 a Jupyter client actually needs — a DEALER
-socket for the shell and control channels, a SUB socket for iopub (`src/engine/zmtp.ts`).
+host implements the small slice of ZMTP 3.0 that a Jupyter client needs. ZMTP is the socket
+protocol used by Jupyter's channels: the host uses a DEALER socket for shell and control, and a
+SUB socket for iopub (`src/engine/zmtp.ts`).
 The payoff:
 
 - **one process boundary** instead of two;
 - **one standard protocol** (Jupyter) instead of a private one on top of it;
 - **no invented framing** to maintain;
-- **HMAC signed and verified by the host itself.** The old design carried a nonce scheme to
-  stop a cell from forging its own completion signal; with the host signing every message
-  with the kernel's HMAC key, that concern is moot.
+- **Messages are authenticated with HMAC.** The host signs and verifies Jupyter messages with
+  the kernel's HMAC key. The earlier design used a nonce to prevent false completion messages;
+  the standard message signature now provides that check.
 
 ## The Python environment (the venv)
 
@@ -78,9 +79,9 @@ Jupyter `execute_request`s, routed by `msg_id`:
 - **shell** carries the authoritative `execute_reply` (status, ename, evalue).
 - **control** carries interrupts (`interrupt_request`) and shutdown.
 
-Two wire subtleties are load-bearing, and both are pinned by the contract tests.
+Two details of this protocol are important enough to have dedicated contract tests.
 
-**A cell is not done until two things arrive.** The shell reply and the iopub output stream
+**A cell is not complete until two messages arrive.** The shell reply and the iopub output stream
 travel on different connections, so a tiny reply can arrive before a large output has
 finished draining on iopub. A cell settles only when **both** the `execute_reply` and the
 matching iopub `status idle` (published after every byte of output) have arrived. Settling
@@ -102,13 +103,13 @@ At boot, the kernel and the host both read **one** helpers directory — the fix
 `~/.pi/agent/pi-repl/helpers`, created empty on install with nothing seeded into it. There is
 no shipped toolbox that merges in.
 
-- **The kernel** execs each `*.py` into its namespace, so the file's functions become
-  callable.
+- **The kernel** executes each eligible `*.py` file in its namespace, so the file's definitions
+  and imports become available.
 - **The host** reads the same files to build the helper list shown in the `execute` tool's
   prompt, so the model sees each `helper_description` verbatim.
 
-Because both sides read the same directory, anything the model is told about is also
-callable, and a file renamed with a `_` prefix is skipped by both. The
+Both sides read the same directory, so the names described to the model come from files the
+kernel also loads. A file renamed with a `_` prefix is skipped by both sides. The
 `promptGuidelines` are built once, when the `execute` tool is registered, so a helpers
 change needs a **session restart or `/reload`** to reach the prompt — and the kernel loads
 helpers only at boot anyway.
@@ -151,17 +152,18 @@ what was lost, so the model re-verifies before reusing state that may be gone.
 - **Host (fast):** `test/units.test.ts` covers engine orchestration, rendering, and config;
   `test/preview-core.test.ts` covers the preview logic.
 - **Contract (slow):** `test/engine.integration.test.ts` boots a real kernel per engine and
-  proves the guarantees the old Python contract pinned: persistence across cells,
-  error-survival, output attribution, helpers loading, snapshot/restore round-trips, output
-  caps, silence timeout, abort, and rebuild-from-snapshot after a dead kernel.
+  verifies persistence across cells, error survival, output attribution, helper loading,
+  snapshot/restore round-trips, output caps, silence timeout, abort, and rebuilding from a
+  snapshot after the kernel dies.
 
 The gate is `just check` — biome (format + lint) plus the host tests. `just integration`
 adds the real-kernel suite.
 
 ## The fixed layout
 
-There is no configuration file and no knobs. Everything lives under one directory in the
-user's home, and the default is the only option:
+There is no configuration file. Most state lives under one directory in the user's home. A
+small number of environment variables can still change runtime behavior, such as the silence
+watchdog timeout.
 
 ```
 ~/.pi/agent/pi-repl/
@@ -178,5 +180,5 @@ but working cell may run on).
 
 ## Reference documentation
 
-- Philosophy and design rationale: [philosophy.md](philosophy.md)
+- Design rationale: [design.md](design.md)
 - Adding a helper: [helpers.md](helpers.md)
