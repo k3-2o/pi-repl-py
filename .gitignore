@@ -4,7 +4,6 @@ node_modules/
 .pi-repl/
 dist/
 
-rig/
 
 .nvim/
 
@@ -17,5 +16,3 @@ __pycache__/
 AGENTS.md
 
 AUDIT-FINDINGS.md
-
-.github/

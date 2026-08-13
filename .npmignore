@@ -10,10 +10,8 @@ dist/
 node_modules/
 
 .git/
-.github/
 .nvim/
 test/
-rig/
 AGENTS.md
 AUDIT-FINDINGS.md
 CHANGELOG.md
