@@ -4,11 +4,11 @@ On **Termux (Android)**, the `postinstall` venv build can fail because `ipykerne
 `psutil`, and PyPI does not provide a compatible Android wheel. Two common alternatives do not
 solve the problem:
 
-- `pkg install python-psutil` — Termux's `.deb` post-install runs the same failing `pip install
+- `pkg install python-psutil`: Termux's `.deb` post-install runs the same failing `pip install
   psutil`, so no usable psutil is left.
-- `pip install psutil-android` — the prebuilt `.so` links `libpython3.14.so`; on an older
-  Termux Python it fails with `dlopen failed: library "libpython3.14.so" not found`. It only
-  works when Termux's Python matches the wheel's ABI (currently 3.14).
+- `pip install psutil-android`: the prebuilt `.so` links `libpython3.14.so`; on an older
+  Termux Python it fails with `dlopen failed: library "libpython3.14.so" not found`. It works
+  only when Termux's Python matches the wheel's ABI (currently 3.14).
 
 The reliable route is to build the documented `psutil` release from source with a small
 Android-specific change, then install the evaluator venv. Run these commands from a writable

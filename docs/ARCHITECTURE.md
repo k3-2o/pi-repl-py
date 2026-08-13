@@ -43,7 +43,7 @@ The payoff:
 ## The Python environment (the venv)
 
 The evaluator is a real `ipykernel` kernel, so it needs a Python environment with
-`ipykernel` installed. That is a hard runtime dependency — you cannot fake it with a script.
+`ipykernel` installed. This is a hard runtime dependency. A script cannot replace it.
 (`jupyter_client` is *not* needed: the host is the client.)
 
 When installed as a pi package, `npm install` runs `postinstall`
@@ -74,8 +74,8 @@ connection file in the temp directory, connects the three channels as ZMTP socke
 waits for a `kernel_info_reply` before declaring the kernel ready. Cells run as standard
 Jupyter `execute_request`s, routed by `msg_id`:
 
-- **iopub** carries the output — `stream`, `execute_result`, `display_data`, and `error`
-  messages, plus private-MIME payloads that carry snapshot, restore, and namespace data.
+- **iopub** carries output messages such as `stream`, `execute_result`, `display_data`, and
+  `error`. It also carries private-MIME payloads for snapshot, restore, and namespace data.
 - **shell** carries the authoritative `execute_reply` (status, ename, evalue).
 - **control** carries interrupts (`interrupt_request`) and shutdown.
 
@@ -88,9 +88,9 @@ matching iopub `status idle` (published after every byte of output) have arrived
 on the reply alone would drop output that was still in flight.
 
 **Output is capped per channel.** Each channel accumulates output against a character budget
-(`maxOutputChars`). Overflow is flagged per message — a single 10 MB print trips the cap
-within that one message, not only once a later message exhausts the budget — and the host
-appends an explicit truncation marker so the model knows output was cut.
+(`maxOutputChars`). Overflow is checked within each message. A single 10 MB print trips the
+cap immediately instead of waiting for a later message to exhaust the budget. The host appends
+an explicit truncation marker so the model knows output was cut.
 
 **Cancellation is real.** An abort sends an `interrupt_request` on the control channel,
 which raises a genuine `KeyboardInterrupt` in the running cell; the namespace survives. As a
@@ -99,9 +99,8 @@ kills the kernel after 500 ms, and the next call rebuilds it from the last snaps
 
 ## Helpers loading
 
-At boot, the kernel and the host both read **one** helpers directory — the fixed
-`~/.pi/agent/pi-repl/helpers`, created empty on install with nothing seeded into it. There is
-no shipped toolbox that merges in.
+At boot, the kernel and the host both read the same helpers directory:
+`~/.pi/agent/pi-repl/helpers`. It is created empty on install. No shipped toolbox is merged in.
 
 - **The kernel** executes each eligible `*.py` file in its namespace, so the file's definitions
   and imports become available.
@@ -111,8 +110,8 @@ no shipped toolbox that merges in.
 Both sides read the same directory, so the names described to the model come from files the
 kernel also loads. A file renamed with a `_` prefix is skipped by both sides. The
 `promptGuidelines` are built once, when the `execute` tool is registered, so a helpers
-change needs a **session restart or `/reload`** to reach the prompt — and the kernel loads
-helpers only at boot anyway.
+change needs a **session restart or `/reload`** to reach the prompt. The kernel also loads
+helpers only at boot.
 
 There are no custom discovery intrinsics (`ls()` / `help()`) injected into a bare kernel.
 The model discovers what is loaded by listing the namespace with ordinary Python:
@@ -121,7 +120,7 @@ The model discovers what is loaded by listing the namespace with ordinary Python
 [k for k in globals() if not k.startswith('_')]
 ```
 
-For the full helper contract — the description, the docstring, disabling — see
+For the full helper contract, including descriptions, docstrings, and disabling, see
 [helpers.md](helpers.md).
 
 ## Snapshots & honest resets
@@ -132,8 +131,8 @@ only itself) and publishes the result back over a private MIME payload. The host
 `namespace.snapshot`, keyed to the session file under
 `~/.pi/agent/pi-repl/state/<session>/`.
 
-When a fresh engine is built, it restores that snapshot. Whatever could not be pickled —
-live handles, some objects — is reported by name. If the evaluator was rebuilt mid-session,
+When a fresh engine is built, it restores that snapshot. It reports the names of values that
+could not be pickled, such as live handles and some runtime objects. If the evaluator was rebuilt mid-session,
 the result is prefixed with a `<repl_engine_reset>` block that names what was revived and
 what was lost, so the model re-verifies before reusing state that may be gone.
 
@@ -156,8 +155,8 @@ what was lost, so the model re-verifies before reusing state that may be gone.
   snapshot/restore round-trips, output caps, silence timeout, abort, and rebuilding from a
   snapshot after the kernel dies.
 
-The gate is `just check` — biome (format + lint) plus the host tests. `just integration`
-adds the real-kernel suite.
+The gate is `just check`. It runs Biome formatting and linting, dead-code checks, and host tests.
+`just integration` adds the real-kernel suite.
 
 ## The fixed layout
 
@@ -168,13 +167,13 @@ watchdog timeout.
 ```
 ~/.pi/agent/pi-repl/
   venv/         the Python interpreter + ipykernel
-  helpers/      the helpers directory — every *.py loads into every kernel
+  helpers/      the helpers directory; every eligible *.py loads into each kernel
   state/        per-session namespace snapshots
 ```
 
 The helpers directory is fixed at `~/.pi/agent/pi-repl/helpers` (matching the kernel's
 `readHelperSources` default), so both sides are guaranteed to read the same directory. The
-venv is built automatically and the interpreter resolved by the order above — no setting
+venv is built automatically, and the interpreter follows the order above. No setting is
 needed. The per-cell silence watchdog is off by default (`PI_REPL_TIMEOUT_MS=0`: a silent
 but working cell may run on).
 

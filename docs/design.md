@@ -25,7 +25,7 @@ In a persistent kernel that work happens once and stays put:
 - a variable assigned in one cell is still there in the next cell, and the next turn;
 - a function defined once is reusable for the whole session;
 - `subprocess.run(...)` returns a structured result (`.returncode`, `.stdout`, `.stderr`)
-  the agent branches on with normal code — no re-parsing a tool's text output.
+  the agent can branch on with normal code. It does not need to re-parse tool output.
 
 Holding a whole file in context just to avoid re-reading it is expensive when context is scarce. The kernel lets the model load, filter,
 and store in code, printing only what the current step needs.
@@ -36,10 +36,10 @@ pi-repl does not hand-roll an `exec` loop. It drives a genuine `ipython` kernel 
 separate process. That buys four things a script string passed to `exec` cannot give:
 
 - **rich, real tracebacks** instead of a wrapped `except`;
-- **real interrupts** — a stuck cell can be interrupted mid-run without losing the session;
+- **real interrupts:** a stuck cell can be interrupted mid-run without losing the session;
 - **last-expression capture** (a cell's final expression becomes its result);
-- **a namespace that survives errors** — a cell that throws leaves the kernel, and
-  everything defined before it, intact.
+- **a namespace that survives errors:** a cell that throws leaves the kernel and everything
+  defined before it intact.
 
 The kernel is a separate process, not part of pi. This is a process boundary, not a security sandbox. A
 cell that raises leaves pi answering and the namespace intact, because pi is not the process
@@ -69,8 +69,7 @@ venv is persistent rather than on runtime lookup details.
 
 This is deliberately **not a sandbox.** The kernel runs with your user's permissions, can
 read and write anywhere you can, and helpers are trusted as written. If you need to guard
-against an untrusted model, this is the wrong tool — reach for a real sandbox the way you
-would for any untrusted code. The design favors a clear limitation over a false promise of safety.
+against an untrusted model, this is the wrong tool. Use a real sandbox for untrusted code. The design favors a clear limitation over a false promise of safety.
 
 ## What it isn't
 
