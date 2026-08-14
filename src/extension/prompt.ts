@@ -9,8 +9,7 @@ export const executeToolDescription =
 	"You have one tool: a persistent Python workspace backed by a real `ipython` kernel. " +
 	"Variables, imports, and definitions survive across cells and turns — it is your working memory and action " +
 	"language. " +
-	"Helpers in `~/.pi/agent/pi-repl/helpers/` load at boot; list them with " +
-	"`[k for k in globals() if not k.startswith('_')]`. A cell returns its final expression; printed output is " +
+	"Helpers in `~/.pi/agent/pi-repl/helpers/` load at boot. A cell returns its final expression; printed output is " +
 	"captured separately.";
 
 export const executePromptSnippet =
@@ -40,6 +39,17 @@ export function buildPromptGuidelines(preloaded: string[]): string[] {
 		"Inspect what is present — count, print a few lines, list what is loaded — before committing. Build one " +
 			"step, run it, and use its output to choose the next.",
 		"",
+		"## Precise file and search work",
+		"Search narrowly and inspect only the lines needed. Do not dump whole files or repeat unchanged context. " +
+			"For existing files, prefer a surgical old-text/new-text replacement over rewriting the file. Read the " +
+			"target region first, make the smallest unique replacement, then verify the changed region and file validity. " +
+			"Use complete writes only for new files or intentional full rewrites. Never leave a bare final expression: " +
+			"IPython displays it automatically; assign results and explicitly print only what you need.",
+		"",
+		"## Repository discipline",
+		"Inspect before changing. Preserve project conventions and unrelated content. Make the smallest valid change, " +
+			"verify it afterward, and never invent files, APIs, conventions, or test results.",
+		"",
 		"## Batch and print sparingly",
 		"Batch as much independent work as reasonably possible into one call. Keep large values in variables; " +
 			"print slices, counts, and summaries.",
@@ -48,7 +58,7 @@ export function buildPromptGuidelines(preloaded: string[]): string[] {
 			? [
 					"## Helpers",
 					"User helpers load from `~/.pi/agent/pi-repl/helpers/` as workspace definitions. Their descriptions " +
-						"appear below. List what is loaded with `[k for k in globals() if not k.startswith('_')]`.",
+						"appear below.",
 					"",
 					...preloaded,
 					"",

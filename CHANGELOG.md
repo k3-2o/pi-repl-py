@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.6] - 2026-08-13
+
+### Changed
+
+- Tightened execute prompt guidance for targeted searches, surgical edits, and repository-safe changes.
+
 ## [0.2.5] - 2026-08-13
 
 ### Changed
