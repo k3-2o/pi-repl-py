@@ -1,4 +1,4 @@
-# pi-repl
+# pi-repl-py
 
 A [pi](https://pi.dev) extension that gives the agent a single `execute` tool backed by a
 **persistent Python evaluator**: a real `ipython` kernel that keeps variables, functions, imports,
@@ -32,7 +32,15 @@ A plain `pi` session is untouched; the extension is dormant until `--repl` is pa
 
 ## Installing as a pi package
 
-`npm install` runs a `postinstall` that creates the Python venv the evaluator needs, at a stable
+Install the package from npm or directly from GitHub:
+
+```bash
+pi install npm:pi-repl-py
+# or
+pi install github:k3-2o/pi-repl-py
+```
+
+The install runs a `postinstall` that creates the Python venv the evaluator needs, at a stable
 per-user path (`~/.pi/agent/pi-repl/venv`). If `python3` or the network is missing, it prints a
 clear notice. How the interpreter is resolved is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
