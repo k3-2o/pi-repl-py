@@ -10,6 +10,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { capLinesForContext, MAX_OUTPUT_LINE_CHARS } from "../src/engine/index.js";
 import { JupyterSession } from "../src/engine/session.js";
 import { encodeFrame, ZmtpFrameParser } from "../src/engine/zmtp.js";
 import { buildHelpersMap } from "../src/extension/helpers.js";
@@ -421,5 +422,29 @@ describe("render-core: layout", () => {
 		const resets = painted.split("\x1b[0m");
 		for (const segment of resets.slice(1, -1)) expect(segment.startsWith("\x1b[44m")).toBe(true);
 		expect(stripAnsi(painted)).toHaveLength(20);
+	});
+});
+
+describe("per-line output cap", () => {
+	test("short lines pass through unchanged", () => {
+		const { text, trimmed } = capLinesForContext("a\nbb\nccc\n");
+		expect(trimmed).toBe(false);
+		expect(text).toBe("a\nbb\nccc\n");
+	});
+
+	test("a single oversized line is trimmed to the per-line cap", () => {
+		const { text, trimmed } = capLinesForContext(`${"x".repeat(10_000_000)}\n`);
+		expect(trimmed).toBe(true);
+		expect(text.split("\n")[0].length).toBe(MAX_OUTPUT_LINE_CHARS);
+		expect(text.split("\n")[0]).not.toContain("xyz");
+	});
+
+	test("only the offending line is trimmed, neighbors are untouched", () => {
+		const { text, trimmed } = capLinesForContext(`ok\n${"y".repeat(10_000)}\nfine`);
+		expect(trimmed).toBe(true);
+		const [a, b, c] = text.split("\n");
+		expect(a).toBe("ok");
+		expect(b.length).toBe(MAX_OUTPUT_LINE_CHARS);
+		expect(c).toBe("fine");
 	});
 });

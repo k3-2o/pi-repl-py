@@ -87,10 +87,12 @@ finished draining on iopub. A cell settles only when **both** the `execute_reply
 matching iopub `status idle` (published after every byte of output) have arrived. Settling
 on the reply alone would drop output that was still in flight.
 
-**Output is capped per channel.** Each channel accumulates output against a character budget
-(`maxOutputChars`). Overflow is checked within each message. A single 10 MB print trips the
-cap immediately instead of waiting for a later message to exhaust the budget. The host appends
-an explicit truncation marker so the model knows output was cut.
+**Output is capped per channel and per line.** Each channel accumulates output against a character
+budget (`maxOutputChars`), checked within each message, so overflow trips the moment a message
+exceeds the budget rather than when it churns on. Each individual line is also capped at a generous
+length (4096 chars), so a single genuinely oversized line cannot own the whole budget — while
+legitimately long REPL output (JSON, reprs, errors) still passes through whole. Both truncations
+are announced with explicit markers so the model knows output was cut.
 
 **Cancellation is real.** An abort sends an `interrupt_request` on the control channel,
 which raises a genuine `KeyboardInterrupt` in the running cell; the namespace survives. As a

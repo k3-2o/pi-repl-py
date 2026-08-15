@@ -26,6 +26,10 @@ function resolvePythonPath(cwd: string | undefined): string {
 }
 
 const DEFAULT_MAX_OUTPUT_CHARS = 65536;
+/** Per-line cap: one genuinely oversized line must not own the channel budget, while legitimately long
+ * REPL output (JSON, reprs, errors) still fits under the cap in one piece. Generous enough that only
+ * pathological giant lines are trimmed, unlike pi's grep where the line cap keeps matches terse. */
+export const MAX_OUTPUT_LINE_CHARS = 4096;
 const ABORT_GRACE_MS = 500;
 const DEFAULT_SNAPSHOT_DEBOUNCE_MS = 1500;
 
@@ -96,6 +100,18 @@ function installProcessCleanupOnce(): void {
 function truncateWithMarker(text: string, maxChars: number, wasTruncated: boolean): string {
 	if (!wasTruncated && text.length <= maxChars) return text;
 	return `${text.slice(0, maxChars)}\n[... output truncated at ${maxChars} chars ...]`;
+}
+
+/** Cap each individual line, so one giant line cannot own the whole channel budget (like grep's line cap). */
+export function capLinesForContext(text: string): { text: string; trimmed: boolean } {
+	const lines = text.split("\n");
+	let trimmed = false;
+	const mapped = lines.map((line) => {
+		if (line.length <= MAX_OUTPUT_LINE_CHARS) return line;
+		trimmed = true;
+		return line.slice(0, MAX_OUTPUT_LINE_CHARS);
+	});
+	return { text: mapped.join("\n"), trimmed };
 }
 
 export class EngineManager {
@@ -233,11 +249,18 @@ export class EngineManager {
 				});
 				if (r.status === "ok") this.scheduleSnapshot();
 				const status: ExecuteResult["status"] = opts.signal?.aborted ? "aborted" : r.status;
-				const truncate = (text: string, truncated: boolean) => truncateWithMarker(text, maxChars, truncated);
+				// Channel cap (truncateWithMarker), then per-line cap; both append a marker so truncation is explicit.
+				const finalize = (text: string, channelTruncated: boolean): string => {
+					let out = truncateWithMarker(text, maxChars, channelTruncated);
+					const line = capLinesForContext(out);
+					if (line.trimmed) out = `${line.text}\n[... some lines exceeded ${MAX_OUTPUT_LINE_CHARS} chars ...]`;
+					else out = line.text;
+					return out;
+				};
 				return {
-					stdout: truncate(r.stdout, r.truncated?.stdout ?? false),
-					stderr: truncate(r.stderr, r.truncated?.stderr ?? false),
-					result: r.result !== undefined ? truncate(String(r.result), String(r.result).length > maxChars) : undefined,
+					stdout: finalize(r.stdout, r.truncated?.stdout ?? false),
+					stderr: finalize(r.stderr, r.truncated?.stderr ?? false),
+					result: r.result !== undefined ? finalize(String(r.result), String(r.result).length > maxChars) : undefined,
 					error: r.error,
 					status,
 					durationMs: Date.now() - started,

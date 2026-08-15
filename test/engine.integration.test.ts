@@ -189,14 +189,30 @@ describe("host × python-kernel integration", () => {
 		expect(r.stdout).toContain("True");
 	});
 
-	test("output beyond the cap is truncated with a marker, not dropped silently", { timeout: 60_000 }, async () => {
+	test(
+		"output channel beyond the cap is truncated with a marker, not dropped silently",
+		{ timeout: 60_000 },
+		async () => {
+			const d = tempDir();
+			const m = engine({ cwd: d });
+
+			// Many short lines (100 chars each) keep the total small per line so only the CHANNEL cap applies.
+			const r = await m.execute("print('\\n'.join('x' * 100 for _ in range(200_000)))", { maxOutputChars: 4096 });
+			expect(r.status).toBe("ok");
+			expect(r.stdout.length).toBeGreaterThan(4000);
+			expect(r.stdout).toContain("output truncated at 4096 chars");
+		},
+	);
+
+	test("a single oversized line is capped per line, not allowed to own the output", { timeout: 60_000 }, async () => {
 		const d = tempDir();
 		const m = engine({ cwd: d });
 
-		const r = await m.execute("print('x' * 10_000_000)", { maxOutputChars: 4096 });
+		// One giant line (10M chars) must be capped to a per-line length instead of eating the whole budget.
+		const r = await m.execute("print('x' * 10_000_000)", { maxOutputChars: 65536 });
 		expect(r.status).toBe("ok");
-		expect(r.stdout.length).toBeGreaterThan(4000);
-		expect(r.stdout).toContain("output truncated at 4096 chars");
+		expect(r.stdout).toContain("some lines exceeded 4096 chars");
+		expect(r.stdout.length).toBeLessThan(4300);
 	});
 
 	test("listNamespaceNames lists user state and excludes helpers", { timeout: 60_000 }, async () => {
