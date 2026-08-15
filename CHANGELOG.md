@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.7] - 2026-08-14
+
+### Changed
+
+- Capped per-line output as well as per-channel, so a single oversized line cannot consume the whole output budget.
+- Tightened execute prompt guidance around targeted search, surgical edits, and minimal output.
+
 ## [0.2.6] - 2026-08-13
 
 ### Changed
