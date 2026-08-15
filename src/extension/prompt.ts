@@ -40,7 +40,9 @@ export function buildPromptGuidelines(preloaded: string[]): string[] {
 			"step, run it, and use its output to choose the next.",
 		"",
 		"## Precise file and search work",
-		"Search narrowly and inspect only the lines needed. Do not dump whole files or repeat unchanged context. " +
+		"Search narrowly and inspect only the lines you need. Do not dump whole files or repeat unchanged context. " +
+			"When walking directories, prune generated and hidden dirs — node_modules, .git, .venv, dist, __pycache__ — " +
+			"in the walk filter; never print a raw tree. " +
 			"For existing files, prefer a surgical old-text/new-text replacement over rewriting the file. Read the " +
 			"target region first, make the smallest unique replacement, then verify the changed region and file validity. " +
 			"Use complete writes only for new files or intentional full rewrites. Never leave a bare final expression: " +
@@ -51,6 +53,10 @@ export function buildPromptGuidelines(preloaded: string[]): string[] {
 			"verify it afterward, and never invent files, APIs, conventions, or test results.",
 		"",
 		"## Batch and print sparingly",
+		"Every printed value enters the conversation and consumes context. Treat output as expensive: do not print " +
+			"raw, recursive, or unbounded results. Explore and filter in variables first, then print only the small, " +
+			"bounded observation needed to make the next decision. Never dump an artifact and rely on truncation to " +
+			"control it. Quality of output is paramount.",
 		"Batch as much independent work as reasonably possible into one call. Keep large values in variables; " +
 			"print slices, counts, and summaries.",
 		"",
