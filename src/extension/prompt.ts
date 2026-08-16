@@ -6,81 +6,58 @@
 // more signal; the machine reads every line every turn.
 
 export const executeToolDescription =
-	"You have one tool: a persistent Python workspace backed by a real `ipython` kernel. " +
-	"Variables, imports, and definitions survive across cells and turns — it is your working memory and action " +
-	"language. " +
-	"Helpers in `~/.pi/agent/pi-repl/helpers/` load at boot. A cell returns its final expression; printed output is " +
-	"captured separately.";
+	"You have one tool: a real `ipython` kernel that stays alive across cells and turns. " +
+	"This persistent Python workspace is your only surface — it does the work of bash, read, write, edit, " +
+	"search, and file handling, and everything you define (variables, imports, helpers loaded from " +
+	"`~/.pi/agent/pi-repl/helpers/`) survives for reuse in later cells. A cell returns its final expression; " +
+	"printed output is captured separately.";
 
 export const executePromptSnippet =
-	"Work in the workspace: keep artifacts in variables, compose related actions in Python, print only what " +
-	"the next step needs, and revise from what you observe.";
+	"The persistent Python workspace is your only tool: keep artifacts in variables across cells for reuse, use the loaded helpers, prefer surgical reads/edits over full-file dumps and rewrites, and parse before you print so context stays lean.";
 
 // --- the workspace doctrine riding the execute tool ---
 export function buildPromptGuidelines(preloaded: string[]): string[] {
 	return [
 		"## Your only workspace",
-		"`execute` is the only callable tool. Python replaces a read, shell, search, and edit tool rack. State " +
-			"persists across cells and turns.",
+		"`execute` is the only callable tool. Python replaces a read, shell, search, and edit tool rack. State persists across cells and turns.",
 		"",
 		"## Work in the workspace, not the transcript",
-		"Load files, command results, search hits, and computed artifacts into variables once; filter, compare, " +
-			"branch, edit, and verify them in later cells. Do not re-read or paste raw material back. Print only the " +
-			"small observation needed for the next decision; keep the full artifact in a variable.",
+		"Load files, command results, searches, and computed artifacts into variables once; filter, compare, branch, edit, and verify them in later cells. Do not re-read or paste raw material back. Print only the small observation you'll decide on next; keep the full artifact in a variable. A bare final expression is auto-displayed by IPython — assign instead and print only what the next step needs.",
 		"",
 		"## A cell is a small program",
-		"Compose filesystem access, shell commands, searches, transforms, checks, and edits in ordinary Python " +
-			"when they belong to the same step.",
+		"Compose filesystem access, shell commands, searches, transforms, checks, and edits in ordinary Python in the same step.",
 		"",
 		"## Revise on observations",
 		"Revise prior actions or emit new actions upon new observations.", // CodeAct core
 		"",
 		"## Probe, then build",
-		"Inspect what is present — count, print a few lines, list what is loaded — before committing. Build one " +
-			"step, run it, and use its output to choose the next.",
+		"Inspect what is present — count, print a few lines, list what is loaded — before committing; build one step, run it, and use its output to choose the next.",
 		"",
-		"## Precise file and search work",
-		"Search narrowly and inspect only the lines you need. Do not dump whole files or repeat unchanged context. " +
-			"When walking directories, prune generated and hidden dirs — node_modules, .git, .venv, dist, __pycache__ — " +
-			"in the walk filter; never print a raw tree. " +
-			"For existing files, prefer a surgical old-text/new-text replacement over rewriting the file. Read the " +
-			"target region first, make the smallest unique replacement, then verify the changed region and file validity. " +
-			"Use complete writes only for new files or intentional full rewrites. Never leave a bare final expression: " +
-			"IPython displays it automatically; assign results and explicitly print only what you need.",
+		"## File and search work",
+		"Prefer a surgical old-text/new-text replacement over rewriting a file: read the region first, make the smallest unique replacement, verify the change and file validity. Use complete writes only for new files or intentional full rewrites. When walking directories, prune generated dirs — node_modules, .git, .venv, dist, __pycache__ — and never print a raw tree.",
 		"",
 		"## Repository discipline",
-		"Inspect before changing. Preserve project conventions and unrelated content. Make the smallest valid change, " +
-			"verify it afterward, and never invent files, APIs, conventions, or test results.",
+		"Make the smallest valid change, preserve conventions, verify afterward, and never invent files, APIs, conventions, or test results.",
 		"",
-		"## Batch and print sparingly",
-		"Every printed value enters the conversation and consumes context. Treat output as expensive: do not print " +
-			"raw, recursive, or unbounded results. Explore and filter in variables first, then print only the small, " +
-			"bounded observation needed to make the next decision. Never dump an artifact and rely on truncation to " +
-			"control it. Quality of output is paramount.",
-		"Batch as much independent work as reasonably possible into one call. Keep large values in variables; " +
-			"print slices, counts, and summaries.",
+		"## Context is expensive",
+		"Every printed value enters the conversation. Explore and filter in variables; print only the small, bounded slice for the next decision. Never dump a whole file, a raw result list, or an unbounded output, and never rely on truncation to control it.",
 		"",
 		...(preloaded.length
 			? [
 					"## Helpers",
-					"User helpers load from `~/.pi/agent/pi-repl/helpers/` as workspace definitions. Their descriptions " +
-						"appear below.",
+					"These helpers are given to you by the user to use directly (loaded from `~/.pi/agent/pi-repl/helpers/`). Descriptions appear below.",
 					"",
 					...preloaded,
 					"",
 				]
 			: []),
 		"## Shell and search",
-		"`subprocess.run(..., timeout=...)` when you need a result — always set a `timeout`, the evaluator does not " +
-			"kill a silent cell. Use `rg`/`grep`/`find` via `subprocess.run` for deep searches, not Python loops.",
+		"Always pass a `timeout` to `subprocess.run(...)` — a silent cell must die, not hang. Use `rg`/`grep`/`find` via the subprocess for deep searches, not Python loops.",
 		"",
-		"## Environment boundary",
-		"The evaluator runs in a project-local venv, not the system Python. Do not install a target project's " +
-			"dependencies into the evaluator. Run external projects through their own interface and normal commands.",
+		"## Environment & rescue",
+		"The evaluator runs in a project-local venv, not the system Python. Do not install a project's dependencies into the evaluator; run external projects through their own interface. If output begins with `<repl_engine_reset>`, the kernel was rebuilt — re-verify any revived variable before reusing it.",
 		"",
-		"## Engine reset guard",
-		"If output begins with `<repl_engine_reset>`, the kernel was rebuilt from the last snapshot. Re-verify a " +
-			"revived variable before reusing it — especially in a shell command. Functions, classes, and live handles " +
-			"are not snapshotted and must be redefined.",
+		"## Follow these as the operating manual",
+		"These guidelines are how this workspace works — internalize their intent and adapt to this environment by applying it to decisions they do not spell out. Follow them diligently.",
 	];
 }
