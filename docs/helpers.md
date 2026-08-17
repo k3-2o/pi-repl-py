@@ -119,6 +119,26 @@ the workspace.
 
 Because helpers execute at kernel startup, top-level code has consequences. Definitions are fine; imports should be reasonable; network calls, prints, subprocesses, and expensive work should usually happen inside an explicit function or method call.
 
+## Third-party packages in the install venv
+
+The evaluator runs from a real Python virtualenv (`~/.pi/agent/pi-repl/venv`); `sys.path` includes
+its `site-packages`. Packages you install there are importable from helpers and from any cell:
+
+```bash
+~/.pi/agent/pi-repl/venv/bin/pip3 install -U numpy pandas
+```
+
+```python
+import numpy as np
+```
+
+That is how a helper reaches a package the repl does not ship by default (the venv is created
+minimal — it has no `requests`, `numpy`, `pandas`, etc.). ipykernel only pulls its own dependencies.
+
+Because it is a project-local venv, the packages you add are personal to you: nothing about them
+ships with pi-repl. A helper that depends on a package runs only on machines that have installed
+it, so say so in the helper description or docstring when your helper imports one.
+
 ## Choosing what belongs in a helper
 
 Write a helper when it owns a part of the work that is easy to get wrong or tedious to repeat:

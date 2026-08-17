@@ -96,6 +96,7 @@ The Python interpreter is auto-resolved (the venv, else `$PYTHON`/`python3`).
 - Why this design: [docs/design.md](docs/design.md)
 - How it works, the venv, and the kernel: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - How to write and load helpers: [docs/helpers.md](docs/helpers.md)
+- Working examples you can copy: [example/](example/) — helpers under `example/helper/` and skills under `example/skills/`
 - Termux / Android installation: [docs/termux.md](docs/termux.md)
 
 ## It is not
