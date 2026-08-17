@@ -3,7 +3,7 @@
 import type { RestoreResult } from "../engine/index.js";
 
 /** Show enough names to orient, then count the rest (a revive can carry hundreds). */
-export function summarizeNames(names: readonly string[], limit: number): string {
+function summarizeNames(names: readonly string[], limit: number): string {
 	if (names.length <= limit) return names.join(", ");
 	return `${names.slice(0, limit).join(", ")} … and ${names.length - limit} more`;
 }

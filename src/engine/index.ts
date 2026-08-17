@@ -5,21 +5,16 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { KernelClient } from "./kernel.js";
-
-const GUEST_REL = fileURLToPath(new URL("./kernel.js", import.meta.url));
 
 function installVenvPython(): string {
 	return join(homedir(), ".pi", "agent", "pi-repl", "venv", "bin", "python3");
 }
 
 /** Prefer a venv with ipykernel; else $PYTHON or python3. */
-function resolvePythonPath(cwd: string | undefined): string {
-	const repoVenv = join(dirname(GUEST_REL), "..", "..", ".venv", "bin", "python3");
-	if (existsSync(repoVenv)) return repoVenv;
-	const cwdVenv = cwd ? join(cwd, ".venv", "bin", "python3") : "";
-	if (cwdVenv && existsSync(cwdVenv)) return cwdVenv;
+function resolvePythonPath(_cwd: string | undefined): string {
+	// Only ever use the install venv: a project or repo `.venv` may lack ipykernel and
+	// shadow the good environment, killing the kernel. No auto-picking.
 	const installVenv = installVenvPython();
 	if (existsSync(installVenv)) return installVenv;
 	return process.env.PYTHON ?? "python3";

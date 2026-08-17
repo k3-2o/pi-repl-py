@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.0] - 2026-08-17
+
+### Added
+
+- Kernel now always runs in the install venv (`~/.pi/agent/pi-repl/venv`), so project venvs without ipykernel can no longer shadow it.
+
+### Fixed
+
+- Startup no longer blocks render on the kernel revive; the engine warms up in the background.
+- Kernel fallback to the host cwd when the requested session directory no longer exists, instead of dying with a missing-cwd error.
+
+### Removed
+
+- The `[pi-repl-restore]` startup popup; the namespace still revives silently in the background.
+
 ## [0.2.8] - 2026-08-17
 
 ### Changed

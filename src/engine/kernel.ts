@@ -54,7 +54,14 @@ export interface SnapshotReply {
 // --- boot preload: exec each helper; ls()/help() are gone, discovery is globals() ---
 
 /** Read the helpers dir (same skip rules as the extension's prompt loader). */
-export function readHelperSources(dir?: string): { name: string; source: string }[] {
+/** A directory for the kernel to start in; if the requested cwd is gone, fall back to the
+ * evaluator's own cwd rather than letting spawn() die with ENOENT. A deleted project dir is
+ * a real resume case (pi guards it too) — the kernel must still come up. */
+function resolveCwd(requested?: string): string {
+	if (requested && existsSync(requested)) return requested;
+	return process.cwd();
+}
+function readHelperSources(dir?: string): { name: string; source: string }[] {
 	// --- one fixed dir, resolved like the prompt side (helpers.ts) so both always agree ---
 	const d = dir ?? join(homedir(), ".pi", "agent", "pi-repl", "helpers");
 	if (!existsSync(d)) return [];
@@ -179,7 +186,7 @@ export class KernelClient {
 	static async start(pythonPath: string, opts: KernelOptions = {}): Promise<KernelClient> {
 		const connPath = join(tmpdir(), `pi-repl-kernel-${randomUUID()}.json`);
 		const child = spawn(pythonPath, ["-m", "ipykernel", "-f", connPath, "--no-stdout"], {
-			cwd: opts.cwd,
+			cwd: resolveCwd(opts.cwd),
 			env: { ...process.env, ...(opts.env ?? {}) },
 			stdio: ["ignore", "pipe", "pipe"],
 		});

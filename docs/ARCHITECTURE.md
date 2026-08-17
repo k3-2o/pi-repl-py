@@ -57,15 +57,17 @@ That path is stable across updates because it sits outside the package's own dir
 which npm replaces on each update. If `python3` or the network is missing at install time,
 `postinstall` prints a clear notice and the host falls back at runtime.
 
-At spawn, `resolvePythonPath` picks the interpreter in this order:
+At spawn, `resolvePythonPath` uses exactly one interpreter, the install venv:
 
-1. the repo's own `.venv` (development)
-2. a venv in the current directory (per-project)
-3. `~/.pi/agent/pi-repl/venv` (package install)
-4. `$PYTHON`, then `python3` (the fallback)
+1. `~/.pi/agent/pi-repl/venv` (the package install)
+2. `$PYTHON`, then `python3` (only if the install venv is missing)
 
-The first one that exists wins. The tool's prompt tells the model it runs in a project-local
-venv, not the system interpreter, so it does not leak the wrong assumption into commands.
+It deliberately does NOT auto-pick the repo's or current directory's `.venv`: a per-project
+venv is not guaranteed to have `ipykernel`, so preferring it (as earlier versions did) made
+the kernel die from a `ModuleNotFoundError` whenever cwd happened to contain such a venv. The
+kernel therefore always runs in the stable install environment. The kernel starts in the
+session's cwd, falling back to the host's own cwd if that directory no longer exists (a
+deleted project dir), so a stale cwd can never prevent the kernel from coming up.
 
 ## The kernel client
 

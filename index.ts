@@ -6,7 +6,7 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 import { EngineManager } from "./src/engine/index.js";
 import { ExecuteCellComponent, type ExecuteDetails, type ExecuteRenderState } from "./src/extension/render.js";
-import { EngineLifecycle, summarizeNames } from "./src/extension/session-engine.js";
+import { EngineLifecycle } from "./src/extension/session-engine.js";
 import { EXECUTE_DESCRIPTION, buildExecutePromptGuidelines, EXECUTE_PROMPT_SNIPPET } from "./src/extension/tool-meta.js";
 
 const executeSchema = Type.Object({
@@ -87,23 +87,13 @@ export default function (pi: ExtensionAPI) {
 		}
 		// --- active: the whole surface collapses to the one tool ---
 		pi.setActiveTools(["execute"]);
-		// --- revive the previous run; the engine also self-revives if session_start was skipped ---
+		// --- warm the engine (and its revive) in the background; no popup. ---
+		// --- acquire() dedupes, so the first execute awaits this same in-flight boot ---
 		location = { cwd: ctx.cwd, sessionFile: ctx.sessionManager.getSessionFile() ?? undefined };
-		const { restore } = await lifecycle.acquire("startup");
-		if (restore && restore.restored.length > 0) {
-			pi.sendMessage({
-				customType: "pi-repl-restore",
-				content: `Revived ${restore.restored.length} variable(s) from the previous run: ${summarizeNames(restore.restored, 8)}${
-					restore.failed.length > 0
-						? `. Failed: ${summarizeNames(
-								restore.failed.map((f) => f.name),
-								8,
-							)}`
-						: ""
-				}`,
-				display: true,
-			});
-		}
+		void lifecycle.acquire("startup").catch(() => {
+			// --- boot/revive handled on the execute path; swallow so a background warm can never
+			// --- surface an unhandled rejection and the model never needs the restore notice ---
+		});
 	});
 
 	pi.on("session_shutdown", async () => {
