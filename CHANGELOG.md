@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.8] - 2026-08-17
+
+### Changed
+
+- Tightened the execute tool prompt to frame helpers as preloaded objects the model calls directly, avoiding `import` of a similarly-named package.
+- Added a third-party-packages section to the helpers documentation (install into the repl venv).
+- Added a helper-creation example skill (design-first, iterate with the user before writing code).
+- Added an example `example/` link in the README.
+
 ## [0.2.7] - 2026-08-14
 
 ### Changed
