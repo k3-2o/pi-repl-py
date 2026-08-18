@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.4.0] - 2026-08-18
+
+### Added
+
+- Skills are advertised in repl mode instead of being dropped by pi's read-gated prompt.
+
+### Changed
+
+- Reworked the execute tool description and snippet.
+
 ## [0.3.0] - 2026-08-17
 
 ### Added
