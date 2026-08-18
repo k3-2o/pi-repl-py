@@ -4,6 +4,7 @@ import { basename, join } from "node:path";
 import { homedir } from "node:os";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
+import { withSkillsBlock } from "./src/extension/skill-hook.js";
 import { EngineManager } from "./src/engine/index.js";
 import { ExecuteCellComponent, type ExecuteDetails, type ExecuteRenderState } from "./src/extension/render.js";
 import { EngineLifecycle } from "./src/extension/session-engine.js";
@@ -107,6 +108,16 @@ export default function (pi: ExtensionAPI) {
 		if (!stashed || !event.isError) return undefined;
 		// --- restore the collapsed details an errored cell lost ---
 		return { content: event.content, details: stashed.details, isError: true };
+	});
+
+	// --- pi gates skills on the read tool (absent in repl); re-emit them via withSkillsBlock. ---
+	pi.on("before_agent_start", (event) => {
+		if (!active()) return;
+		const systemPrompt = withSkillsBlock(
+			event.systemPrompt,
+			event.systemPromptOptions?.skills ?? [],
+		);
+		return systemPrompt === undefined ? undefined : { systemPrompt };
 	});
 
 	pi.registerTool<typeof executeSchema, ExecuteDetails, Partial<ExecuteRenderState>>({

@@ -1,9 +1,9 @@
 """A small, provider-backed web client for the persistent pi-repl workspace."""
 
-helper_description = """web — preloaded web client for live web work.
-Use web.search(query) to find sources, web.read(url_or_result) to read a known page, and web.map(url) to discover pages inside a site. It uses EXA_API_KEY, TAVILY_API_KEY, SERPER_API_KEY, and FIRECRAWL_API_KEY from the process environment; provider choice, fallback, response normalization, and balancing stay inside the object. Instead of: inventing a public search URL, browser User-Agent, and HTML scraper with urllib.
+helper_description = """web — preloaded web client object for live web work.
+Call its methods directly: web.search(query) to find sources, web.read(url_or_result) to read a known page, and web.map(url) to discover pages inside a site. It uses EXA_API_KEY, TAVILY_API_KEY, SERPER_API_KEY, and FIRECRAWL_API_KEY from the process environment; provider choice, fallback, response normalization, and balancing stay inside the object. Instead of: inventing a public search URL, browser User-Agent, and HTML scraper with urllib.
 
-Search intelligently: compose precise, focused queries and split complex questions into targeted searches instead of writing one bloated query. Keep results in variables; do not print entire result lists, raw responses, or full page bodies. Inspect only bounded fields and slices such as result.title, result.url, result.snippet, results[:5], or page.text[:4000]. Read only promising sources, prefer primary sources, compare independent results, and print compact evidence with URLs. Use web.map only when exploring a known site. Avoid context bloat at every step."""
+Search intelligently: compose precise, focused queries and split complex questions into targeted searches instead of writing one bloated query. web.search() returns a list of _SearchResult dataclass instances — access fields by attribute (result.title, result.url, result.snippet, result.provider) or result.as_dict(); they are not dicts and have no .get() method. Keep results in variables; do not print entire result lists, raw responses, or full page bodies. Inspect only bounded fields and slices such as result.title, result.url, result.snippet, results[:5], or page.text[:4000]. Read only promising sources, prefer primary sources, compare independent results, and print compact evidence with URLs. Use web.map only when exploring a known site. Avoid context bloat at every step."""
 
 import json as _json
 import os as _os

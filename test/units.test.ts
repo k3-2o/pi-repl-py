@@ -26,6 +26,7 @@ import {
 	renderExecuteHeader,
 	statusKind,
 } from "../src/extension/render-core.js";
+import { withSkillsBlock } from "../src/extension/skill-hook.js";
 
 describe("helpers loader: description is the truth", () => {
 	test("helper_description renders verbatim, including the call shape", () => {
@@ -446,5 +447,48 @@ describe("per-line output cap", () => {
 		expect(a).toBe("ok");
 		expect(b.length).toBe(MAX_OUTPUT_LINE_CHARS);
 		expect(c).toBe("fine");
+	});
+});
+
+describe("skills advertisement in --repl (withSkillsBlock)", () => {
+	const skill = {
+		name: "session-memory",
+		description: "Recall past pi conversations from session history.",
+		filePath: "/home/k2/.pi/agent/skills/session-memory/SKILL.md",
+		baseDir: "/home/k2/.pi/agent/skills/session-memory",
+		sourceInfo: {} as any,
+		disableModelInvocation: false,
+	};
+
+	// A prompt shaped like buildSystemPrompt's tail: project context then cwd last.
+	const promptWithCwd = "You are an expert.\n</project_context>\nCurrent working directory: /home/k2/works";
+
+	test("injects the block, with execute in place of read", () => {
+		const out = withSkillsBlock(promptWithCwd, [skill]);
+		expect(out).toBeDefined();
+		// lands in pi's slot: before the cwd line, never inside it
+		expect(out!.indexOf("<available_skills>")).toBeLessThan(out!.indexOf("Current working directory:"));
+		expect(out).toContain("<name>session-memory</name>");
+		expect(out).toContain("<description>Recall past pi conversations from session history.</description>");
+		// repl-corrected loading line
+		expect(out).toContain("via execute (read the file with Python)");
+		expect(out).not.toContain("Use the read tool to load");
+	});
+
+	test("stays undefined with no skills", () => {
+		expect(withSkillsBlock(promptWithCwd, [])).toBeUndefined();
+	});
+
+	test("stays undefined when the block is already present (read-capable pi)", () => {
+		const already = promptWithCwd + "\n<available_skills>\n</available_skills>";
+		expect(withSkillsBlock(already, [skill])).toBeUndefined();
+	});
+
+	test("appends at the end when there is no cwd marker", () => {
+		const bare = "You are a bot.";
+		const out = withSkillsBlock(bare, [skill]);
+		expect(out!.endsWith("<available_skills>\n</available_skills>")).toBe(false);
+		expect(out!.startsWith(bare)).toBe(true);
+		expect(out).toContain("<name>session-memory</name>");
 	});
 });

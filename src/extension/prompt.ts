@@ -6,14 +6,17 @@
 // more signal; the machine reads every line every turn.
 
 export const executeToolDescription =
-	"You have one tool: a real `ipython` kernel that stays alive across cells and turns. " +
-	"This persistent Python workspace is your only surface — it does the work of bash, read, write, edit, " +
-	"search, and file handling, and everything you define (variables, imports, helpers loaded from " +
-	"`~/.pi/agent/pi-repl/helpers/`) survives for reuse in later cells. A cell returns its final expression; " +
-	"printed output is captured separately.";
+	"Execute Python cells in a persistent ipython kernel that stays alive across cells and turns. " +
+	"It replaces the default read, bash, edit, write, and search tools — file work, shell commands, and " +
+	"searches all run as Python. Everything you define (variables, imports, and helpers preloaded into the " +
+	"workspace namespace) survives for reuse in later cells. A cell returns its final expression; printed " +
+	"output is captured separately. Oversized output is truncated: 1,000,000 characters per cell, 4,096 per " +
+	"line. Reads are expensive — every printed value enters the context, so hold artifacts in variables, " +
+	"parse before printing, and print only the small bounded slice the next decision needs. Keep cells lean; " +
+	"full-file dumps and raw result lists bloat the conversation.";
 
 export const executePromptSnippet =
-	"The persistent Python workspace is your only tool: keep artifacts in variables across cells for reuse, use the loaded helpers, prefer surgical reads/edits over full-file dumps and rewrites, and parse before you print so context stays lean.";
+	"Execute Python cells in a persistent ipython kernel (replaces read, bash, edit, write, and search; state survives across cells and turns)";
 
 // --- the workspace doctrine riding the execute tool ---
 export function buildPromptGuidelines(preloaded: string[]): string[] {
@@ -45,7 +48,7 @@ export function buildPromptGuidelines(preloaded: string[]): string[] {
 		...(preloaded.length
 			? [
 					"## Helpers",
-					"These helpers are given to you by the user to use directly (loaded from `~/.pi/agent/pi-repl/helpers/`). Descriptions appear below.",
+					"These helpers are already defined in the workspace namespace. Use them by name as you would any other loaded function, class, or variable. Their code already executed at kernel boot. Descriptions appear below.",
 					"",
 					...preloaded,
 					"",
