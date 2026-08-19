@@ -116,6 +116,8 @@ export class EngineManager {
 	private startPromise?: Promise<void>;
 	private executionQueue: Promise<unknown> = Promise.resolve();
 	private snapshotTimer?: ReturnType<typeof setTimeout>;
+	/** Last-seen top-level namespace names; snapshots are gated on this set changing. */
+	private lastNamespaceNames?: string[];
 	private pythonPath?: string;
 
 	constructor(options: EngineOptions = {}) {
@@ -242,7 +244,7 @@ export class EngineManager {
 					onStream: opts.onStream,
 					maxOutputChars: maxChars,
 				});
-				if (r.status === "ok") this.scheduleSnapshot();
+				if (r.status === "ok") void this.scheduleSnapshotIfChanged();
 				const status: ExecuteResult["status"] = opts.signal?.aborted ? "aborted" : r.status;
 				// Channel cap (truncateWithMarker), then per-line cap; both append a marker so truncation is explicit.
 				const finalize = (text: string, channelTruncated: boolean): string => {
@@ -311,6 +313,20 @@ export class EngineManager {
 		} catch {
 			return null;
 		}
+	}
+
+	/** Snapshot only if the set of top-level names changed since the last snapshot. Names-only
+	 * comparison is cheap (no pickling); a cell that reuses existing state skips the heavy dump. */
+	private async scheduleSnapshotIfChanged(): Promise<void> {
+		const config = this.options.snapshot;
+		if (!config) return;
+		const names = await this.listNamespaceNames();
+		if (names === null || names.length === 0) return;
+		const key = [...names].sort().join(",");
+		const prev = this.lastNamespaceNames ? [...this.lastNamespaceNames].sort().join(",") : undefined;
+		if (prev !== undefined && prev === key) return; // nothing changed
+		this.lastNamespaceNames = [...names].sort();
+		this.scheduleSnapshot();
 	}
 
 	private scheduleSnapshot(): void {
