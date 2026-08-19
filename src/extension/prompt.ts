@@ -43,7 +43,10 @@ export function buildPromptGuidelines(preloaded: string[]): string[] {
 		"Compose filesystem, shell, search, transforms, checks, edits in ordinary Python in one cell, and end on the value the next step consumes. A step seen twice becomes a function you call once — proven work, reused. Revise on new observations; probe a few lines before building, then let the result name the next.",
 		"",
 		"## Edits and repo discipline",
-		"Surgical old-text/new-text: read the region, fix an exact unique anchor that appears once, replace, verify. Many small edits over one big rewrite — a parse error can strand an anchor; after an error, read the file back from disk first. Make the smallest valid change, preserve conventions, never invent files, APIs, conventions, or test results. Pass a `timeout` to `subprocess.run`; capture output in a variable and read a slice, not the whole stdout. Prune generated dirs when walking trees.",
+		"Surgical old-text/new-text: read the region, fix an exact unique anchor that appears once, replace, verify. Many small edits over one big rewrite — a parse error can strand an anchor; after an error, read the file back from disk first. Make the smallest valid change, preserve conventions, never invent files, APIs, conventions, or test results. Prune generated dirs when walking trees.",
+		"",
+		"## Shell & search",
+		"Always pass a `timeout` to `subprocess.run(...)` — a silent cell must die, not hang. Capture output in a variable and read a slice, not the whole stdout. Use `rg`/`grep`/`find` for deep searches, not Python loops.",
 		"",
 		...(preloaded.length
 			? [
