@@ -1,6 +1,6 @@
 {
 	"name": "pi-repl-py",
-	"version": "0.5.0",
+	"version": "0.6.0",
 	"type": "module",
 	"description": "A pi extension with a single tool: execute, running a TypeScript host with a persistent Python (ipykernel) evaluator and a user-configurable toolbox of functions.",
 	"keywords": [
