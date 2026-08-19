@@ -21,7 +21,7 @@ export const executePromptSnippet =
 export function buildPromptGuidelines(preloaded: string[]): string[] {
 	return [
 		"## Your only workspace",
-		"`execute` is the only callable tool. Python replaces a read, shell, search, and edit tool rack. State persists across cells and turns.",
+		"`execute` is your workspace: a persistent Python session that is the only callable surface. What you define — variables, functions, data — survives across cells and turns, and the work is proven by the results each cell returns.",
 		"",
 		"## Go deep in the cell; prove it by the result",
 		"Depth, the cell, not the transcript. Do the heavy reasoning in variables and filters; a cell's worth is shown by what it returns as a result, not by restating that result in prose. Every printed value enters the context — and equating length with value is the trap — so let the code's result, not a recap paragraph, be the evidence.",
@@ -40,6 +40,8 @@ export function buildPromptGuidelines(preloaded: string[]): string[] {
 		"",
 		"## A cell is a small program",
 		"Compose whatever the step needs — filesystem, shell, search, transforms — in one cell, and end it on the return value the next step consumes. The cell itself (what ran) carries the meaning; the transcript carries only that returned value.",
+		"",
+		"Name what recurs: when the same operation shows up twice, give it a name once — a function in the namespace — and call it. A defined function is work already proven; every call is a new return-value result, and you never re-print the steps that made it.",
 		"",
 		"## Revise on observations",
 		"Revise prior actions or emit new actions upon new observations.", // CodeAct core
