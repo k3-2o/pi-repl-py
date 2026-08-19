@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0] - 2026-08-19
+
+### Added
+
+- Ctrl+O expands a live cell stream as soon as the call starts (the tool body is established at call time, mirroring the host's bash tool) instead of waiting for the result.
+
+### Changed
+
+- Execute tool prompt retooled around working in the workspace and proving work by returned result.
+- Web helper reads return a bounded preview/window by default; dropped the redundant markdown alias.
+- Added define-once-reuse guidance and aligned the opener with the result-proven framing.
+
 ## [0.4.0] - 2026-08-18
 
 ### Added
