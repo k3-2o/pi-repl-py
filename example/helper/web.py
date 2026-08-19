@@ -46,20 +46,34 @@ class _SearchResult:
         }
 
 
+_PREVIEW_CHARS = 400
+
+
 @_dataclass
 class _Page:
+    """A fetched page: the whole body is kept in ``.text``; ``.preview()`` /
+    ``.window()`` read a bounded slice without pulling the whole thing out."""
+
     url: str
     text: str
     title: str = ""
     provider: str = ""
 
-    @property
-    def markdown(self) -> str:
-        return self.text
+    def preview(self, chars: int = _PREVIEW_CHARS) -> str:
+        """A bounded read of the page start, cheap to put in the transcript."""
+        return self.text[:max(0, chars)]
+
+    def window(self, start: int = 0, chars: int = _PREVIEW_CHARS) -> str:
+        """A bounded window of the page body from ``start`` for ``chars`` chars."""
+        return self.text[start : start + max(0, chars)]
 
     def __repr__(self) -> str:
         title = f" {self.title!r}" if self.title else ""
-        return f"Page({self.url!r}{title}, {len(self.text):,} chars, provider={self.provider!r})"
+        head = self.text.strip().replace("\n", " ")[:60]
+        return (
+            f"Page(url={self.url!r}{title}, {len(self.text):,} chars, provider={self.provider!r})"
+            f"  head: {head!r}… | use .preview() / .window() to read more"
+        )
 
 
 class _ProviderError(RuntimeError):
