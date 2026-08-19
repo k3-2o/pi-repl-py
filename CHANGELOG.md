@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.6.0] - 2026-08-20
+
+### Added
+
+- Get-up-to-speed acclimation and output-format guidance to the execute tool prompt.
+- Snapshot only fires when the namespace name-set changed, so unchanged cells skip the full pickling cost.
+
+### Changed
+- Rebuilt the execute tool prompt around result-proven output (fewer, denser sections).
+- Restored shell/subprocess/timeout as its own section.
+
 ## [0.5.0] - 2026-08-19
 
 ### Added
