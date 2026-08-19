@@ -7,10 +7,8 @@
 
 export const executeToolDescription =
 	"Execute Python cells in a persistent ipython kernel; state survives across cells and turns, replacing " +
-	"the default read, bash, edit, write, and search tools. Everything you define (variables, imports, " +
-	"helpers) persists for reuse. A cell returns its final expression; bare expressions auto-print, and " +
-	"output trims at 1,000,000 chars per cell / 4,096 per line — treat that as a fact about reporting, not " +
-	"a limit to test. Let a cell's returned value prove the work, not prose restating it.";
+	"the default read, bash, edit, write, and search tools. Let a cell's returned value prove the work, " +
+	"not prose restating it.";
 
 export const executePromptSnippet =
 	"Execute Python cells in a persistent ipython kernel (replaces read, bash, edit, write, and search; state survives across cells and turns)";
@@ -25,7 +23,7 @@ export function buildPromptGuidelines(preloaded: string[]): string[] {
 		"Orient before you act: `%pwd`, glance at the namespace, read any state or progress file, skim recent history. A few tokens, it buys a right first move. Work from what you confirmed, not assumptions.",
 		"",
 		"## Reason, then say, then stop",
-		"Reason as much as the task needs, but reason inside the cell and keep the reasoning out of the transcript: do it in variables and filters, then return only the outcome. A bare final expression auto-prints, so assign instead. Concise reasoning still works — length you cut is reward you don't lose, because the evidence is the returned result, not the words around it.",
+		"Reason as much as the task needs, but reason inside the cell and keep the reasoning out of the transcript: do it in variables and filters, then return only the outcome. Every printed value is expensive — it enters the context now and stays, costing later tokens every time — so print only what the next decision consumes. A bare final expression auto-prints, so assign instead. Concise reasoning still works — length you cut is reward you don't lose, because the evidence is the returned result, not the words around it.",
 		"",
 		"## The environment answers you",
 		"The cell's output is the ground truth — what actually ran, what errored, what came back. Trust it over any narrative: if a cell already proved it, point at that. When you're unsure what a fetch contains, read a slice, don't guess and don't dump it whole to 'check'.",
@@ -39,7 +37,7 @@ export function buildPromptGuidelines(preloaded: string[]): string[] {
 		"In reply text: the conclusion and the handful of results that prove it — the slice you acted on, the returned value, a one-line takeaway. Do not transcribe the run, restate every variable, or narrate what the cell already showed.",
 		"",
 		"## Worked example",
-		"Good — two cells, thin transcript:\n  cell 1:  page_obj = read(url)\n  cell 2:  print(page_obj[:500])",
+		"Gather and slice — two cells, thin transcript:\n  cell 1:  doc = open('notes.txt').read()\n  cell 2:  print(doc.splitlines()[:5])\nThe whole file lands in doc (nothing printed); the second cell prints only the first five lines, the rest stays in doc for later.",
 		"",
 		"## Compose and reuse",
 		"Compose filesystem, shell, search, transforms, checks, edits in ordinary Python in one cell, and end on the value the next step consumes. A step seen twice becomes a function you call once — proven work, reused. Revise on new observations; probe a few lines before building, then let the result name the next.",
