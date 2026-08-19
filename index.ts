@@ -151,6 +151,9 @@ export default function (pi: ExtensionAPI) {
 				throw new Error("pi-repl is dormant in this session. Start pi with --repl (or PI_REPL_FORCE=1) to use execute.");
 			}
 			if (ctx?.cwd) location = { cwd: ctx.cwd, sessionFile: ctx.sessionManager?.getSessionFile?.() ?? undefined };
+			// --- establish the body slot at call time so Ctrl+O can expand a live (still-awaiting) stream;
+			// --- without this the host only renders the result once the first partial or the final result lands ---
+			onUpdate?.({ content: [], details: {} });
 			// --- previous engine died mid-session; acquire revives it ---
 			const { engine: m } = await lifecycle.acquire("cell");
 			try {
