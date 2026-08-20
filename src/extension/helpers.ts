@@ -41,6 +41,6 @@ export function buildHelpersMap(dir?: string): string[] {
 	return loadHelperEntries(dir).map((t) =>
 		t.description
 			? `- ${t.description.replace(/\n/g, "\n  ")}`
-			: `- ${t.name} (no description — inspect it with print(${t.name}.__doc__))`,
+			: `- ${t.name} (no description, inspect it with print(${t.name}.__doc__))`,
 	);
 }
