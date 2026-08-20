@@ -112,6 +112,61 @@ function marker(state: ExecuteRenderState, deps: RenderDeps): string {
 	}
 }
 
+/**
+ * highlight.js python emits no scope for plain identifiers, so they arrive as raw (uncolored)
+ * text mixed with SGR-colored tokens and bare punctuation. Re-color only whole identifier runs
+ * that sit outside any colored span, leaving keywords, strings, numbers, and other already
+ * colored tokens untouched.
+ */
+function colorBareIdentifiers(line: string, paint: (id: string) => string): string {
+	if (!line.includes("\x1b") && !/[a-zA-Z_]/.test(line)) return line;
+	const out: string[] = [];
+	let pending = "";
+	let colored = false;
+	const pushRaw = (s: string) => {
+		let last = 0;
+		for (const m of s.matchAll(/[a-zA-Z_][a-zA-Z0-9_]*/g)) {
+			const index = m.index ?? 0;
+			out.push(s.slice(last, index), paint(m[0]));
+			last = index + m[0].length;
+		}
+		out.push(s.slice(last));
+	};
+	let i = 0;
+	const isFgColor = (seq: string) => /\x1b\[(?:38|9?[0-7])/.test(seq);
+	while (i < line.length) {
+		if (line[i] === "\x1b") {
+			const end = line.indexOf("m", i) + 1;
+			const seq = line.slice(i, end);
+			if (isFgColor(seq)) {
+				if (pending) {
+					pushRaw(pending);
+					pending = "";
+				}
+				out.push(seq);
+				colored = true;
+			} else if (seq.includes("39") || seq.includes("0m")) {
+				if (colored) {
+					out.push(seq);
+					colored = false;
+				} else {
+					pending += seq;
+				}
+			} else {
+				pending += seq;
+			}
+			i = end;
+			continue;
+		}
+		// only raw (uncolored) text may be repainted; colored tokens pass through untouched
+		if (colored) out.push(line[i]);
+		else pending += line[i];
+		i++;
+	}
+	if (pending) pushRaw(pending);
+	return out.join("");
+}
+
 function highlightLines(code: string, deps: RenderDeps): string[] {
 	if (!code) return [];
 	return deps.highlight(code);
@@ -211,14 +266,15 @@ function addWrapped(
 	text: string,
 	width: number,
 	deps: RenderDeps,
-	options: { sanitize?: boolean } = {},
+	options: { sanitize?: boolean; indentAfter?: number } = {},
 ): void {
 	const safe = options.sanitize === false ? text : sanitizeTuiOutput(text);
 	const available = Math.max(1, width - 1 - deps.visibleWidth(prefix));
 	const wrapped = deps.wrapTextWithAnsi(safe, available);
 	for (const [index, line] of (wrapped.length > 0 ? wrapped : [""]).entries()) {
 		const linePrefix = index === 0 ? prefix : " ".repeat(deps.visibleWidth(prefix));
-		lines.push(deps.truncateToWidth(` ${linePrefix}${closeOpenSgr(line)}`, width, ""));
+		const continuationIndent = index > 0 && options.indentAfter ? " ".repeat(options.indentAfter) : "";
+		lines.push(deps.truncateToWidth(` ${linePrefix}${continuationIndent}${closeOpenSgr(line)}`, width, ""));
 	}
 }
 
@@ -229,8 +285,13 @@ function renderCode(state: ExecuteRenderState, lines: string[], width: number, d
 	const highlighted = highlightLines(code, deps);
 	for (const [index, rawLine] of code.split("\n").entries()) {
 		const prefix = index === 0 ? deps.fg("dim", "› ") : deps.fg("dim", "  ");
-		// --- code is already highlighted; don't strip its ANSI ---
-		addWrapped(lines, prefix, highlighted[index] ?? rawLine, width, deps, { sanitize: false });
+		const paint = (id: string) => deps.fg("syntaxVariable", id);
+		const hlLine = colorBareIdentifiers(highlighted[index] ?? rawLine, paint);
+		const indent = /^[ \t]*/.exec(rawLine)?.[0] ?? "";
+		addWrapped(lines, prefix, hlLine, width, deps, {
+			sanitize: false,
+			indentAfter: deps.visibleWidth(indent),
+		});
 	}
 	return true;
 }

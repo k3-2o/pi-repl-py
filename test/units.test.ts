@@ -492,3 +492,75 @@ describe("skills advertisement in --repl (withSkillsBlock)", () => {
 		expect(out).toContain("<name>session-memory</name>");
 	});
 });
+
+describe("render-core: code indent on wrap", () => {
+	test("continuation rows line up with the wrapped statement's indentation", () => {
+		const deps = testDeps({
+			wrapTextWithAnsi: (text: string, width: number) => {
+				const chunks: string[] = [];
+				let line = "";
+				let i = 0;
+				while (i < text.length) {
+					if (text[i] === "\x1b") {
+						const end = text.indexOf("m", i);
+						line += text.slice(i, end + 1);
+						i = end + 1;
+					} else {
+						line += text[i];
+						if (stripAnsi(line).length >= width) {
+							chunks.push(line);
+							line = "";
+						}
+						i++;
+					}
+				}
+				if (line) chunks.push(line);
+				for (let c = 1; c < chunks.length; c++) chunks[c] = chunks[c].replace(/^[ \t]+/, "");
+				return chunks.length ? chunks : [""];
+			},
+		});
+		const state = makeState({
+			code:
+				"def scale(values):\n" +
+				"    total = digitsum(every_token_that_gets_wrapped_along_the_row_here_padded)\n" +
+				"    return total",
+			expanded: true,
+		});
+		const lines = renderExecuteCell(state, 30, deps).map(stripAnsi);
+		const target = 7;
+		const statement = lines.filter(
+			(l) => l.includes("digitsum") || l.includes("_that_gets_wrapped") || l.includes("_padded"),
+		);
+		expect(statement.length).toBeGreaterThan(1);
+		for (const row of statement) {
+			expect(row.length - row.trimStart().length).toBe(target);
+		}
+	});
+});
+
+describe("render-core: bare identifier coloring", () => {
+	test("raw identifiers are painted with syntaxVariable; colored tokens are left alone", () => {
+		const calls: Array<[string, string]> = [];
+		const deps = testDeps({
+			fg: (color: string, text: string) => {
+				calls.push([color, text]);
+				return `\x1b[38;2;1;2;3m${text}\x1b[39m`;
+			},
+			highlight: (code) =>
+				code.split("\n").map((line) =>
+					// only the word KEY is a pre-colored token; everything else is raw
+					line.replace(/KEY/g, "\x1b[38;2;86;156;214mKEY\x1b[39m"),
+				),
+		});
+		const state = makeState({
+			code: "result = call_me(arg)\nKEY = 1",
+			expanded: true,
+		});
+		renderExecuteCell(state, 40, deps);
+		const ids = calls.filter(([c]) => c === "syntaxVariable").map(([, t]) => t);
+		expect(ids).toContain("result");
+		expect(ids).toContain("call_me");
+		expect(ids).toContain("arg");
+		expect(ids).not.toContain("KEY");
+	});
+});
