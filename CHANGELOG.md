@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.6.1] - 2026-08-20
+
+### Changed
+
+- Tightened the execute tool prompt: actionable voice and reduced section count.
+
 ## [0.6.0] - 2026-08-20
 
 ### Added
