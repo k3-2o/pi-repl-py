@@ -39,7 +39,7 @@ export interface RenderDeps {
 }
 
 const OUTPUT_INDENT = "  ";
-const SPINNER_FRAMES = ["◐", "◓", "◑", "◒"];
+const SPINNER_FRAMES = [">..", ".>.", "..>", ".>."];
 
 export function formatDuration(durationMs: number | undefined): string | undefined {
 	if (durationMs === undefined) return undefined;
@@ -105,7 +105,7 @@ function marker(state: ExecuteRenderState, deps: RenderDeps): string {
 			return deps.fg("success", "✓");
 		case "running": {
 			const now = deps.now?.() ?? Date.now();
-			return deps.fg("accent", SPINNER_FRAMES[Math.floor(now / 160) % SPINNER_FRAMES.length]);
+			return deps.fg("accent", SPINNER_FRAMES[Math.floor(now / 120) % SPINNER_FRAMES.length]);
 		}
 		default:
 			return deps.fg("muted", "◇");

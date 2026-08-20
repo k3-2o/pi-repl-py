@@ -43,7 +43,7 @@ function renderVersion(state: ExecuteRenderState): string {
 		state.executionStarted,
 		state.hasResult,
 		// --- fold the animation frame in while running so the spinner still turns ---
-		statusKind(state) === "running" ? Math.floor(Date.now() / 160) % 4 : -1,
+		statusKind(state) === "running" ? Math.floor(Date.now() / 120) % 4 : -1,
 	].join("|");
 }
 
