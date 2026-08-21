@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.6.3] - 2026-08-21
+
+### Changed
+
+- Reworked the execute print guidance to frame output as a context cost the model carries forward.
+
 ## [0.6.2] - 2026-08-21
 
 ### Fixed
