@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.6.2] - 2026-08-21
+
+### Fixed
+
+- An unresponsive or dead kernel no longer hangs the execution queue: a cell that swallows KeyboardInterrupt is killed after a grace window, and an unexpected kernel exit is detected so the next cell rebuilds.
+- Wrapped code lines keep their source indentation on continuation rows.
+- Bare Python identifiers now get a syntax color instead of rendering flat.
+- Running-state spinner switched to a dot scroller at 120ms.
+
 ## [0.6.1] - 2026-08-20
 
 ### Changed
