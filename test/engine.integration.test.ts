@@ -289,4 +289,43 @@ describe("host × python-kernel integration", () => {
 		expect(r.stdout).toContain("rebuilt");
 		expect(r.stdout).toContain("True");
 	});
+
+	test(
+		"a silence-watchdog cell that swallows KeyboardInterrupt is killed and the next cell rebuilds",
+		{ timeout: 90_000 },
+		async () => {
+			const d = tempDir();
+			const m = engine({ cwd: d, env: { PI_REPL_TIMEOUT_MS: "800" } });
+
+			await m.execute("kept = {'boot': True}");
+			const start = Date.now();
+			// the cell never answers (KeyboardInterrupt is caught and ignored), so the silence
+			// watchdog must escalate from interrupt to a kill instead of leaving the queue wedged.
+			await expect(
+				m.execute(
+					"import time\nwhile True:\n    try:\n        time.sleep(0.02)\n    except KeyboardInterrupt:\n        continue",
+				),
+			).rejects.toThrow();
+			expect(Date.now() - start).toBeLessThan(40_000);
+
+			// the engine rebuilt around the dead kernel rather than hanging the next cell
+			const r = await m.execute("2 + 2");
+			expect(r.status).toBe("ok");
+			expect(r.result).toContain("4");
+		},
+	);
+
+	test("an unexpectedly-dead kernel is discovered and the next cell rebuilds", { timeout: 90_000 }, async () => {
+		const d = tempDir();
+		const m = engine({ cwd: d });
+
+		await m.execute("import os");
+		await expect(m.execute("os._exit(9)")).rejects.toThrow();
+
+		// isRunning reflects the death, so the engine drops the zombie and rebuilds
+		expect(m.isRunning).toBe(false);
+		const r = await m.execute("3 + 4");
+		expect(r.status).toBe("ok");
+		expect(r.result).toContain("7");
+	});
 });

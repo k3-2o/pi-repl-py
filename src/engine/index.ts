@@ -162,6 +162,15 @@ export class EngineManager {
 				env: this.options.env,
 				timeoutMs,
 			});
+			// --- an unexpected kernel death must not survive the next execute: drop the dying
+			// --- instance and clear the boot cache so start() rebuilds it on the next cell. ---
+			const current = this.kernel;
+			current.setOnUnexpectedExit(() => {
+				if (this.kernel !== current) return;
+				this.kernel = undefined;
+				this.startPromise = undefined;
+				this.lastNamespaceNames = undefined;
+			});
 		} catch (error) {
 			if (this.state === "starting") this.state = "idle";
 			liveEngines.delete(this);
@@ -215,6 +224,13 @@ export class EngineManager {
 				throw new Error("Engine has been shut down");
 			}
 			await this.start();
+			// --- the kernel may have died after the boot promise resolved but before the async
+			// --- exit event surfaced it; drop the zombie and rebuild so the next cell runs. ---
+			if (this.kernel && !this.kernel.isRunning) {
+				this.kernel = undefined;
+				this.startPromise = undefined;
+				await this.start();
+			}
 			if (this.isShutdown()) {
 				throw new Error("Engine has been shut down");
 			}

@@ -19,6 +19,7 @@ import {
 import { ZmtpSocket } from "./zmtp.js";
 
 const KERNEL_READY_TIMEOUT_MS = 30_000;
+const SILENCE_KILL_GRACE_MS = 2000;
 const DEFAULT_MAX_OUTPUT_CHARS = 1_000_000;
 
 export interface KernelOptions {
@@ -169,8 +170,13 @@ export class KernelClient {
 	private ready = false;
 	/** Serializes all kernel ops: one execute at a time, snapshots between cells. */
 	private queue: Promise<unknown> = Promise.resolve();
-	private onUnexpectedExit?: () => void;
+	private _onUnexpectedExit?: () => void;
+	/** Engine hook: an unexpected kernel death (not a deliberate kill) should drop the instance. */
+	setOnUnexpectedExit(fn: () => void): void {
+		this._onUnexpectedExit = fn;
+	}
 	private watchdog?: ReturnType<typeof setInterval>;
+	private silenceKillTimer?: ReturnType<typeof setTimeout>;
 	private pendingReplies = new Map<
 		string,
 		{ resolve(m: ParsedMessage): void; timer?: ReturnType<typeof setTimeout> }
@@ -223,9 +229,18 @@ export class KernelClient {
 		kc.child = child;
 		kc.connectionFilePath = connPath;
 		child.on("exit", () => {
-			// --- a dead kernel settles the running cell; the engine rebuilds ---
+			// --- a dead kernel settles the running cell; the engine rebuilds. clear child/ready
+			// --- so isRunning reflects death and the engine never resumes a zombie process. ---
 			kc.settleActive(new Error("kernel process exited"));
-			kc.onUnexpectedExit?.();
+			kc.child = undefined;
+			kc.ready = false;
+			kc.shell?.close();
+			kc.control?.close();
+			kc.iopub?.close();
+			kc.shell = undefined;
+			kc.control = undefined;
+			kc.iopub = undefined;
+			kc._onUnexpectedExit?.();
 		});
 
 		try {
@@ -494,6 +509,12 @@ export class KernelClient {
 				if (quiet >= this.timeoutMs && !active.settled) {
 					active.timedOut = true;
 					this.interrupt();
+					// --- the interrupt is a real KeyboardInterrupt, but a cell that swallows/ignores
+					// --- it never replies; escalate to a kill so the queue is freed, mirroring index.ts. ---
+					this.silenceKillTimer ??= setTimeout(() => {
+						if (!active.settled) this.kill();
+					}, SILENCE_KILL_GRACE_MS);
+					this.silenceKillTimer.unref?.();
 				}
 			},
 			Math.min(250, this.timeoutMs),
@@ -505,6 +526,10 @@ export class KernelClient {
 		if (this.watchdog) {
 			clearInterval(this.watchdog);
 			this.watchdog = undefined;
+		}
+		if (this.silenceKillTimer) {
+			clearTimeout(this.silenceKillTimer);
+			this.silenceKillTimer = undefined;
 		}
 	}
 
