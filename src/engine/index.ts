@@ -20,7 +20,7 @@ function resolvePythonPath(_cwd: string | undefined): string {
 	return process.env.PYTHON ?? "python3";
 }
 
-const DEFAULT_MAX_OUTPUT_CHARS = 65536;
+const DEFAULT_MAX_OUTPUT_CHARS = 46080;
 /** Per-line cap: one genuinely oversized line must not own the channel budget, while legitimately long
  * REPL output (JSON, reprs, errors) still fits under the cap in one piece. Generous enough that only
  * pathological giant lines are trimmed, unlike pi's grep where the line cap keeps matches terse. */
@@ -50,7 +50,7 @@ export interface ExecuteOptions {
 	/** Aborting cancels the cell via kernel interrupt; the namespace is preserved. */
 	signal?: AbortSignal;
 	onStream?: (chunk: string, name: "stdout" | "stderr") => void;
-	/** Cap stdout / stderr / result at this many characters. Default 65536. */
+	/** Cap stdout / stderr / result at this many characters. Default 45K. */
 	maxOutputChars?: number;
 }
 

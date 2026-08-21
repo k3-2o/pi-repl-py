@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.7] - 2026-08-21
+
+### Changed
+
+- Rebuilt the execute tool prompt in pi's native shape: a single mechanical description, one-line snippet, flat guideline bullets.
+- Output cap lowered to 45K so an accidental large dump is truncated early, with a marker, instead of carrying into context.
+
+### Fixed
+
+- Aborting a running cell no longer kills and restarts the kernel when the cell is slow to raise KeyboardInterrupt (for example C-bound work that only yields at a checkpoint): the kernel is given time to settle, and only a cell that genuinely never stops is killed as a last-resort cap.
+- Helper lines render as single bullets instead of a doubled list marker in the tool prompt.
+
 ## [0.6.3] - 2026-08-21
 
 ### Changed

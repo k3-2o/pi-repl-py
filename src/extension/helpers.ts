@@ -38,9 +38,10 @@ function loadHelperEntries(dir?: string): HelperEntry[] {
 
 /** The prompt-facing list, one bullet per loaded file (verbatim description, or an introspection pointer). */
 export function buildHelpersMap(dir?: string): string[] {
+	// pi renders each prompt guideline as "- <line>"; these lines are bare, no bullet prefix.
 	return loadHelperEntries(dir).map((t) =>
 		t.description
-			? `- ${t.description.replace(/\n/g, "\n  ")}`
-			: `- ${t.name} (no description, inspect it with print(${t.name}.__doc__))`,
+			? t.description.replace(/\n/g, "\n  ")
+			: `${t.name} (no description, inspect it with print(${t.name}.__doc__))`,
 	);
 }

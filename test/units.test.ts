@@ -68,8 +68,9 @@ describe("helpers loader: description is the truth", () => {
 			'helper_description = """combine(a, b) — takes the pair."""\ndef combine(a, b):\n    return a + b\n',
 		);
 		const bullets = buildHelpersMap(dir);
-		expect(bullets.filter((b) => b.startsWith("- combine("))).toHaveLength(1);
-		expect(bullets.find((b) => b.startsWith("- combine("))).toContain("takes the pair");
+		// pi renders each guideline as "- <line>"; buildHelpersMap returns the bare line.
+		expect(bullets.filter((b) => b.startsWith("combine("))).toHaveLength(1);
+		expect(bullets.find((b) => b.startsWith("combine("))).toContain("takes the pair");
 	});
 });
 
