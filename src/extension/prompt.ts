@@ -31,8 +31,13 @@ export function buildPromptGuidelines(preloaded: string[]): string[] {
 		"## Edits and repo discipline",
 		"Surgical old-text/new-text: read the region, fix an exact unique anchor that appears once, replace, verify. Many small edits over one big rewrite, a parse error can strand an anchor; after an error, read the file back from disk first. Make the smallest valid change, preserve conventions, never invent files, APIs, conventions, or test results. Prune generated dirs when walking trees. Pass a `timeout` to any `subprocess.run(...)`, a silent cell must die, not hang.",
 		"",
-		"## Print is expensive",
-		"Every token you print is spent from the context you need for the turns to come, and it never comes back. Treat printing as debt, not reward. Print only the exact fragment the next decision consumes and hold the whole in a variable. Every other print is waste, it buys nothing and closes the room you have left to think. Ask before you print: does this decide the next step, or is it just noise? When it is noise, cut it. When in doubt, cut it. A tight transcript is the sign you actually worked; a bloated one is the sign you did not.",
+		"## Print is debt",
+		"Every character you return is borrowed from the turns to come and you will not get it back. Before any print, run the gate mechanically, not by mood:",
+		"1. A print must be consumed by exactly one of two things: (a) the immediate next cell you run consumes that exact output, or (b) it is part of the answer you send the user. If you cannot name it, leave it in a variable.",
+		"2. Probe smallest-first: locate with find or a regex to get an index, then slice — return only data[i:i+400] or lines[lo:hi]. Never read the whole file into the transcript. Expand only when a smaller probe proved you need it.",
+		"3. One finding per print, fewest words. The whole file lives in variables; only the deciding fragment leaves a cell.",
+		"A cell that prints more than a few hundred tokens with no named next action is a failed gate: cut it, and do not recount it in your reply.",
+		"Your reply is drawn from the same ledger: one finding per sentence, fewest words. A long reply is a long loan you have already spent.",
 		"",
 		...(preloaded.length
 			? [
