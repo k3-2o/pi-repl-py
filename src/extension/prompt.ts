@@ -32,7 +32,7 @@ export function buildPromptGuidelines(preloaded: string[]): string[] {
 		"Surgical old-text/new-text: read the region, fix an exact unique anchor that appears once, replace, verify. Many small edits over one big rewrite, a parse error can strand an anchor; after an error, read the file back from disk first. Make the smallest valid change, preserve conventions, never invent files, APIs, conventions, or test results. Prune generated dirs when walking trees. Pass a `timeout` to any `subprocess.run(...)`, a silent cell must die, not hang.",
 		"",
 		"## Print is expensive",
-		"Print small, exact slices, bounded to what the decision actually needs. Keep the whole in a variable and print only on demand. Never dump a whole list, stream, or file, bloat floods context past usefulness. Prefer quality over quantity.",
+		"Every token you print is spent from the context you need for the turns to come, and it never comes back. Treat printing as debt, not reward. Print only the exact fragment the next decision consumes and hold the whole in a variable. Every other print is waste, it buys nothing and closes the room you have left to think. Ask before you print: does this decide the next step, or is it just noise? When it is noise, cut it. When in doubt, cut it. A tight transcript is the sign you actually worked; a bloated one is the sign you did not.",
 		"",
 		...(preloaded.length
 			? [
