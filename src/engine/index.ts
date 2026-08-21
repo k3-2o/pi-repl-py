@@ -25,7 +25,7 @@ const DEFAULT_MAX_OUTPUT_CHARS = 65536;
  * REPL output (JSON, reprs, errors) still fits under the cap in one piece. Generous enough that only
  * pathological giant lines are trimmed, unlike pi's grep where the line cap keeps matches terse. */
 export const MAX_OUTPUT_LINE_CHARS = 4096;
-const ABORT_GRACE_MS = 500;
+const ABORT_GRACE_MS = 20_000;
 const DEFAULT_SNAPSHOT_DEBOUNCE_MS = 1500;
 
 interface EngineExecuteError {
