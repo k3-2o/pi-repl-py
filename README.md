@@ -64,22 +64,25 @@ On **Termux (Android)**, the `postinstall` venv build can fail because `ipykerne
 
 A **helper** is a `.py` file that gets exec'd into every kernel, so whatever it defines
 (like functions, classes, constants, imports, or a module that manages a tricky piece of
-complexity) is available in the workspace. Drop a file in the one helpers directory and
-restart the session; e.g. `helpers/double.py` defining `def double(x)` becomes callable as
-`double(...)`. It ships **empty** (shell and file IO are already plain Python), so a fresh
-install preloads nothing until you add one. Each helper's `helper_description` is shown to
-the model verbatim; the full contract lives in [docs/helpers.md](docs/helpers.md).
+complexity) is available in the workspace. Drop a file in a `.pi/helpers/` directory in
+your project (or `~/.pi/agent/pi-repl/helpers/` for every project) and restart the session;
+e.g. `helpers/double.py` defining `def double(x)` becomes callable as `double(...)`. Global
+helpers ship **empty** (shell and file IO are already plain Python), so a fresh install
+preloads nothing until you add one. Project helpers shadow same-named global ones. Each
+helper's `helper_description` is shown to the model verbatim; the full contract lives in
+[docs/helpers.md](docs/helpers.md).
 
-Everything the extension keeps lives under one folder in your home directory:
+The extension keeps its runtime under one folder in your home directory:
 
 ```
 ~/.pi/agent/pi-repl/
   venv/         the Python interpreter + ipykernel
-  helpers/      your helpers (created empty on install; every *.py loads)
+  helpers/      global helpers (created empty on install; every *.py loads)
   state/        per-session namespace snapshots
 ```
 
-The helpers directory is fixed at `~/.pi/agent/pi-repl/helpers`. No config file.
+Project helpers live in `<project>/.pi/helpers/` instead; both tiers are scanned with the
+project one first. No config file.
 
 Changing a helper (adding/removing a file, renaming one with a `_` prefix) needs a
 **session restart / `/reload`**: the prompt list is built when `execute` is registered and

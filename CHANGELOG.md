@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.6.8] - 2026-08-21
+
+### Added
+
+- Helpers can live in a project's `.pi/helpers/` directory, discovered by walking up from the working directory to the git root; the global `~/.pi/agent/pi-repl/helpers/` still applies to every project, and a project helper shadows a same-named global one.
+
 ## [0.6.7] - 2026-08-21
 
 ### Changed

@@ -9,13 +9,26 @@ name or any other public name in the file.
 
 ## Where helpers live
 
+Helpers come from two places: a **project** directory and a **global** directory.
+
 ```text
-~/.pi/agent/pi-repl/helpers/
+<project>/.pi/helpers/                 project helpers (looked up from the working dir)
+~/.pi/agent/pi-repl/helpers/           global helpers (every project)
 ```
 
-The directory is created empty when pi-repl is installed. Every `.py` file in it is loaded when the evaluator starts. Files whose names begin with `_` are ignored.
+The global directory is created empty when pi-repl is installed. In a project, any
+`.pi/helpers/` directory is picked up by walking up from the working directory to the
+git repo root, so a helper works no matter how deep in the project you are.
 
-After adding, changing, renaming, or disabling a helper, run `/reload` or start a new `pi --repl` session. The running evaluator does not watch the directory for changes.
+Every `.py` file found is loaded when the evaluator starts; files whose names begin with
+`_` are ignored.
+
+The two tiers merge: a project helper **shadows** a same-named global helper, and global
+helpers fill in whatever the project does not define. One file name appears once in the
+tool prompt and once in the kernel.
+
+After adding, changing, renaming, or disabling a helper, run `/reload` or start a new
+`pi --repl` session. The running evaluator does not watch the directories for changes.
 
 ## A small function helper
 
@@ -109,7 +122,7 @@ Use docstrings for argument details, defaults, return values, errors, environmen
 
 ## How loading works
 
-At startup, two parts of pi-repl read the same helper directory:
+At startup, two parts of pi-repl read the same merged helper list (project dirs first, global last):
 
 1. The kernel executes each eligible `.py` file. Its definitions become names in the Python workspace.
 2. The host reads `helper_description` to build the helper guidance shown to the model.
@@ -196,7 +209,7 @@ The loader skips it. Rename it back and reload when you want it again.
 
 ## Checklist
 
-- [ ] The file is in `~/.pi/agent/pi-repl/helpers/`.
+- [ ] The file is in `~/.pi/agent/pi-repl/helpers/` (global) or in `<project>/.pi/helpers/` (project-scoped).
 - [ ] Its public names and call shapes are clear.
 - [ ] `helper_description` is short enough for every-turn context.
 - [ ] Detailed behavior is in docstrings.

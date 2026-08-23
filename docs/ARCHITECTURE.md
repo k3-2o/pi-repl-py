@@ -175,11 +175,13 @@ watchdog timeout.
   state/        per-session namespace snapshots
 ```
 
-The helpers directory is fixed at `~/.pi/agent/pi-repl/helpers` (matching the kernel's
-`readHelperSources` default), so both sides are guaranteed to read the same directory. The
-venv is built automatically, and the interpreter follows the order above. No setting is
-needed. The per-cell silence watchdog is off by default (`PI_REPL_TIMEOUT_MS=0`: a silent
-but working cell may run on).
+Helpers merge project and global dirs: `resolveHelperDirs` walks from the working
+directory up to the git root collecting `.pi/helpers/`, then appends
+`~/.pi/agent/pi-repl/helpers`. Both the prompt loader and the kernel's `readHelperSources`
+walk the same ordered list with first-seen-wins, so a project helper shadows the same-named
+global one and both sides are guaranteed to agree. The venv is built automatically, and the
+interpreter follows the order above. No setting is needed. The per-cell silence watchdog is
+off by default (`PI_REPL_TIMEOUT_MS=0`: a silent but working cell may run on).
 
 ## Reference documentation
 
