@@ -7,7 +7,7 @@ import { buildPromptGuidelines, executePromptSnippet, executeToolDescription } f
 export const EXECUTE_DESCRIPTION = executeToolDescription;
 export const EXECUTE_PROMPT_SNIPPET = executePromptSnippet;
 
-// --- build the guidelines from the one helpers dir (default ~/.pi/agent/pi-repl/helpers) ---
+// --- build the guidelines from project + global helper dirs ---
 export function buildExecutePromptGuidelines(cwd?: string): string[] {
 	const map = cwd ? buildHelpersMapForCwd(cwd) : buildHelpersMap();
 	const preloaded = map.length > 0 ? map : [];

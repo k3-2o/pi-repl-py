@@ -1,8 +1,4 @@
-// --- helpers-locate: pure dir resolution shared by the prompt loader and the kernel preload. ---
-// Both sides must agree on the SAME file list or the prompt advertises helpers the kernel never
-// defined. Project dirs are looked up from cwd walking up to the git root (pi's skills convention);
-// first-seen wins, so a project helper shadows the same-named global one. ---
-
+// --- shared helper-dir resolution: prompt and kernel must read the same ordered list ---
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
