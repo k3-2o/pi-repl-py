@@ -1,9 +1,8 @@
 """A small, provider-backed web client for the persistent pi-repl workspace."""
 
-helper_description = """web, preloaded web client object for live web work.
-Call its methods directly: web.search(query) to find sources, web.read(url_or_result) to read a known page, and web.map(url) to discover pages inside a site. It uses EXA_API_KEY, TAVILY_API_KEY, SERPER_API_KEY, and FIRECRAWL_API_KEY from the process environment; provider choice, fallback, response normalization, and balancing stay inside the object. Instead of: inventing a public search URL, browser User-Agent, and HTML scraper with urllib.
-
-Search intelligently: compose precise, focused queries and split complex questions into targeted searches instead of writing one bloated query. web.search() returns a list of _SearchResult dataclass instances, access fields by attribute (result.title, result.url, result.snippet, result.provider) or result.as_dict(); they are not dicts and have no .get() method. Keep results in variables; do not print entire result lists, raw responses, or full page bodies. Inspect only bounded fields and slices such as result.title, result.url, result.snippet, results[:5], or page.text[:4000]. Read only promising sources, prefer primary sources, compare independent results, and print compact evidence with URLs. Use web.map only when exploring a known site. Avoid context bloat at every step."""
+helper_description = """web — preloaded web client object for live web work.
+Call web.search(query) to find sources, web.read(url_or_result) to read a page, and web.map(url) to explore a site.
+Instead of: hand-rolling urllib against a search provider, scraping pages, and hoping a key is set."""
 
 import json as _json
 import os as _os
@@ -35,6 +34,10 @@ class _SearchResult:
     def __getitem__(self, key: str):
         return getattr(self, key)
 
+    def get(self, key: str, default=None):
+        """dict-style read with a default, so result.get("title") works like a dict."""
+        return getattr(self, key, default)
+
     def as_dict(self) -> dict:
         return {
             "title": self.title,
@@ -45,8 +48,6 @@ class _SearchResult:
             "published": self.published,
         }
 
-
-_PREVIEW_CHARS = 400
 
 
 @_dataclass
@@ -59,20 +60,12 @@ class _Page:
     title: str = ""
     provider: str = ""
 
-    def preview(self, chars: int = _PREVIEW_CHARS) -> str:
-        """A bounded read of the page start, cheap to put in the transcript."""
-        return self.text[:max(0, chars)]
-
-    def window(self, start: int = 0, chars: int = _PREVIEW_CHARS) -> str:
-        """A bounded window of the page body from ``start`` for ``chars`` chars."""
-        return self.text[start : start + max(0, chars)]
-
     def __repr__(self) -> str:
         title = f" {self.title!r}" if self.title else ""
         head = self.text.strip().replace("\n", " ")[:60]
         return (
             f"Page(url={self.url!r}{title}, {len(self.text):,} chars, provider={self.provider!r})"
-            f"  head: {head!r}… | use .preview() / .window() to read more"
+            f"  head: {head!r}…"
         )
 
 
