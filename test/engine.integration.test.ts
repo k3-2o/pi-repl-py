@@ -10,7 +10,7 @@
  * which is why this suite is slow and kept out of `just check`.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EngineManager } from "../src/engine/index.ts";
@@ -125,6 +125,39 @@ describe("host × python-kernel integration", () => {
 			}
 		},
 	);
+
+	test("a project helper shadows the same-named global helper inside the kernel", { timeout: 60_000 }, async () => {
+		// project .pi/helpers/web.py wins over global web.py — by VALUE in the live kernel,
+		// proving the prompt list and the preload agree on the merged set.
+		const global = tempDir();
+		writeFileSync(join(global, "web.py"), "def web():\n    return 'GLOBAL'\n");
+		const proj = tempDir();
+		mkdirSync(join(proj, ".pi", "helpers"), { recursive: true });
+		writeFileSync(join(proj, ".pi", "helpers", "web.py"), "def web():\n    return 'PROJECT'\n");
+
+		const m = engine({ cwd: proj, env: { PI_HELPERS_GLOBAL_DIR: global } });
+		const r = await m.execute("print(web())");
+		expect(r.status).toBe("ok");
+		expect(r.stdout).toContain("PROJECT");
+		expect(r.stdout).not.toContain("GLOBAL");
+	});
+
+	test("global helpers still load when the project has none, from a deep cwd", { timeout: 60_000 }, async () => {
+		const global = tempDir();
+		writeFileSync(join(global, "grid.py"), "def grid():\n    return 'G'\n");
+		const proj = tempDir();
+		mkdirSync(join(proj, ".git"), { recursive: true });
+		mkdirSync(join(proj, ".pi", "helpers"), { recursive: true });
+		writeFileSync(join(proj, ".pi", "helpers", "core.py"), "def core():\n    return 'C'\n");
+		// deep cwd WITHOUT a local .pi/helpers: project helper at root + global helper both reach the kernel
+		const deep = join(proj, "src", "tools");
+		mkdirSync(deep, { recursive: true });
+
+		const m = engine({ cwd: deep, env: { PI_HELPERS_GLOBAL_DIR: global } });
+		const r = await m.execute("print(core(), grid())");
+		expect(r.status).toBe("ok");
+		expect(r.stdout).toContain("C G");
+	});
 
 	test("a variable set in one engine survives restart via the snapshot file", { timeout: 60_000 }, async () => {
 		const d = tempDir();

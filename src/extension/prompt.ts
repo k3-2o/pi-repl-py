@@ -12,7 +12,7 @@ export const executePromptSnippet = "Execute Python in a persistent shell (read,
 // --- the model-facing guidelines, flat bullets like pi's own tool contributions ---
 export function buildPromptGuidelines(preloaded: string[]): string[] {
 	return [
-		"State persists across cells, so define a function once and keep building on it.",
+		"State persists across cells, so keep building on it.",
 		"Find, filter, fetch, read: narrow the output in Python, then print the exact slice you need.",
 		"Keep the result in a variable and reuse it, instead of re-fetching the same thing.",
 		"Make surgical, precise changes over rewrites or whole-file dumps: a small unique anchor, replace, verify, read the file back before trusting it.",

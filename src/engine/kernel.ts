@@ -3,8 +3,9 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { resolveHelperDirs } from "./helpers-locate.js";
 import {
 	type ConnectionFile,
 	executeRequest,
@@ -62,18 +63,22 @@ function resolveCwd(requested?: string): string {
 	if (requested && existsSync(requested)) return requested;
 	return process.cwd();
 }
-function readHelperSources(dir?: string): { name: string; source: string }[] {
-	// --- one fixed dir, resolved like the prompt side (helpers.ts) so both always agree ---
-	const d = dir ?? join(homedir(), ".pi", "agent", "pi-repl", "helpers");
-	if (!existsSync(d)) return [];
+function readHelperSources(dirs: string[]): { name: string; source: string }[] {
+	// --- merged dirs come pre-ordered (project first, global last); first-seen name wins ---
+	const seen = new Set<string>();
 	const out: { name: string; source: string }[] = [];
-	for (const file of readdirSync(d).sort()) {
-		if (!file.endsWith(".py")) continue;
-		const name = file.slice(0, -3);
-		if (!/^[A-Za-z_]\w*$/.test(name) || name.startsWith("_")) continue;
-		try {
-			out.push({ name, source: readFileSync(join(d, file), "utf8") });
-		} catch {}
+	for (const d of dirs) {
+		if (!existsSync(d)) continue;
+		for (const file of readdirSync(d).sort()) {
+			if (!file.endsWith(".py")) continue;
+			const name = file.slice(0, -3);
+			if (!/^[A-Za-z_]\w*$/.test(name) || name.startsWith("_")) continue;
+			if (seen.has(name)) continue;
+			seen.add(name);
+			try {
+				out.push({ name, source: readFileSync(join(d, file), "utf8") });
+			} catch {}
+		}
 	}
 	return out;
 }
@@ -184,7 +189,9 @@ export class KernelClient {
 
 	private constructor(conn: ConnectionFile, opts: KernelOptions) {
 		this.session = new JupyterSession({ key: conn.key });
-		this.helperSources = readHelperSources(opts.env?.PI_HELPERS_DIR);
+		this.helperSources = opts.env?.PI_HELPERS_DIR
+			? readHelperSources([opts.env.PI_HELPERS_DIR])
+			: readHelperSources(resolveHelperDirs(opts.cwd, opts.env?.PI_HELPERS_GLOBAL_DIR));
 		this.timeoutMs = opts.timeoutMs ?? 0;
 	}
 

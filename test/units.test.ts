@@ -7,13 +7,14 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { resolveHelperDirs } from "../src/engine/helpers-locate.js";
 import { capLinesForContext, MAX_OUTPUT_LINE_CHARS } from "../src/engine/index.js";
 import { JupyterSession } from "../src/engine/session.js";
 import { encodeFrame, ZmtpFrameParser } from "../src/engine/zmtp.js";
-import { buildHelpersMap } from "../src/extension/helpers.js";
+import { buildHelpersMap, buildHelpersMapForCwd } from "../src/extension/helpers.js";
 import {
 	backgroundFor,
 	closeOpenSgr,
@@ -71,6 +72,83 @@ describe("helpers loader: description is the truth", () => {
 		// pi renders each guideline as "- <line>"; buildHelpersMap returns the bare line.
 		expect(bullets.filter((b) => b.startsWith("combine("))).toHaveLength(1);
 		expect(bullets.find((b) => b.startsWith("combine("))).toContain("takes the pair");
+	});
+
+	test("project helpers shadow same-named global helpers at the cwd", () => {
+		const proj = mkdtempSync(join(tmpdir(), "pi-repl-proj-"));
+		const global = mkdtempSync(join(tmpdir(), "pi-repl-global-"));
+		mkdirSync(join(proj, ".pi", "helpers"), { recursive: true });
+		writeFileSync(
+			join(proj, ".pi", "helpers", "web.py"),
+			'helper_description = """web(query) the PROJECT version."""\ndef web(q): return "project"\n',
+		);
+		writeFileSync(
+			join(global, "web.py"),
+			'helper_description = """web(query) the GLOBAL version."""\ndef web(q): return "global"\n',
+		);
+		const bullets = buildHelpersMapForCwd(proj, global);
+		const web = bullets.filter((b) => b.includes("web("));
+		expect(web).toHaveLength(1);
+		expect(web[0]).toContain("PROJECT");
+		expect(web[0]).not.toContain("GLOBAL");
+	});
+
+	test("global helpers fill in what the project does not define", () => {
+		const proj = mkdtempSync(join(tmpdir(), "pi-repl-proj-"));
+		const global = mkdtempSync(join(tmpdir(), "pi-repl-global-"));
+		mkdirSync(join(proj, ".pi", "helpers"), { recursive: true });
+		writeFileSync(
+			join(proj, ".pi", "helpers", "core.py"),
+			'helper_description = """core() project."""\ndef core(): return 1\n',
+		);
+		writeFileSync(join(global, "web.py"), 'helper_description = """web() global."""\ndef web(): return 2\n');
+		const bullets = buildHelpersMapForCwd(proj, global);
+		expect(bullets.some((b) => b.includes("core()"))).toBe(true);
+		expect(bullets.some((b) => b.includes("web()"))).toBe(true);
+	});
+
+	test("a project without a helpers dir falls back to global only", () => {
+		const proj = mkdtempSync(join(tmpdir(), "pi-repl-proj-"));
+		const global = mkdtempSync(join(tmpdir(), "pi-repl-global-"));
+		writeFileSync(join(global, "web.py"), 'helper_description = """web() global."""\ndef web(): return 2\n');
+		const bullets = buildHelpersMapForCwd(proj, global);
+		expect(bullets.some((b) => b.includes("web()"))).toBe(true);
+	});
+
+	test("private underscore helpers never appear from either tier", () => {
+		const proj = mkdtempSync(join(tmpdir(), "pi-repl-proj-"));
+		const global = mkdtempSync(join(tmpdir(), "pi-repl-global-"));
+		mkdirSync(join(proj, ".pi", "helpers"), { recursive: true });
+		writeFileSync(join(proj, ".pi", "helpers", "_priv.py"), 'helper_description = """leak"""\ndef _priv(): pass\n');
+		writeFileSync(join(global, "_priv2.py"), 'helper_description = """leak2"""\ndef _priv2(): pass\n');
+		const bullets = buildHelpersMapForCwd(proj, global);
+		expect(bullets.some((b) => b.includes("_priv"))).toBe(false);
+	});
+
+	test("works from a deep subfolder: .pi/helpers found at the git root", () => {
+		const proj = mkdtempSync(join(tmpdir(), "pi-repl-proj-"));
+		const global = mkdtempSync(join(tmpdir(), "pi-repl-global-"));
+		mkdirSync(join(proj, ".git"), { recursive: true });
+		mkdirSync(join(proj, ".pi", "helpers"), { recursive: true });
+		mkdirSync(join(proj, "src", "tools"), { recursive: true });
+		writeFileSync(
+			join(proj, ".pi", "helpers", "web.py"),
+			'helper_description = """web() root."""\ndef web(): return 1\n',
+		);
+		const bullets = buildHelpersMapForCwd(join(proj, "src", "tools"), global);
+		expect(bullets.some((b) => b.includes("web()"))).toBe(true);
+	});
+
+	test("resolveHelperDirs stops the ancestor walk at the git root", () => {
+		const proj = mkdtempSync(join(tmpdir(), "pi-repl-proj-"));
+		const global = mkdtempSync(join(tmpdir(), "pi-repl-global-"));
+		mkdirSync(join(proj, ".git"), { recursive: true });
+		mkdirSync(join(proj, ".pi", "helpers"), { recursive: true });
+		mkdirSync(join(proj, "src", "deep"), { recursive: true });
+		const dirs = resolveHelperDirs(join(proj, "src", "deep"), global);
+		const nonGlobal = dirs.slice(0, -1);
+		expect(nonGlobal).toEqual([join(proj, ".pi", "helpers")]);
+		expect(dirs[dirs.length - 1]).toBe(global);
 	});
 });
 

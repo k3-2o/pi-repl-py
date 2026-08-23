@@ -125,7 +125,7 @@ export default function (pi: ExtensionAPI) {
 		label: "execute",
 		description: EXECUTE_DESCRIPTION,
 		promptSnippet: EXECUTE_PROMPT_SNIPPET,
-		promptGuidelines: buildExecutePromptGuidelines(),
+		promptGuidelines: buildExecutePromptGuidelines(process.cwd()),
 		parameters: executeSchema,
 		renderShell: "self",
 		renderCall(args, theme, context) {
