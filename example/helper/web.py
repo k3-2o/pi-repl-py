@@ -1,9 +1,10 @@
 """A small, provider-backed web client for the persistent pi-repl workspace."""
 
-helper_description = """web — preloaded web client object for live web work.
-Call web.search(query) to find sources, web.read(url_or_result) to read a page, and web.map(url) to explore a site.
+helper_description = """web — preloaded web client for live web work.
+web.search(query) returns a list of dicts (title, url, snippet, published, score); web.read(url) returns the page text as a string; web.map(url) returns a list of page URLs.
 Instead of: hand-rolling urllib against a search provider, scraping pages, and hoping a key is set."""
 
+import datetime as _datetime
 import json as _json
 import os as _os
 import time as _time
@@ -16,57 +17,6 @@ from urllib.parse import urlsplit as _urlsplit, urlunsplit as _urlunsplit
 _TIMEOUT_SECONDS = 45
 _READ_TIMEOUT_SECONDS = 60
 _MAP_TIMEOUT_SECONDS = 60
-
-
-@_dataclass
-class _SearchResult:
-    title: str
-    url: str
-    snippet: str = ""
-    provider: str = ""
-    score: float | None = None
-    published: str | None = None
-
-    def __repr__(self) -> str:
-        title = self.title or self.url
-        return f"SearchResult({title!r}, {self.url!r})"
-
-    def __getitem__(self, key: str):
-        return getattr(self, key)
-
-    def get(self, key: str, default=None):
-        """dict-style read with a default, so result.get("title") works like a dict."""
-        return getattr(self, key, default)
-
-    def as_dict(self) -> dict:
-        return {
-            "title": self.title,
-            "url": self.url,
-            "snippet": self.snippet,
-            "provider": self.provider,
-            "score": self.score,
-            "published": self.published,
-        }
-
-
-
-@_dataclass
-class _Page:
-    """A fetched page: the whole body is kept in ``.text``; ``.preview()`` /
-    ``.window()`` read a bounded slice without pulling the whole thing out."""
-
-    url: str
-    text: str
-    title: str = ""
-    provider: str = ""
-
-    def __repr__(self) -> str:
-        title = f" {self.title!r}" if self.title else ""
-        head = self.text.strip().replace("\n", " ")[:60]
-        return (
-            f"Page(url={self.url!r}{title}, {len(self.text):,} chars, provider={self.provider!r})"
-            f"  head: {head!r}…"
-        )
 
 
 class _ProviderError(RuntimeError):
@@ -109,8 +59,8 @@ class _Web:
         self._state = {name: _ProviderState() for name in self._ENV_KEYS}
         self._cursor = {"search": 0, "map": 0}
 
-    def search(self, query: str, limit: int = 5) -> list[_SearchResult]:
-        """Search the web; rotate providers and fall back on failure."""
+    def search(self, query: str, limit: int = 5, freshness: str | None = None) -> list[dict]:
+        """Search the web; rotate providers and fall back on failure. Returns a list of dicts."""
         if not isinstance(query, str) or not query.strip():
             raise ValueError("query must be a non-empty string")
         limit = self._limit(limit)
@@ -118,21 +68,22 @@ class _Web:
         data, provider = self._run(
             self._SEARCH_RING,
             "search",
-            lambda name: self._provider_search(name, query.strip(), limit),
+            lambda name: self._provider_search(name, query.strip(), limit, freshness),
             timeout=_TIMEOUT_SECONDS,
         )
         return self._normalize_search(provider, data, limit)
 
-    def read(self, url_or_result: str | _SearchResult) -> _Page:
-        """Read a known URL as clean text/Markdown; Firecrawl, then Tavily, then Exa."""
-        url = self._coerce_url(url_or_result)
+    def read(self, url: str | dict) -> str:
+        """Read a known URL as clean text/Markdown. Accepts a URL or a search result dict; returns the text as a string."""
+        target = url.get("url") if isinstance(url, dict) else url
+        target = self._coerce_url(target)
         data, provider = self._run(
             self._READ_ORDER,
             "read",
-            lambda name: self._provider_read(name, url),
+            lambda name: self._provider_read(name, target),
             timeout=_READ_TIMEOUT_SECONDS,
         )
-        return self._normalize_page(provider, data, url)
+        return self._normalize_page(provider, data, target)
 
     def map(self, url: str, limit: int = 50) -> list[str]:
         """Discover URLs inside a site using Tavily and Firecrawl with fallback."""
@@ -202,6 +153,20 @@ class _Web:
         state.cooldown_until = _time.monotonic() + min(300, 15 * (2 ** min(state.failures - 1, 4)))
 
     @staticmethod
+    def _freshness_days(freshness: str | int | None) -> int:
+        """Map a human freshness ("day", "week", 7) to a day count for freshness filters."""
+        if isinstance(freshness, int):
+            return max(1, freshness)
+        key = str(freshness).strip().lower()
+        table = {"day": 1, "today": 1, "week": 7, "month": 30}
+        return table.get(key, 7)
+
+    @staticmethod
+    def _freshness_iso(freshness: str | int | None) -> str:
+        """Map a human freshness to an ISO start date (Exa's startPublishedDate)."""
+        days = _Web._freshness_days(freshness)
+        return (_datetime.date.today() - _datetime.timedelta(days=days)).isoformat()
+    @staticmethod
     def _limit(value: int, maximum: int = 100) -> int:
         if isinstance(value, bool) or not isinstance(value, int):
             raise TypeError("limit must be an integer")
@@ -210,27 +175,33 @@ class _Web:
         return min(value, maximum)
 
     @staticmethod
-    def _coerce_url(value: str | _SearchResult) -> str:
-        if isinstance(value, _SearchResult):
-            value = value.url
+    def _coerce_url(value: str | dict) -> str:
+        if isinstance(value, dict):
+            value = value.get("url")
         if not isinstance(value, str) or not value.strip():
-            raise ValueError("read expects a URL or a result returned by web.search()")
+            raise ValueError("read expects a URL or a search result dict")
         return value.strip()
 
-    def _provider_search(self, provider: str, query: str, limit: int):
+    def _provider_search(self, provider: str, query: str, limit: int, freshness: str | None = None):
         if provider == "exa":
+            payload: dict = {"query": query, "numResults": limit}
+            if freshness:
+                payload["startPublishedDate"] = self._freshness_iso(freshness)
             return self._post(
                 provider,
                 "https://api.exa.ai/search",
-                {"query": query, "numResults": limit},
+                payload,
                 timeout=_TIMEOUT_SECONDS,
                 api_key_header="x-api-key",
             )
         if provider == "tavily":
+            payload = {"query": query, "max_results": limit, "search_depth": "basic", "include_answer": False}
+            if freshness:
+                payload["days"] = self._freshness_days(freshness)
             return self._post(
                 provider,
                 "https://api.tavily.com/search",
-                {"query": query, "max_results": limit, "search_depth": "basic", "include_answer": False},
+                payload,
                 timeout=_TIMEOUT_SECONDS,
                 bearer=True,
             )
@@ -341,7 +312,7 @@ class _Web:
             raise _ProviderError(provider, "returned an unexpected JSON shape")
         return data
 
-    def _normalize_search(self, provider: str, data: dict, limit: int) -> list[_SearchResult]:
+    def _normalize_search(self, provider: str, data: dict, limit: int) -> list[dict]:
         if provider == "exa":
             items = data.get("results", [])
         elif provider == "tavily":
@@ -370,48 +341,39 @@ class _Web:
             if not snippet and isinstance(item.get("highlights"), list):
                 snippet = " ".join(str(part) for part in item["highlights"])
             results.append(
-                _SearchResult(
-                    title=str(item.get("title") or ""),
-                    url=url,
-                    snippet=str(snippet or ""),
-                    provider=provider,
-                    score=self._number(item.get("score")),
-                    published=item.get("publishedDate") or item.get("published_date") or item.get("date"),
-                )
+                {
+                    "title": str(item.get("title") or ""),
+                    "url": url,
+                    "snippet": str(snippet or ""),
+                    "provider": provider,
+                    "score": self._number(item.get("score")),
+                    "published": item.get("publishedDate") or item.get("published_date") or item.get("date"),
+                }
             )
             if len(results) >= limit:
                 break
         return results
 
-    def _normalize_page(self, provider: str, data: dict, requested_url: str) -> _Page:
-        title = ""
-        text = ""
-        final_url = requested_url
-
+    def _normalize_page(self, provider: str, data: dict, requested_url: str) -> str:
+        # The read result is returned as plain text; no wrapper object.
         if provider == "firecrawl":
             body = data.get("data", data)
             if isinstance(body, dict):
-                text = body.get("markdown") or body.get("content") or body.get("text") or ""
-                metadata = body.get("metadata") or {}
-                if isinstance(metadata, dict):
-                    title = metadata.get("title") or ""
-                    final_url = metadata.get("sourceURL") or metadata.get("url") or requested_url
+                text: str | None = body.get("markdown") or body.get("content") or body.get("text") or ""
+                return str(text)
         elif provider == "tavily":
             items = data.get("results", [])
             item = items[0] if isinstance(items, list) and items else {}
             if isinstance(item, dict):
                 text = item.get("raw_content") or item.get("content") or ""
-                title = item.get("title") or ""
-                final_url = item.get("url") or requested_url
+                return str(text or "")
         else:  # Exa Contents
             items = data.get("results", [])
             item = items[0] if isinstance(items, list) and items else {}
             if isinstance(item, dict):
                 text = item.get("text") or item.get("content") or ""
-                title = item.get("title") or ""
-                final_url = item.get("url") or requested_url
-
-        return _Page(url=str(final_url), text=str(text), title=str(title), provider=provider)
+                return str(text or "")
+        return ""
 
     def _normalize_map(self, provider: str, data: dict, limit: int) -> list[str]:
         body = data.get("data", data)
