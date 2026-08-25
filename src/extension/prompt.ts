@@ -12,12 +12,19 @@ export const executePromptSnippet = "Execute Python in a persistent shell (read,
 // --- the model-facing guidelines, flat bullets like pi's own tool contributions ---
 export function buildPromptGuidelines(preloaded: string[]): string[] {
 	return [
-		"State persists across cells, so keep building on it.",
-		"Find, filter, fetch, read: narrow the output in Python, then print the exact slice you need.",
-		"Keep the result in a variable and reuse it, instead of re-fetching the same thing.",
+		"Find, filter, fetch, sample: narrow the output in Python, then print only the exact slice you need.",
 		"Make surgical, precise changes over rewrites or whole-file dumps: a small unique anchor, replace, verify, read the file back before trusting it.",
-		"The evaluator runs in a project-local venv. Do not install a project's dependencies into it; run external projects through their own interface. If output begins with <repl_engine_reset>, the kernel rebuilt; re-verify a revived variable.",
-		...(preloaded.length ? ["Preloaded helpers, use them as any loaded function or variable:", ...preloaded] : []),
+		"Reference what the persistent shell already holds, don't redefine it.",
+		"Write modern idiomatic Python.",
+		"If output begins with <repl_engine_reset>, the kernel rebuilt; re-verify a revived variable.",
+		...(preloaded.length
+			? [
+					[
+						"Preloaded helpers, use them as any loaded function or variable:",
+						...preloaded.map((line) => `  - ${line.replace(/\n/g, "\n    ")}`),
+					].join("\n"),
+				]
+			: []),
 		"Be concise.",
 	];
 }
