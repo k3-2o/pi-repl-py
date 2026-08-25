@@ -1,3 +1,17 @@
+## [0.6.9] - 2026-08-25
+
+### Changed
+
+- Tightened the execute tool contract: one narrow-the-output rule, reference what the shell already holds instead of re-fetching, helper bullets nested under a header.
+- Expanding a cell shows the full output (bounded by the 45K cap) instead of a 50-line head/tail window.
+- Cell headers preview Python file idioms (write/read/mkdir/delete/append/rename) for pathlib/open/shutil/os calls.
+- Rendering is incremental: fast plain wrap, streamed output re-wraps only the delta, dirty-counter cache keys — no more hitches streaming, expanding, or typing over big cells.
+- The debounced snapshot waits for kernel quiet instead of queuing ahead of the next cell, so heavy namespaces no longer stall it.
+
+### Removed
+
+- The preview layer's TypeScript/Bun/tools detectors from the earlier foundation — they only previewed code this Python evaluator can't run.
+
 # Changelog
 
 ## [0.6.8] - 2026-08-21
