@@ -116,6 +116,8 @@ export class EngineManager {
 	private startPromise?: Promise<void>;
 	private executionQueue: Promise<unknown> = Promise.resolve();
 	private snapshotTimer?: ReturnType<typeof setTimeout>;
+	/** User cells currently running on the kernel; the debounced snapshot never cuts in front of one. */
+	private inFlightCells = 0;
 	/** Last-seen top-level namespace names; snapshots are gated on this set changing. */
 	private lastNamespaceNames?: string[];
 	private pythonPath?: string;
@@ -254,13 +256,16 @@ export class EngineManager {
 			};
 			opts.signal?.addEventListener("abort", onAbort, { once: true });
 
+			this.inFlightCells++;
 			try {
 				const r = await this.kernel!.executeCell(code, {
 					signal: opts.signal,
 					onStream: opts.onStream,
 					maxOutputChars: maxChars,
 				});
-				if (r.status === "ok") void this.scheduleSnapshotIfChanged();
+				// --- names gate runs off the critical path so the next execute's kernel
+				// --- request enqueues before the list-names hop, not behind it ---
+				if (r.status === "ok") setImmediate(() => void this.scheduleSnapshotIfChanged());
 				const status: ExecuteResult["status"] = opts.signal?.aborted ? "aborted" : r.status;
 				// Channel cap (truncateWithMarker), then per-line cap; both append a marker so truncation is explicit.
 				const finalize = (text: string, channelTruncated: boolean): string => {
@@ -286,6 +291,7 @@ export class EngineManager {
 			} finally {
 				opts.signal?.removeEventListener("abort", onAbort);
 				if (graceTimer) clearTimeout(graceTimer);
+				this.inFlightCells--;
 			}
 		} finally {
 			release();
@@ -349,10 +355,20 @@ export class EngineManager {
 		const config = this.options.snapshot;
 		if (!config) return;
 		this.clearSnapshotTimer();
-		this.snapshotTimer = setTimeout(() => {
+		const quiet = config.debounceMs ?? DEFAULT_SNAPSHOT_DEBOUNCE_MS;
+		const fire = () => {
 			this.snapshotTimer = undefined;
+			if (this.inFlightCells > 0) {
+				// --- a pickling cell would wait ahead of the user's next request on the
+				// --- kernel's single queue; the snapshot only lands in a real quiet gap,
+				// --- so re-arm the full quiet window and let activity settle instead ---
+				this.snapshotTimer = setTimeout(fire, quiet);
+				this.snapshotTimer.unref?.();
+				return;
+			}
 			void this.snapshotState();
-		}, config.debounceMs ?? DEFAULT_SNAPSHOT_DEBOUNCE_MS);
+		};
+		this.snapshotTimer = setTimeout(fire, quiet);
 		this.snapshotTimer.unref?.();
 	}
 

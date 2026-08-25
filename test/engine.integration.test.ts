@@ -10,7 +10,7 @@
  * which is why this suite is slow and kept out of `just check`.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EngineManager } from "../src/engine/index.ts";
@@ -196,6 +196,33 @@ describe("host × python-kernel integration", () => {
 		expect(result?.saved).toContain("data");
 		expect(result?.saved).not.toContain("helper_description");
 		expect(result?.saved).not.toContain("web"); // helpers are kernel-side, not user state
+	});
+
+	test("a pending snapshot never lands in front of a queued user cell", { timeout: 90_000 }, async () => {
+		const d = tempDir();
+		const snap = { path: join(d, "ns.snapshot"), debounceMs: 150 };
+		const m = engine({ cwd: d, snapshot: snap });
+
+		await m.execute("x = 1");
+		// A name change arms the debounced snapshot; the pickle is heavy (seconds
+		// for a multi-million-element namespace), so queue position decides latency.
+		await m.execute("big = list(range(3_000_000))");
+
+		// The debounce expires inside these cells. The snapshot must wait for a
+		// quiet gap instead of pickling ahead of the trivial third cell.
+		const r2 = await m.execute("import time; time.sleep(0.3); print('mid')");
+		const start = Date.now();
+		const r3 = await m.execute("print('here')");
+		expect(r2.status).toBe("ok");
+		expect(r2.stdout).toContain("mid");
+		expect(r3.status).toBe("ok");
+		expect(r3.stdout).toContain("here");
+		// Old behaviour left the trivial cell waiting behind a ~2s pickle.
+		expect(Date.now() - start).toBeLessThan(1_000);
+
+		// Once the kernel goes quiet the snapshot still lands.
+		await new Promise((resolve) => setTimeout(resolve, 2_500));
+		expect(existsSync(snap.path)).toBe(true);
 	});
 
 	test("restore reports failed values without crashing the kernel", { timeout: 60_000 }, async () => {
