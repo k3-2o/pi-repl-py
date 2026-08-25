@@ -98,20 +98,23 @@ are announced with explicit markers so the model knows output was cut.
 
 **Cancellation is real.** An abort sends an `interrupt_request` on the control channel,
 which raises a genuine `KeyboardInterrupt` in the running cell; the namespace survives. As a
-backstop for cells wedged in C code (which ignore interrupts), the engine's abort grace then
-kills the kernel after 500 ms, and the next call rebuilds it from the last snapshot.
+backstop for cells wedged in C code (which ignore interrupts), the engine gives an aborted
+cell up to 20 seconds to settle and keeps the kernel if it does; only a cell that is still
+running after that grace is killed, and the next call rebuilds from the last snapshot.
 
 ## Helpers loading
 
-At boot, the kernel and the host both read the same helpers directory:
-`~/.pi/agent/pi-repl/helpers`. It is created empty on install. No shipped toolbox is merged in.
+At boot, the kernel and the host both read the same merged helper list (project
+`.pi/helpers/` directories plus the global `~/.pi/agent/pi-repl/helpers/`), so what the
+prompt advertises is what the kernel holds. Both directories are optional; nothing ships
+with the package. The exact merge order is under "The fixed layout" below.
 
 - **The kernel** executes each eligible `*.py` file in its namespace, so the file's definitions
   and imports become available.
 - **The host** reads the same files to build the helper list shown in the `execute` tool's
   prompt, so the model sees each `helper_description` verbatim.
 
-Both sides read the same directory, so the names described to the model come from files the
+Both sides read the same list, so the names described to the model come from files the
 kernel also loads. A file renamed with a `_` prefix is skipped by both sides. The
 `promptGuidelines` are built once, when the `execute` tool is registered, so a helpers
 change needs a **session restart or `/reload`** to reach the prompt. The kernel also loads
@@ -145,7 +148,7 @@ what was lost, so the model re-verifies before reusing state that may be gone.
 | Failure | Behaviour |
 | --- | --- |
 | Cell throws | `error` status with traceback; kernel namespace intact |
-| Cell silent or wedged | the watchdog sends an `interrupt_request`; a caller abort then kills the kernel after a 500 ms grace |
+| Cell silent or wedged | the watchdog sends an `interrupt_request`; a caller abort kills the kernel only if it is still running after a 20-second grace |
 | Kernel dies | the running cell settles with an error; the next call builds a fresh kernel and restores the last snapshot |
 | Host exits | `process.on("exit")` SIGKILLs live kernels (a child does not die with its parent) |
 | Output flood | capped per channel, truncation announced |
