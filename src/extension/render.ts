@@ -30,21 +30,13 @@ function makeDeps(theme: Theme): RenderDeps {
 	};
 }
 
-/** The layout only changes on state/spinner change, but the TUI repaints every frame; key by both to avoid recompute flicker. */
-function renderVersion(state: ExecuteRenderState): string {
-	const details = state.details ? JSON.stringify(state.details) : "";
-	return [
-		state.code.length,
-		state.contentText?.length ?? 0,
-		details.length,
-		state.isPartial,
-		state.isError,
-		state.expanded,
-		state.executionStarted,
-		state.hasResult,
-		// --- fold the animation frame in while running so the spinner still turns ---
-		statusKind(state) === "running" ? Math.floor(Date.now() / 120) % 4 : -1,
-	].join("|");
+/** O(1) key: a host-bumped dirty counter plus mode state. `withSpinner` folds
+ * the animation frame so the header alone animates while running; the body key
+ * excludes it, so a running cell only redraws when output actually changes
+ * instead of re-wrapping the whole body every 120ms. */
+function renderVersion(state: ExecuteRenderState, withSpinner: boolean): string {
+	const spinner = withSpinner && statusKind(state) === "running" ? Math.floor(Date.now() / 120) % 4 : -1;
+	return `${state.version ?? 0}|${state.expanded}|${spinner}`;
 }
 
 export class ExecuteCellComponent {
@@ -66,7 +58,12 @@ export class ExecuteCellComponent {
 	}
 
 	render(width: number): string[] {
-		const key = `${renderVersion(this.state)}|${this.mode}`;
+		const key =
+			this.mode === "header"
+				? `${renderVersion(this.state, true)}|header`
+				: this.mode === "body"
+					? `${renderVersion(this.state, false)}|body`
+					: `${renderVersion(this.state, true)}|cell`;
 		if (this.cachedLines && this.cachedWidth === width && this.cachedKey === key) {
 			return this.cachedLines;
 		}

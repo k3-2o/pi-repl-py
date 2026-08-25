@@ -479,18 +479,82 @@ describe("render-core: layout", () => {
 		expect(plain).toContain("res");
 	});
 
-	test("huge output is head/tail truncated with a hidden marker", () => {
+	test("expanded output renders in full, bounded only by the data cap", () => {
 		const deps = testDeps();
 		const state = makeState({
 			expanded: true,
-			details: { status: "ok", stdout: Array.from({ length: 60 }, (_, i) => `line ${i}`).join("\n") },
+			details: { status: "ok", stdout: Array.from({ length: 120 }, (_, i) => `line ${i}`).join("\n") },
 		});
 		const plain = stripAnsi(renderExecuteCell(state, 80, deps).join("\n"));
 		expect(plain).toContain("line 0");
-		expect(plain).toContain("line 59");
-		expect(plain).toContain("hidden");
-		// Should not render every line.
-		expect(plain.match(/line \d+/g)?.length).toBeLessThan(60);
+		expect(plain).toContain("line 119");
+		// Every line is present; nothing is hidden behind a marker.
+		expect(plain).not.toContain("hidden");
+		expect(plain.match(/line \d+/g)?.length).toBe(120);
+	});
+
+	test("appended streaming output re-wraps incrementally with identical results", () => {
+		const deps = testDeps();
+		const tail = "b".repeat(200);
+		const big = `alpha\n${tail}\ngamma\ndelta`;
+		const state = makeState({
+			expanded: true,
+			details: undefined,
+			hasResult: false,
+			isPartial: true,
+			contentText: `alpha\n${tail}`,
+		});
+		const first = renderExecuteBody(state, 80, deps);
+		// Append the next batch on the same (persistent) state object.
+		state.contentText = big;
+		const second = renderExecuteBody(state, 80, deps);
+		// Same text on a fresh state must wrap identically.
+		const fresh = makeState({
+			expanded: true,
+			details: undefined,
+			hasResult: false,
+			isPartial: true,
+			contentText: big,
+		});
+		const full = renderExecuteBody(fresh, 80, deps);
+		expect(second.length).toBeGreaterThan(first.length);
+		expect(second.join("\n")).toBe(full.join("\n"));
+		// Rendering the same text again is a cache hit and stays stable.
+		expect(renderExecuteBody(state, 80, deps).join("\n")).toBe(full.join("\n"));
+		// A mid-stream rewrite (not an append) falls back to a fresh full wrap.
+		state.contentText = "zzz";
+		const rewritten = renderExecuteBody(state, 80, deps);
+		expect(stripAnsi(rewritten.join("\n"))).toContain("zzz");
+		expect(rewritten.join("\n")).toBe(
+			renderExecuteBody(
+				makeState({ expanded: true, details: undefined, hasResult: false, isPartial: true, contentText: "zzz" }),
+				80,
+				deps,
+			).join("\n"),
+		);
+	});
+
+	test("settled stdout reuses the streaming wrap when the text is identical", () => {
+		const deps = testDeps();
+		const body = "x".repeat(60) + "\n" + "y".repeat(60);
+		const state = makeState({
+			code: "",
+			expanded: true,
+			details: undefined,
+			hasResult: false,
+			isPartial: true,
+			contentText: body,
+		});
+		const streamed = renderExecuteBody(state, 80, deps).join("\n");
+		// Settle: the engine delivers the same bytes as details.stdout.
+		state.details = { status: "ok", durationMs: 5, stdout: body };
+		state.isPartial = false;
+		state.version = 1;
+		const settled = renderExecuteBody(state, 80, deps).join("\n");
+		expect(settled).toContain("stdout:");
+		expect(stripAnsi(settled)).toContain("x".repeat(30));
+		// The wrapped rows are the cached ones (label line aside): no re-wrap hitch at settle.
+		expect(settled.slice(settled.indexOf("\n") + 1)).toBe(streamed);
 	});
 
 	test("background is re-armed after inner SGR resets so it spans the row", () => {

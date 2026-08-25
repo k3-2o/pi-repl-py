@@ -130,11 +130,13 @@ export default function (pi: ExtensionAPI) {
 		renderShell: "self",
 		renderCall(args, theme, context) {
 			const state = syncRenderState(context.state, { ...context, args });
+			state.version = (state.version ?? 0) + 1;
 			// --- compact header lives in the call slot ---
 			return new ExecuteCellComponent(state, theme, "header");
 		},
 		renderResult(result, options, _theme, context) {
 			const state = syncRenderState(context.state, context);
+			state.version = (state.version ?? 0) + 1;
 			state.hasResult = true;
 			state.isPartial = options.isPartial;
 			state.expanded = options.expanded;
