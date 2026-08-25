@@ -1,23 +1,10 @@
-// --- shared preview types; tiny module so every consumer imports only the shape it needs ---
-type CellPreviewKind = "shell" | "ts";
-
-export interface CellPreview {
-	kind: CellPreviewKind;
-	text: string;
-}
-
-// --- a [start, end) slice of the source with its captured body ---
-export interface Span {
-	start: number;
-	end: number;
-	body: string;
-}
-
-// --- the winner of each detector, ranked by score in the orchestration ---
+/** A scored preview candidate for one cell in the transcript header. */
 export interface Candidate {
-	kind: CellPreviewKind;
 	text: string;
 	score: number;
 }
 
-export const BACKTICK = "\u0060";
+/** The one-line semantic summary a collapsed cell shows. */
+export interface CellPreview {
+	text: string;
+}

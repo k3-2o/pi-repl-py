@@ -187,8 +187,7 @@ function outputText(state: ExecuteRenderState): string {
 function topLine(state: ExecuteRenderState, width: number, deps: RenderDeps): string {
 	const code = state.code.trimEnd();
 	const preview = previewCell(code);
-	const language = preview.kind === "shell" ? "repl · shell" : "repl";
-	const prefix = `${marker(state, deps)} ${deps.fg("muted", language)}`;
+	const prefix = `${marker(state, deps)} ${deps.fg("muted", "repl")}`;
 
 	// --- suffix priority: expand hint > error > duration > counts, so truncation never hides the expand key ---
 	const suffixParts: string[] = [];
@@ -224,10 +223,7 @@ function topLine(state: ExecuteRenderState, width: number, deps: RenderDeps): st
 	// --- a semantic preview is a one-line summary; highlight Python code, accent shell intent ---
 	let middle = "";
 	if (preview.text) {
-		const previewText =
-			preview.kind === "ts"
-				? (deps.highlight(preview.text)[0] ?? deps.fg("accent", preview.text))
-				: deps.fg("accent", preview.text);
+		const previewText = deps.highlight(preview.text)[0] ?? deps.fg("accent", preview.text);
 		middle = deps.truncateToWidth(previewText, previewBudget, "…");
 	} else if (!state.executionStarted) {
 		middle = deps.fg("muted", "waiting for code");
