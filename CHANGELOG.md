@@ -1,3 +1,9 @@
+## [0.6.10] - 2026-08-26
+
+### Changed
+
+- The execute tool contract now frames the workspace as a Jupyter notebook with a shared environment: names persist for the notebook's life, reuse over recompute, and reverify after resets.
+
 ## [0.6.9] - 2026-08-25
 
 ### Changed
