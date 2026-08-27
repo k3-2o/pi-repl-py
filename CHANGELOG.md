@@ -1,3 +1,11 @@
+## [0.6.12] - 2026-08-27
+
+### Changed
+
+- Cells run with `store_history` off, so IPython's `In`/`Out` retention can no longer pin result objects and grow long sessions (same workload: 400+ MB to 180 MB, flat).
+- Snapshot dirs now die with their conversations: a state dir whose conversation file exists in no project session root is swept on the next start, so deleting a conversation deletes its snapshots.
+- A kernel rebuild or resumed session fires a terse PI notification instead of only the in-cell reset marker; the model still gets the named revive/loss block.
+
 ## [0.6.11] - 2026-08-27
 
 ### Changed
