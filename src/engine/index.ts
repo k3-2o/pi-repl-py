@@ -141,6 +141,44 @@ export function pruneSnapshotDirs(stateRoot: string, keep: number = DEFAULT_KEEP
 	}
 }
 
+// --- Orphaned-snapshot sweep: snapshot dirs are keyed by conversation file basename, so when
+// --- an owning conversation is deleted (pi removes the .jsonl), its directory becomes dead
+// --- weight. This drops any state dir whose conversation file exists in NONE of the project
+// --- session roots, so deleting a conversation deletes its snapshots with it. Safety rules:
+// --- only dirs that look like ours (contain a namespace.snapshot manifest) are touched, and
+// --- the live session plus the no-session "ephemeral" fallback dir are always exempt. ---
+export function pruneOrphanedSnapshotDirs(
+	stateRoot: string,
+	sessionsRoot: string | undefined,
+	currentDir?: string,
+): number {
+	if (!sessionsRoot || !existsSync(sessionsRoot)) return 0;
+	const liveNames = new Set<string>();
+	try {
+		for (const proj of readdirSync(sessionsRoot, { withFileTypes: true })) {
+			if (!proj.isDirectory()) continue;
+			for (const f of readdirSync(join(sessionsRoot, proj.name))) {
+				if (f.endsWith(".jsonl")) liveNames.add(f.slice(0, -".jsonl".length));
+			}
+		}
+	} catch {
+		return 0;
+	}
+	let removed = 0;
+	try {
+		for (const entry of readdirSync(stateRoot, { withFileTypes: true })) {
+			if (!entry.isDirectory() || entry.name === currentDir || entry.name === "ephemeral") continue;
+			if (liveNames.has(entry.name)) continue;
+			if (!existsSync(join(stateRoot, entry.name, "namespace.snapshot"))) continue;
+			rmSync(join(stateRoot, entry.name), { recursive: true, force: true });
+			removed++;
+		}
+	} catch {
+		// readdir can race a concurrent sweep; give up quietly rather than partial-delete
+	}
+	return removed;
+}
+
 export class EngineManager {
 	private readonly options: EngineOptions;
 	private kernel?: KernelClient;

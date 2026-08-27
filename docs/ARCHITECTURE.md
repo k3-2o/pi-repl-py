@@ -152,7 +152,9 @@ pickle cannot revive them, since they live in `__main__`). Bindings that still f
 handles, open resources, source-less functions — are reported by name, never dropped silently.
 Entries are capped per-binding and in total (128 MiB default), and the snapshot file is written
 via temp-file-and-rename so a crash cannot corrupt the last good copy; old session snapshot
-directories are pruned to the newest 25. If the evaluator was rebuilt mid-session, the next
+directories are pruned to the newest 25, and snapshot dirs whose owning conversation file no
+longer exists in any project session root are swept entirely (deleting a conversation deletes
+its snapshots with it). "ephemeral" and the live session are always exempt. If the evaluator was rebuilt mid-session, the next
 cell's result is prefixed with a `<repl_engine_reset>` block that names what was revived and
 what was lost, so the model re-verifies before reusing state that may be gone. A resumed
 conversation announces the same block on its first cell, but only when the conversation has a

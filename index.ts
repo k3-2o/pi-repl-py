@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 import { withSkillsBlock } from "./src/extension/skill-hook.js";
-import { EngineManager, pruneSnapshotDirs } from "./src/engine/index.js";
+import { EngineManager, pruneOrphanedSnapshotDirs, pruneSnapshotDirs } from "./src/engine/index.js";
 import { ExecuteCellComponent, type ExecuteDetails, type ExecuteRenderState } from "./src/extension/render.js";
 import { EngineLifecycle } from "./src/extension/session-engine.js";
 import { EXECUTE_DESCRIPTION, buildExecutePromptGuidelines, EXECUTE_PROMPT_SNIPPET } from "./src/extension/tool-meta.js";
@@ -67,6 +67,13 @@ export default function (pi: ExtensionAPI) {
 			if (sessionKey) {
 				try {
 					pruneSnapshotDirs(join(stateDir, ".."), 25, sessionKey);
+				} catch {}
+				// --- cascade deletions: if a conversation is deleted, its snapshots die with it.
+				// --- sessionFile is sessions/<project-root>/<name>.jsonl, so the sessions root is
+				// --- two parent hops up; dirs whose conversation file exists in no project root
+				// --- (and that aren't this session or the ephemeral fallback) are swept. ---
+				try {
+					pruneOrphanedSnapshotDirs(join(stateDir, ".."), sessionFile ? dirname(dirname(sessionFile)) : undefined, sessionKey);
 				} catch {}
 			}
 			return new EngineManager({

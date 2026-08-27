@@ -12,7 +12,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveHelperDirs } from "../src/engine/helpers-locate.js";
 import type { RestoreResult } from "../src/engine/index.js";
-import { capLinesForContext, EngineManager, MAX_OUTPUT_LINE_CHARS, pruneSnapshotDirs } from "../src/engine/index.js";
+import {
+	capLinesForContext,
+	EngineManager,
+	MAX_OUTPUT_LINE_CHARS,
+	pruneOrphanedSnapshotDirs,
+	pruneSnapshotDirs,
+} from "../src/engine/index.js";
 import { JupyterSession } from "../src/engine/session.js";
 import { encodeFrame, ZmtpFrameParser } from "../src/engine/zmtp.js";
 import { buildHelpersMap, buildHelpersMapForCwd } from "../src/extension/helpers.js";
@@ -839,6 +845,60 @@ describe("pruneSnapshotDirs keeps only the newest snapshots", () => {
 			expect(existsSync(old2)).toBe(true);
 			expect(existsSync(fresh)).toBe(true);
 			expect(existsSync(join(root, "no-manifest"))).toBe(true);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test("orphaned snapshot dirs die with their conversation", () => {
+		const root = mkdtempSync(join(tmpdir(), "pi-repl-orphan-"));
+		const sessions = mkdtempSync(join(tmpdir(), "pi-repl-sess-"));
+		try {
+			// project roots under the sessions root; alpha/beta conversations survive
+			const a = join(sessions, "proj-a");
+			const b = join(sessions, "proj-b");
+			mkdirSync(a);
+			mkdirSync(b);
+			writeFileSync(join(a, "alpha.jsonl"), "x");
+			writeFileSync(join(b, "beta.jsonl"), "x");
+			// state dirs keyed by conversation basename
+			const mk = (name: string) => {
+				const d = join(root, name);
+				mkdirSync(d);
+				writeFileSync(join(d, "namespace.snapshot"), "{}");
+				return d;
+			};
+			const alpha = mk("alpha");
+			const beta = mk("beta");
+			const gamma = mk("gamma"); // conversation deleted everywhere
+			const current = mk("current-session");
+			const ephemeral = mk("ephemeral"); // no-session fallback: always kept
+			mkdirSync(join(root, "random-dir")); // no manifest: must never be touched
+
+			const removed = pruneOrphanedSnapshotDirs(root, sessions, "current-session");
+			expect(removed).toBe(1);
+			expect(existsSync(gamma)).toBe(false);
+			expect(existsSync(alpha)).toBe(true); // file lives under proj-a
+			expect(existsSync(beta)).toBe(true);
+			expect(existsSync(current)).toBe(true);
+			expect(existsSync(ephemeral)).toBe(true);
+			expect(existsSync(join(root, "random-dir"))).toBe(true);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(sessions, { recursive: true, force: true });
+		}
+	});
+
+	test("orphan sweep is a no-op without a sessions root", () => {
+		const root = mkdtempSync(join(tmpdir(), "pi-repl-orphan-"));
+		try {
+			const d = join(root, "gamma");
+			mkdirSync(d);
+			writeFileSync(join(d, "namespace.snapshot"), "{}");
+			expect(pruneOrphanedSnapshotDirs(root, undefined, undefined)).toBe(0);
+			expect(existsSync(d)).toBe(true);
+			expect(pruneOrphanedSnapshotDirs(root, join(root, "no-such-root"), undefined)).toBe(0);
+			expect(existsSync(d)).toBe(true);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
