@@ -328,6 +328,12 @@ export class EngineManager {
 		}
 	}
 
+	/** The conversation's state dir exists, so this engine is a resume, not a first run. */
+	hasSnapshotHistory(): boolean {
+		const config = this.options.snapshot;
+		return config ? existsSync(dirname(config.path)) : false;
+	}
+
 	async listNamespaceNames(): Promise<string[] | null> {
 		if (this.state !== "running" || !this.kernel) return null;
 		try {

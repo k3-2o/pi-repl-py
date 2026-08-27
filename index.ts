@@ -93,7 +93,7 @@ export default function (pi: ExtensionAPI) {
 		location = { cwd: ctx.cwd, sessionFile: ctx.sessionManager.getSessionFile() ?? undefined };
 		void lifecycle.acquire("startup").catch(() => {
 			// --- boot/revive handled on the execute path; swallow so a background warm can never
-			// --- surface an unhandled rejection and the model never needs the restore notice ---
+			// --- surface an unhandled rejection. A resume's notice lands on the first cell. ---
 		});
 	});
 

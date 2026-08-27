@@ -47,6 +47,7 @@ that failed. A cell that wedges the *whole* kernel instead stops cells from runn
 the next call notices the dead kernel and rebuilds it from the last completed snapshot.
 Either way the result carries a `<repl_engine_reset>` notice that names what the rebuild
 revived and what it lost, so the model re-verifies before trusting state that may be gone.
+A resumed conversation gets the same notice on its first cell when it has a saved past.
 (How that machinery works is in `ARCHITECTURE.md`.)
 
 ## The venv as part of the design

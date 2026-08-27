@@ -11,6 +11,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveHelperDirs } from "../src/engine/helpers-locate.js";
+import type { RestoreResult } from "../src/engine/index.js";
 import { capLinesForContext, MAX_OUTPUT_LINE_CHARS } from "../src/engine/index.js";
 import { JupyterSession } from "../src/engine/session.js";
 import { encodeFrame, ZmtpFrameParser } from "../src/engine/zmtp.js";
@@ -27,6 +28,7 @@ import {
 	renderExecuteHeader,
 	statusKind,
 } from "../src/extension/render-core.js";
+import { EngineLifecycle, type EngineLifecycleDeps, type RevivableEngine } from "../src/extension/session-engine.js";
 import { withSkillsBlock } from "../src/extension/skill-hook.js";
 
 describe("helpers loader: description is the truth", () => {
@@ -707,3 +709,78 @@ describe("render-core: bare identifier coloring", () => {
 		expect(ids).not.toContain("KEY");
 	});
 });
+
+describe("EngineLifecycle reset notices", () => {
+	// --- a fake engine so the lifecycle policy is testable without a kernel ---
+	class FakeEngine implements RevivableEngine {
+		constructor(
+			private readonly restore: RestoreResult | null,
+			readonly history: boolean,
+		) {}
+		async restoreState(): Promise<RestoreResult | null> {
+			return this.restore;
+		}
+		hasSnapshotHistory(): boolean {
+			return this.history;
+		}
+	}
+
+	const deps = (restore: RestoreResult | null, history: boolean) =>
+		({
+			create: () => new FakeEngine(restore, history),
+			async dispose() {},
+		}) as EngineLifecycleDeps<FakeEngine>;
+
+	const restored = (n: string[]): RestoreResult => ({ path: "/tmp/ns.snapshot", restored: n, failed: [] });
+
+	test("a mid-session rebuild announces on the next cell", async () => {
+		const lc = new EngineLifecycle(deps(restored(["data"]), false));
+		await lc.acquire("cell");
+		const notice = lc.takeResetNotice();
+		expect(notice).toBeDefined();
+		expect(notice).toContain("Revived (1): data");
+	});
+
+	test("a resumed conversation announces its restore on the first cell", async () => {
+		const lc = new EngineLifecycle(deps(restored(["data", "model"]), true));
+		await lc.acquire("startup");
+		const notice = lc.takeResetNotice();
+		expect(notice).toBeDefined();
+		expect(notice).toContain("started fresh");
+		expect(notice).toContain("Revived (2): data, model");
+	});
+
+	test("a first-ever session stays quiet", async () => {
+		const lc = new EngineLifecycle(deps(restored(["data"]), false));
+		await lc.acquire("startup");
+		expect(lc.takeResetNotice()).toBeUndefined();
+	});
+
+	test("a resumed conversation with no snapshot says so instead of pretending", async () => {
+		const lc = new EngineLifecycle(deps(null, true));
+		await lc.acquire("startup");
+		const notice = lc.takeResetNotice();
+		expect(notice).toBeDefined();
+		expect(notice).toContain("no saved snapshot was available to revive");
+	});
+
+	test("a partial revive names the losses", async () => {
+		const failed = [{ name: "handle", reason: "can't pickle" }];
+		const lc = new EngineLifecycle(deps({ path: "/tmp/ns.snapshot", restored: ["ok"], failed }, true));
+		await lc.acquire("startup");
+		const notice = lc.takeResetNotice();
+		expect(notice).toContain("Lost (1): handle");
+		expect(notice).toContain("cannot be snapshotted");
+	});
+
+	test("an existing engine never re-announces; the notice is taken exactly once", async () => {
+		const lc = new EngineLifecycle(deps(restored(["data"]), true));
+		await lc.acquire("startup");
+		expect(lc.takeResetNotice()).toBeDefined();
+		expect(lc.takeResetNotice()).toBeUndefined();
+		// a later cell acquire reuses the engine without a new notice
+		await lc.acquire("cell");
+		expect(lc.takeResetNotice()).toBeUndefined();
+	});
+});
+

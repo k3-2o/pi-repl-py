@@ -138,10 +138,12 @@ only itself) and publishes the result back over a private MIME payload. The host
 `namespace.snapshot`, keyed to the session file under
 `~/.pi/agent/pi-repl/state/<session>/`.
 
-When a fresh engine is built, it restores that snapshot. It reports the names of values that
-could not be pickled, such as live handles and some runtime objects. If the evaluator was rebuilt mid-session,
-the result is prefixed with a `<repl_engine_reset>` block that names what was revived and
-what was lost, so the model re-verifies before reusing state that may be gone.
+When a fresh engine is built, it restores that snapshot. If the evaluator was rebuilt mid-session,
+the next cell's result is prefixed with a `<repl_engine_reset>` block that names what was
+revived and what was lost (values that could not be pickled, such as live handles and some
+runtime objects), so the model re-verifies before reusing state that may be gone. A resumed
+conversation announces the same block on its first cell, but only when the conversation has a
+saved past; a first-ever session starts quiet.
 
 ## Failure modes
 

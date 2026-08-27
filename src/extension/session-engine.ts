@@ -11,6 +11,8 @@ function summarizeNames(names: readonly string[], limit: number): string {
 /** The part of EngineManager this lifecycle needs; narrowed so tests can fake it. */
 export interface RevivableEngine {
 	restoreState(): Promise<RestoreResult | null>;
+	/** True when this conversation's state dir already exists, so the engine was resumed. */
+	hasSnapshotHistory(): boolean;
 }
 
 export interface EngineLifecycleDeps<E extends RevivableEngine> {
@@ -22,32 +24,43 @@ export interface EngineLifecycleDeps<E extends RevivableEngine> {
 	discard?(engine: E): Promise<void>;
 }
 
-/** `startup` is announced in the transcript; `cell` means an engine was rebuilt mid-session and needs an in-band notice. */
+/** `startup` restores then announces on the first cell when the conversation has a saved past; `cell` means an engine was rebuilt mid-session and announces immediately. */
 export type AcquireOrigin = "startup" | "cell";
 
-function formatEngineResetNotice(restore: RestoreResult | null): string {
+function formatEngineResetNotice(restore: RestoreResult | null, origin: AcquireOrigin): string {
+	const resumed = origin === "startup";
 	const lines = ["<repl_engine_reset>"];
 	if (!restore) {
 		// --- no snapshot at all: namespace is genuinely empty ---
 		lines.push(
-			"The evaluator restarted and its namespace is empty; no snapshot was available to revive.",
-			"Every variable from earlier in this session is gone. Rebuild what you need before using it.",
+			resumed
+				? "This session's evaluator started fresh, and no saved snapshot was available to revive; the namespace is empty."
+				: "The evaluator restarted and its namespace is empty; no snapshot was available to revive.",
+			resumed
+				? "Names from earlier in this conversation are gone. Rebuild what you need before using it."
+				: "Every variable from earlier in this session is gone. Rebuild what you need before using it.",
 		);
 	} else if (restore.restored.length === 0) {
 		// --- a snapshot existed but restored nothing; say why, don't claim "no snapshot" ---
 		lines.push(
-			"The evaluator restarted and a snapshot was found, but nothing in it could be revived.",
+			resumed
+				? "This session's evaluator started fresh. A saved snapshot was found, but nothing in it could be revived."
+				: "The evaluator restarted and a snapshot was found, but nothing in it could be revived.",
 			restore.failed.length > 0
 				? `Failed to revive (${restore.failed.length}): ${summarizeNames(
 						restore.failed.map((f) => f.name),
 						20,
 					)}`
 				: "The snapshot was empty.",
-			"Every variable from earlier in this session is gone. Rebuild what you need before using it.",
+			resumed
+				? "Names from earlier in this conversation are gone. Rebuild what you need before using it."
+				: "Every variable from earlier in this session is gone. Rebuild what you need before using it.",
 		);
 	} else {
 		lines.push(
-			"The evaluator restarted. Its namespace was rebuilt from the last snapshot, so it may be behind.",
+			resumed
+				? "This session's evaluator started fresh and restored the namespace saved by this conversation's last run, so it may be empty or behind."
+				: "The evaluator restarted. Its namespace was rebuilt from the last snapshot, so it may be behind.",
 			`Revived (${restore.restored.length}): ${summarizeNames(restore.restored, 20)}`,
 		);
 		if (restore.failed.length > 0) {
@@ -91,7 +104,11 @@ export class EngineLifecycle<E extends RevivableEngine> {
 			this.engine = engine;
 			this.revival = engine.restoreState().catch(() => null);
 			const restore = await this.revival;
-			if (origin === "cell") this.pendingNotice = formatEngineResetNotice(restore);
+			// --- mid-session rebuilds always announce; startup announces only when the
+			// --- conversation has a saved past, so a first-ever session stays quiet ---
+			if (origin === "cell" || (origin === "startup" && engine.hasSnapshotHistory())) {
+				this.pendingNotice = formatEngineResetNotice(restore, origin);
+			}
 			return { engine, restore, created: true };
 		})();
 		this.acquiring = build;
