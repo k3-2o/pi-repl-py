@@ -683,6 +683,40 @@ describe("render-core: code indent on wrap", () => {
 	});
 });
 
+
+describe("render-core: cached code re-render", () => {
+	test("repeated frames render identically from the cache", () => {
+		const deps = testDeps();
+		const state = makeState({ expanded: true, code: "def f(x):\n    return x * 2\nf(21)" });
+		const first = renderExecuteBody(state, 60, deps);
+		const second = renderExecuteBody(state, 60, deps);
+		expect(second).toEqual(first);
+		expect(second.join("\n")).toContain("def f(x)");
+	});
+
+	test("a changed body on the same state renders fresh, not stale", () => {
+		const deps = testDeps();
+		const state = makeState({ expanded: true, code: "old_body = 1" });
+		renderExecuteBody(state, 60, deps);
+		state.code = "new_body = 2";
+		const rendered = renderExecuteBody(state, 60, deps).join("\n");
+		expect(rendered).toContain("new_body = 2");
+		expect(rendered).not.toContain("old_body = 1");
+	});
+
+	test("width churn (resizes) stays correct after cache eviction", () => {
+		const deps = testDeps();
+		const state = makeState({ expanded: true, code: "value = 'x' * 120\nprint(value)" });
+		const reference = renderExecuteBody(state, 40, deps);
+		[50, 70, 90, 110].forEach((w) => {
+			renderExecuteBody(state, w, deps);
+		});
+		// the first width was evicted from the bound cache; re-render must rebuild it
+		const again = renderExecuteBody(state, 40, deps);
+		expect(again).toEqual(reference);
+	});
+});
+
 describe("render-core: bare identifier coloring", () => {
 	test("raw identifiers are painted with syntaxVariable; colored tokens are left alone", () => {
 		const calls: Array<[string, string]> = [];

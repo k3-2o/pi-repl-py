@@ -278,17 +278,31 @@ function renderCode(state: ExecuteRenderState, lines: string[], width: number, d
 	const code = state.code.trimEnd();
 	if (!code) return false;
 	lines.push("");
+	let perWidth = codeWrapCache.get(state);
+	if (!perWidth) {
+		perWidth = new Map();
+		codeWrapCache.set(state, perWidth);
+	}
+	const cached = perWidth.get(width);
+	if (cached?.code === code) {
+		lines.push(...cached.lines);
+		return true;
+	}
+	const fresh: string[] = [];
 	const highlighted = highlightLines(code, deps);
 	for (const [index, rawLine] of code.split("\n").entries()) {
 		const prefix = index === 0 ? deps.fg("dim", "› ") : deps.fg("dim", "  ");
 		const paint = (id: string) => deps.fg("syntaxVariable", id);
 		const hlLine = colorBareIdentifiers(highlighted[index] ?? rawLine, paint);
 		const indent = /^[ \t]*/.exec(rawLine)?.[0] ?? "";
-		addWrapped(lines, prefix, hlLine, width, deps, {
+		addWrapped(fresh, prefix, hlLine, width, deps, {
 			sanitize: false,
 			indentAfter: deps.visibleWidth(indent),
 		});
 	}
+	boundWidthCache(perWidth);
+	perWidth.set(width, { code, lines: fresh });
+	lines.push(...fresh);
 	return true;
 }
 
@@ -307,6 +321,28 @@ interface BlobWrapEntry {
 }
 
 const blobWrapCache = new WeakMap<ExecuteRenderState, Map<number, BlobWrapEntry>>();
+/** Wrapped+highlighted rows rebuild only when their inputs (text/width) change; the
+ * TUI re-renders bodies on every frame, so these caches turn per-frame work into
+ * one build per change. They live on the persistent per-call state, which the host
+ * keeps for the session, so a small bound per state keeps resize churn bounded. */
+interface CodeEntry {
+	code: string;
+	lines: string[];
+}
+const codeWrapCache = new WeakMap<ExecuteRenderState, Map<number, CodeEntry>>();
+
+/** Window resizes add a per-width entry per cell; keep a small bound so a long
+ * session with resize churn cannot grow the wrap caches without limit. Map
+ * iteration order is insertion order, so evicting the first key drops the oldest
+ * width rather than the one in use. */
+const MAX_CACHED_WIDTHS_PER_STATE = 3;
+function boundWidthCache(perWidth: Map<number, unknown>): void {
+	while (perWidth.size >= MAX_CACHED_WIDTHS_PER_STATE) {
+		const oldest = perWidth.keys().next().value as number | undefined;
+		if (oldest === undefined) return;
+		perWidth.delete(oldest);
+	}
+}
 
 const CJK_WIDE_RE =
 	/[\p{Script_Extensions=Han}\p{Script_Extensions=Hiragana}\p{Script_Extensions=Katakana}\p{Script_Extensions=Hangul}\p{Script_Extensions=Bopomofo}]/u;
@@ -425,6 +461,7 @@ function wrapBlob(state: ExecuteRenderState, width: number, text: string, color:
 			}
 		}
 		const entry: BlobWrapEntry = { text, color, lines, partial };
+		boundWidthCache(perWidth);
 		perWidth.set(width, entry);
 		return entry;
 	};
