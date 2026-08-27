@@ -34,7 +34,12 @@ import {
 	renderExecuteHeader,
 	statusKind,
 } from "../src/extension/render-core.js";
-import { EngineLifecycle, type EngineLifecycleDeps, type RevivableEngine } from "../src/extension/session-engine.js";
+import {
+	EngineLifecycle,
+	type EngineLifecycleDeps,
+	formatResetToast,
+	type RevivableEngine,
+} from "../src/extension/session-engine.js";
 import { withSkillsBlock } from "../src/extension/skill-hook.js";
 
 describe("helpers loader: description is the truth", () => {
@@ -777,7 +782,7 @@ describe("EngineLifecycle reset notices", () => {
 		await lc.acquire("cell");
 		const notice = lc.takeResetNotice();
 		expect(notice).toBeDefined();
-		expect(notice).toContain("Revived (1): data");
+		expect(notice?.notice).toContain("Revived (1): data");
 	});
 
 	test("a resumed conversation announces its restore on the first cell", async () => {
@@ -785,8 +790,8 @@ describe("EngineLifecycle reset notices", () => {
 		await lc.acquire("startup");
 		const notice = lc.takeResetNotice();
 		expect(notice).toBeDefined();
-		expect(notice).toContain("started fresh");
-		expect(notice).toContain("Revived (2): data, model");
+		expect(notice?.notice).toContain("started fresh");
+		expect(notice?.notice).toContain("Revived (2): data, model");
 	});
 
 	test("a first-ever session stays quiet", async () => {
@@ -800,7 +805,7 @@ describe("EngineLifecycle reset notices", () => {
 		await lc.acquire("startup");
 		const notice = lc.takeResetNotice();
 		expect(notice).toBeDefined();
-		expect(notice).toContain("no saved snapshot was available to revive");
+		expect(notice?.notice).toContain("no saved snapshot was available to revive");
 	});
 
 	test("a partial revive names the losses", async () => {
@@ -808,8 +813,8 @@ describe("EngineLifecycle reset notices", () => {
 		const lc = new EngineLifecycle(deps({ path: "/tmp/ns.snapshot", restored: ["ok"], failed }, true));
 		await lc.acquire("startup");
 		const notice = lc.takeResetNotice();
-		expect(notice).toContain("Lost (1): handle");
-		expect(notice).toContain("cannot be snapshotted");
+		expect(notice?.notice).toContain("Lost (1): handle");
+		expect(notice?.notice).toContain("cannot be snapshotted");
 	});
 
 	test("an existing engine never re-announces; the notice is taken exactly once", async () => {
@@ -820,6 +825,22 @@ describe("EngineLifecycle reset notices", () => {
 		// a later cell acquire reuses the engine without a new notice
 		await lc.acquire("cell");
 		expect(lc.takeResetNotice()).toBeUndefined();
+	});
+
+	test("the reset toast is terse and agrees with the marker's counts", () => {
+		// rebuilt mid-session with a full revive
+		expect(formatResetToast("cell", restored(["a", "b"]))).toBe("repl kernel rebuilt, 2 names revived");
+		// revived some, lost some
+		expect(formatResetToast("cell", { path: "/tmp/x", restored: ["a"], failed: [{ name: "h", reason: "r" }] })).toBe(
+			"repl kernel rebuilt, 1 name revived, 1 lost",
+		);
+		// resumed conversation
+		expect(formatResetToast("startup", restored(["data"]))).toBe("repl session resumed, 1 name revived");
+		// nothing saved vs nothing revived are distinct and accurate
+		expect(formatResetToast("cell", null)).toBe("repl kernel rebuilt, nothing saved to revive");
+		expect(formatResetToast("startup", { path: "/tmp/x", restored: [], failed: [] })).toBe(
+			"repl session resumed, nothing could be revived",
+		);
 	});
 });
 

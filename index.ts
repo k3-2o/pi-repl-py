@@ -7,7 +7,7 @@ import { Type } from "typebox";
 import { withSkillsBlock } from "./src/extension/skill-hook.js";
 import { EngineManager, pruneOrphanedSnapshotDirs, pruneSnapshotDirs } from "./src/engine/index.js";
 import { ExecuteCellComponent, type ExecuteDetails, type ExecuteRenderState } from "./src/extension/render.js";
-import { EngineLifecycle } from "./src/extension/session-engine.js";
+import { EngineLifecycle, formatResetToast } from "./src/extension/session-engine.js";
 import { EXECUTE_DESCRIPTION, buildExecutePromptGuidelines, EXECUTE_PROMPT_SNIPPET } from "./src/extension/tool-meta.js";
 
 const executeSchema = Type.Object({
@@ -181,8 +181,11 @@ export default function (pi: ExtensionAPI) {
 						onUpdate?.({ content: [{ type: "text", text: streamed }], details: {} });
 					},
 				});
-				// --- reset notice leads so the model reads that its namespace was rebuilt ---
-				const sections = [lifecycle.takeResetNotice(), r.stdout, r.stderr, r.result];
+				// --- reset notice leads so the model reads that its namespace was rebuilt; the
+				// --- human gets a terse notification instead of the marker, fire and forget ---
+				const reset = lifecycle.takeResetNotice();
+				if (reset?.notice) ctx?.ui?.notify?.(formatResetToast(reset.origin, reset.restore), "info");
+				const sections = [reset?.notice, r.stdout, r.stderr, r.result];
 				const errorLines = r.error ? composeErrorLines(r.error) : undefined;
 				if (r.status === "error" && errorLines) sections.push(errorLines.join("\n"));
 				if (r.status === "aborted") sections.push("[cell aborted]");

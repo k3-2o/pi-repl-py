@@ -27,6 +27,29 @@ export interface EngineLifecycleDeps<E extends RevivableEngine> {
 /** `startup` restores then announces on the first cell when the conversation has a saved past; `cell` means an engine was rebuilt mid-session and announces immediately. */
 export type AcquireOrigin = "startup" | "cell";
 
+// --- Terse TUI toast for the human, separate from the model-facing cell marker: the user
+// --- asked for the classic subtle notification instead of a showy in-cell message. Counts
+// --- come from the same restore the marker describes, so the two never disagree. ---
+export function formatResetToast(origin: AcquireOrigin, restore: RestoreResult | null): string {
+	const resumed = origin === "startup";
+	const revived = restore?.restored.length ?? 0;
+	const lost = restore?.failed.length ?? 0;
+	if (restore && revived > 0) {
+		const counts = lost > 0 ? `, ${lost} lost` : "";
+		const noun = revived === 1 ? "name" : "names";
+		return resumed
+			? `repl session resumed, ${revived} ${noun} revived${counts}`
+			: `repl kernel rebuilt, ${revived} ${noun} revived${counts}`;
+	}
+	return resumed
+		? restore === null
+			? "repl session resumed, nothing saved to revive"
+			: "repl session resumed, nothing could be revived"
+		: restore === null
+			? "repl kernel rebuilt, nothing saved to revive"
+			: "repl kernel rebuilt, nothing could be revived";
+}
+
 function formatEngineResetNotice(restore: RestoreResult | null, origin: AcquireOrigin): string {
 	const resumed = origin === "startup";
 	const lines = ["<repl_engine_reset>"];
@@ -82,6 +105,7 @@ export class EngineLifecycle<E extends RevivableEngine> {
 	private engine?: E;
 	private revival?: Promise<RestoreResult | null>;
 	private pendingNotice?: string;
+	private pendingReset?: { origin: AcquireOrigin; restore: RestoreResult | null };
 	private teardown?: Promise<void>;
 	/** First-build in progress. */
 	private acquiring?: Promise<{ engine: E; restore: RestoreResult | null; created: boolean }>;
@@ -108,6 +132,7 @@ export class EngineLifecycle<E extends RevivableEngine> {
 			// --- conversation has a saved past, so a first-ever session stays quiet ---
 			if (origin === "cell" || (origin === "startup" && engine.hasSnapshotHistory())) {
 				this.pendingNotice = formatEngineResetNotice(restore, origin);
+				this.pendingReset = { origin, restore };
 			}
 			return { engine, restore, created: true };
 		})();
@@ -119,11 +144,14 @@ export class EngineLifecycle<E extends RevivableEngine> {
 		}
 	}
 
-	/** Returns the pending reset notice exactly once, then clears it. */
-	takeResetNotice(): string | undefined {
+	/** Returns the pending reset notice exactly once (alongside its origin and restore result), then clears it. */
+	takeResetNotice(): { notice: string; origin: AcquireOrigin; restore: RestoreResult | null } | undefined {
+		const reset = this.pendingReset;
 		const notice = this.pendingNotice;
 		this.pendingNotice = undefined;
-		return notice;
+		this.pendingReset = undefined;
+		if (!notice || !reset) return undefined;
+		return { notice, origin: reset.origin, restore: reset.restore };
 	}
 
 	async shutdown(): Promise<void> {

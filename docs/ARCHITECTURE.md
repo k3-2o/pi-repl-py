@@ -156,9 +156,11 @@ directories are pruned to the newest 25, and snapshot dirs whose owning conversa
 longer exists in any project session root are swept entirely (deleting a conversation deletes
 its snapshots with it). "ephemeral" and the live session are always exempt. If the evaluator was rebuilt mid-session, the next
 cell's result is prefixed with a `<repl_engine_reset>` block that names what was revived and
-what was lost, so the model re-verifies before reusing state that may be gone. A resumed
-conversation announces the same block on its first cell, but only when the conversation has a
-saved past; a first-ever session starts quiet.
+what was lost, so the model re-verifies before reusing state that may be gone. The human gets
+only a terse `ui.notify` toast ("repl kernel rebuilt, 3 names revived") instead of the marker;
+the two are derived from the same restore result, so they never disagree. A resumed
+conversation announces the same pair on its first cell, but only when the conversation has a
+saved past; a first-ever session stays quiet.
 
 ## Failure modes
 
