@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 import { withSkillsBlock } from "./src/extension/skill-hook.js";
-import { EngineManager } from "./src/engine/index.js";
+import { EngineManager, pruneSnapshotDirs } from "./src/engine/index.js";
 import { ExecuteCellComponent, type ExecuteDetails, type ExecuteRenderState } from "./src/extension/render.js";
 import { EngineLifecycle } from "./src/extension/session-engine.js";
 import { EXECUTE_DESCRIPTION, buildExecutePromptGuidelines, EXECUTE_PROMPT_SNIPPET } from "./src/extension/tool-meta.js";
@@ -63,6 +63,12 @@ export default function (pi: ExtensionAPI) {
 			const sessionKey = sessionFile ? basename(sessionFile).replace(/\.jsonl$/, "") : undefined;
 			// --- kernel namespace state lives under ~/.pi/agent/pi-repl, keyed by session, so it never clutters the project ---
 			const stateDir = join(homedir(), ".pi", "agent", "pi-repl", "state", sessionKey ?? "ephemeral");
+			// --- keep the state root from growing one dir per session forever; the live dir is exempt ---
+			if (sessionKey) {
+				try {
+					pruneSnapshotDirs(join(stateDir, ".."), 25, sessionKey);
+				} catch {}
+			}
 			return new EngineManager({
 				cwd,
 				// --- snapshots are keyed to a session file; ephemeral sessions get none ---

@@ -181,6 +181,28 @@ describe("host × python-kernel integration", () => {
 		expect(r2.stdout).toContain("hello");
 	});
 
+	test("a cell-defined function and class survive restart via source capture", { timeout: 90_000 }, async () => {
+		const d = tempDir();
+		const snap = { path: join(d, "ns.snapshot"), debounceMs: 200 };
+		const m1 = engine({ cwd: d, snapshot: snap });
+		const r1 = await m1.execute(
+			"def greet(name):\n    return f'hi {name}'\nclass Box:\n    def __init__(self, v):\n        self.v = v\nitem = 41",
+		);
+		expect(r1.status).toBe("ok");
+		await m1.snapshotState();
+		await m1.kill();
+		const m2 = engine({ cwd: d, snapshot: snap });
+		const restore = await m2.restoreState();
+		expect(restore?.restored).toContain("greet");
+		expect(restore?.restored).toContain("Box");
+		expect(restore?.restored).toContain("item");
+		const r2 = await m2.execute("print(greet('tester'))");
+		expect(r2.status).toBe("ok");
+		expect(r2.stdout).toContain("hi tester");
+		const r3 = await m2.execute("print(Box(7).v)");
+		expect(r3.stdout).toContain("7");
+	});
+
 	test("snapshot excludes helper metadata and flags completeness", { timeout: 60_000 }, async () => {
 		const d = tempDir();
 		const helpers = tempDir();
@@ -235,8 +257,10 @@ describe("host × python-kernel integration", () => {
 		await m1.kill();
 
 		// inject a corrupt entry into the snapshot file, then revive from it
-		const file = JSON.parse(readFileSync(snap.path, "utf8")) as { vars: Record<string, string> };
-		file.vars["junk"] = "not-valid-pickle-base64!!!";
+		const file = JSON.parse(readFileSync(snap.path, "utf8")) as {
+			entries: { name: string; kind: "value" | "def"; payload: string }[];
+		};
+		file.entries.push({ name: "junk", kind: "value", payload: "not-valid-pickle-base64!!!" });
 		writeFileSync(snap.path, JSON.stringify(file));
 
 		const m2 = engine({ cwd: d, snapshot: snap });

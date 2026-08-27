@@ -138,10 +138,15 @@ only itself) and publishes the result back over a private MIME payload. The host
 `namespace.snapshot`, keyed to the session file under
 `~/.pi/agent/pi-repl/state/<session>/`.
 
-When a fresh engine is built, it restores that snapshot. If the evaluator was rebuilt mid-session,
-the next cell's result is prefixed with a `<repl_engine_reset>` block that names what was
-revived and what was lost (values that could not be pickled, such as live handles and some
-runtime objects), so the model re-verifies before reusing state that may be gone. A resumed
+When a fresh engine is built, it restores that snapshot. Values are pickled entry by entry, and
+functions and classes defined in cells are captured by source and re-executed on restore (plain
+pickle cannot revive them, since they live in `__main__`). Bindings that still fail — live
+handles, open resources, source-less functions — are reported by name, never dropped silently.
+Entries are capped per-binding and in total (128 MiB default), and the snapshot file is written
+via temp-file-and-rename so a crash cannot corrupt the last good copy; old session snapshot
+directories are pruned to the newest 25. If the evaluator was rebuilt mid-session, the next
+cell's result is prefixed with a `<repl_engine_reset>` block that names what was revived and
+what was lost, so the model re-verifies before reusing state that may be gone. A resumed
 conversation announces the same block on its first cell, but only when the conversation has a
 saved past; a first-ever session starts quiet.
 

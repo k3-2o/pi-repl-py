@@ -2,10 +2,10 @@
 // --- ZMTP directly (no guest.py middleman). Owns venv resolution, spawn, queue,   ---
 // --- snapshots, abort grace, and teardown — the wire lives in kernel.ts.         ---
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { KernelClient } from "./kernel.js";
+import { KernelClient, type SnapshotEntry } from "./kernel.js";
 
 function installVenvPython(): string {
 	return join(homedir(), ".pi", "agent", "pi-repl", "venv", "bin", "python3");
@@ -27,6 +27,9 @@ const DEFAULT_MAX_OUTPUT_CHARS = 46080;
 export const MAX_OUTPUT_LINE_CHARS = 4096;
 const ABORT_GRACE_MS = 20_000;
 const DEFAULT_SNAPSHOT_DEBOUNCE_MS = 1500;
+/** Total snapshot size cap (base64 payload). Per-entry entries are capped at the same
+ * bound; larger bindings are reported as skipped names. Mirrors the pi-codex scheme. */
+const DEFAULT_SNAPSHOT_MAX_BYTES = 128 * 1024 * 1024;
 
 interface EngineExecuteError {
 	/** Error class name, e.g. "TypeError". */
@@ -76,6 +79,8 @@ export interface EngineOptions {
 		path: string;
 		/** Debounce for the auto-snapshot after each ok cell. Default 1500 ms. */
 		debounceMs?: number;
+		/** Total base64 payload cap; also the per-entry cap. Oversized entries are skipped with a reason. Default 128 MiB. */
+		maxBytes?: number;
 	};
 }
 
@@ -107,6 +112,33 @@ export function capLinesForContext(text: string): { text: string; trimmed: boole
 		return line.slice(0, MAX_OUTPUT_LINE_CHARS);
 	});
 	return { text: mapped.join("\n"), trimmed };
+}
+
+const DEFAULT_KEEP_SNAPSHOTS = 25;
+
+/** Scan the state root for per-session snapshot dirs and delete all but the newest `keep`,
+ * so a long-lived machine does not accumulate one directory per session forever. The
+ * current session's dir is exempt; a snapshot dir without a usable manifest is ignored. */
+export function pruneSnapshotDirs(stateRoot: string, keep: number = DEFAULT_KEEP_SNAPSHOTS, currentDir?: string): void {
+	const entries: { dir: string; mtimeMs: number }[] = [];
+	try {
+		for (const name of readdirSync(stateRoot, { withFileTypes: true })) {
+			if (!name.isDirectory() || name.name === currentDir) continue;
+			try {
+				const manifest = join(stateRoot, name.name, "namespace.snapshot");
+				if (!existsSync(manifest)) continue;
+				entries.push({ dir: join(stateRoot, name.name), mtimeMs: statSync(manifest).mtimeMs });
+			} catch {}
+		}
+	} catch {
+		return;
+	}
+	entries.sort((a, b) => b.mtimeMs - a.mtimeMs);
+	for (const { dir } of entries.slice(keep)) {
+		try {
+			rmSync(dir, { recursive: true, force: true });
+		} catch {}
+	}
 }
 
 export class EngineManager {
@@ -302,12 +334,16 @@ export class EngineManager {
 		const config = this.options.snapshot;
 		if (!config || this.state !== "running" || !this.kernel) return null;
 		try {
-			const reply = await this.kernel.snapshot();
+			const reply = await this.kernel.snapshot(config.maxBytes ?? DEFAULT_SNAPSHOT_MAX_BYTES);
 			// --- an incomplete snapshot must not overwrite the last good file ---
 			if (reply.complete === false) return null;
 			mkdirSync(dirname(config.path), { recursive: true });
-			writeFileSync(config.path, JSON.stringify({ version: 1, vars: reply.vars, failed: reply.failed }));
-			return { path: config.path, saved: Object.keys(reply.vars), failed: reply.failed };
+			// --- write to a temp file then rename so a crash mid-write can never corrupt
+			// --- the last good snapshot (the restore side parses or returns null) ---
+			const tmp = `${config.path}.tmp`;
+			writeFileSync(tmp, JSON.stringify({ version: 2, entries: reply.entries, failed: reply.failed }));
+			renameSync(tmp, config.path);
+			return { path: config.path, saved: reply.entries.map((e) => e.name), failed: reply.failed };
 		} catch {
 			return null;
 		}
@@ -319,9 +355,17 @@ export class EngineManager {
 		if (!existsSync(config.path)) return null;
 		await this.start();
 		try {
-			const payload = JSON.parse(readFileSync(config.path, "utf8")) as { vars?: Record<string, string> };
-			const vars = payload.vars ?? {};
-			const reply = await this.kernel!.restore(vars);
+			const payload = JSON.parse(readFileSync(config.path, "utf8")) as {
+				version?: number;
+				entries?: SnapshotEntry[];
+				vars?: Record<string, string>;
+			};
+			// --- version 1 files (pre-source-capture) are still restorable: their vars are plain pickles ---
+			const entries: SnapshotEntry[] =
+				payload.version === 2
+					? (payload.entries ?? [])
+					: Object.entries(payload.vars ?? {}).map(([name, b64]) => ({ name, kind: "value", payload: b64 }));
+			const reply = await this.kernel!.restore(entries);
 			return { path: config.path, restored: reply.restored, failed: reply.failed };
 		} catch {
 			return null;

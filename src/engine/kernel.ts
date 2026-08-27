@@ -47,8 +47,15 @@ export interface CellOptions {
 	maxOutputChars?: number;
 }
 
+export interface SnapshotEntry {
+	name: string;
+	/** "value" pickles the object; "def" re-executes captured source (functions and classes). */
+	kind: "value" | "def";
+	payload: string;
+}
+
 export interface SnapshotReply {
-	vars: Record<string, string>;
+	entries: SnapshotEntry[];
 	failed: { name: string; reason: string }[];
 	complete: boolean;
 }
@@ -88,39 +95,130 @@ function buildSkipList(helperNames: string[]): string {
 	return JSON.stringify([...names]);
 }
 
-function snapshotCode(helperNames: string[]): string {
+function snapshotCode(helperNames: string[], maxBytes: number): string {
 	const skip = buildSkipList(helperNames);
-	return (
-		"import pickle as _pk, base64 as _b64, json as _js\n" +
-		`__repl_skip = set(${skip})\n` +
-		"__repl_v = {}\n__repl_f = []\n" +
-		"for _k, _v in list(globals().items()):\n" +
-		"    if _k.startswith('_') or _k in __repl_skip:\n" +
-		"        continue\n" +
-		"    try:\n" +
-		"        __repl_v[_k] = _b64.b64encode(_pk.dumps(_v)).decode()\n" +
-		"    except Exception as _e:\n" +
-		"        __repl_f.append({'name': _k, 'reason': str(_e)})\n" +
-		`get_ipython().display_pub.publish({${JSON.stringify(SNAPSHOT_MIME)}: _js.dumps({'vars': __repl_v, 'failed': __repl_f})})\n`
-	);
+	// --- functions and classes defined in cells cannot be pickled by reference, so their
+	// --- source is captured instead and re-executed on restore. getsource works for
+	// --- functions because the code object carries the cell's filename in linecache; for
+	// --- classes inspect's module-file lookup misses, so a class is captured by locating
+	// --- its header from a member method's co_firstlineno and dedent-scanning the block.
+	// --- fallback pickles the value and reports it if that also fails; per-entry and total
+	// --- byte caps mirror the pi-codex scheme: oversized bindings become skipped names.
+	return `import pickle as _pk, base64 as _b64, json as _js, inspect as _in, linecache as _lc
+def _repl_class_source(_c):
+    _m = getattr(_c, '__init__', None)
+    if _m is None or not _in.isfunction(_m):
+        for _v in vars(_c).values():
+            if _in.isfunction(_v):
+                _m = _v
+                break
+    if _m is None:
+        raise ValueError('class has no member methods')
+    _start = _m.__code__.co_firstlineno
+    _all = _lc.getlines(_m.__code__.co_filename)
+    if not _all:
+        raise ValueError('source not in linecache')
+    _ln = _start - 1
+    while _ln > 0:
+        _prev = _all[_ln - 1].lstrip()
+        if _prev.startswith('class ') and _c.__name__ in _prev:
+            break
+        _ln -= 1
+    if _ln == 0:
+        raise ValueError('class header not found')
+    _head = _ln - 1
+    while _head > 0:
+        _p = _all[_head - 1].lstrip()
+        if _p == '' or _p.startswith('@'):
+            _head -= 1
+        else:
+            break
+    _indent = len(_all[_head]) - len(_all[_head].lstrip())
+    _block = [_all[_head]]
+    _j = _head + 1
+    while _j < len(_all):
+        _line = _all[_j]
+        if _line.strip() == '':
+            _block.append(_line)
+            _j += 1
+            continue
+        if len(_line) - len(_line.lstrip()) > _indent:
+            _block.append(_line)
+            _j += 1
+        else:
+            break
+    return ''.join(_block)
+__repl_skip = set(${skip})
+__repl_max = ${maxBytes}
+__repl_e = []
+__repl_f = []
+__repl_total = 0
+for _k, _v in list(globals().items()):
+    if _k.startswith('_') or _k in __repl_skip:
+        continue
+    __repl_p = None
+    __repl_kind = 'value'
+    try:
+        if _in.isfunction(_v):
+            __repl_src = _in.getsource(_v)
+            if __repl_src:
+                __repl_p = _b64.b64encode(__repl_src.encode()).decode()
+                __repl_kind = 'def'
+        elif _in.isclass(_v):
+            __repl_src = _repl_class_source(_v)
+            if __repl_src:
+                __repl_p = _b64.b64encode(__repl_src.encode()).decode()
+                __repl_kind = 'def'
+    except Exception:
+        __repl_p = None
+        __repl_kind = 'value'
+    try:
+        if __repl_p is None:
+            __repl_p = _b64.b64encode(_pk.dumps(_v)).decode()
+        __repl_b = len(__repl_p)
+        if __repl_b > __repl_max:
+            __repl_f.append({'name': _k, 'reason': 'exceeds per-entry snapshot cap'})
+        elif __repl_total + __repl_b > __repl_max:
+            __repl_f.append({'name': _k, 'reason': 'exceeds total snapshot cap'})
+        else:
+            __repl_e.append({'name': _k, 'kind': __repl_kind, 'payload': __repl_p})
+            __repl_total += __repl_b
+    except Exception as _e:
+        __repl_f.append({'name': _k, 'reason': str(_e)})
+get_ipython().display_pub.publish({${JSON.stringify(SNAPSHOT_MIME)}: _js.dumps({'version': 2, 'entries': __repl_e, 'failed': __repl_f})})`;
 }
 
-function restoreCode(vars_: Record<string, string>): string {
-	const entries = Object.entries(vars_)
-		.map(([name, b64]) => {
+function restoreCode(entries: SnapshotEntry[]): string {
+	const per = entries
+		.map(({ name, kind, payload }) => {
 			const n = JSON.stringify(name);
-			return (
-				`try:\n    globals()[${n}] = _pk.loads(_b64.b64decode(${JSON.stringify(b64)}))\n    __repl_r['restored'].append(${n})\n` +
-				`except Exception as _e:\n    __repl_r['failed'].append({'name': ${n}, 'reason': str(_e)})`
-			);
+			const body =
+				kind === "def"
+					? // re-execute captured source and register it in linecache under the code
+						// object's filename so a later snapshot can capture it as source again;
+						// exec also binds the name the source defines.
+						`__repl_src = _b64.b64decode(${JSON.stringify(payload)}).decode()
+    exec(__repl_src, globals())
+    __repl_obj = globals().get(${n})
+    if __repl_obj is not None:
+        __repl_fname = getattr(getattr(__repl_obj, '__code__', None), 'co_filename', None)
+        if __repl_fname is None:
+            __repl_init = getattr(__repl_obj, '__init__', None)
+            __repl_fname = getattr(getattr(__repl_init, '__code__', None), 'co_filename', None)
+        if __repl_fname:
+            _lc.cache[__repl_fname] = (len(__repl_src.splitlines()), None, __repl_src.splitlines(True), __repl_fname)`
+					: `globals()[${n}] = _pk.loads(_b64.b64decode(${JSON.stringify(payload)}))`;
+			return `try:
+    ${body}
+    __repl_r['restored'].append(${n})
+except Exception as _e:
+    __repl_r['failed'].append({'name': ${n}, 'reason': str(_e)})`;
 		})
 		.join("\n");
-	return (
-		"import pickle as _pk, base64 as _b64, json as _js\n" +
-		"__repl_r = {'restored': [], 'failed': []}\n" +
-		entries +
-		`\nget_ipython().display_pub.publish({${JSON.stringify(RESTORE_MIME)}: _js.dumps(__repl_r)})\n`
-	);
+	return `import pickle as _pk, base64 as _b64, json as _js, linecache as _lc
+__repl_r = {'restored': [], 'failed': []}
+${per}
+get_ipython().display_pub.publish({${JSON.stringify(RESTORE_MIME)}: _js.dumps(__repl_r)})`;
 }
 
 function namesCode(helperNames: string[]): string {
@@ -547,29 +645,35 @@ export class KernelClient {
 		this.control?.send(this.session.buildFrames("interrupt_request", {}, null));
 	}
 
-	snapshot(): Promise<SnapshotReply> {
+	snapshot(maxBytes: number): Promise<SnapshotReply> {
 		return this.enqueue(async () => {
-			const res = await this.executeCellNow(snapshotCode(this.helperSources.map((h) => h.name)), {
-				maxOutputChars: 8_000_000,
-			});
+			const res = await this.executeCellNow(
+				snapshotCode(
+					this.helperSources.map((h) => h.name),
+					maxBytes,
+				),
+				{
+					maxOutputChars: 8_000_000,
+				},
+			);
 			const payload = res.payloads[SNAPSHOT_MIME];
-			if (payload === undefined) return { vars: {}, failed: [], complete: false };
+			if (payload === undefined) return { entries: [], failed: [], complete: false };
 			try {
 				const obj = JSON.parse(payload) as {
-					vars?: Record<string, string>;
+					entries?: SnapshotEntry[];
 					failed?: { name: string; reason: string }[];
 				};
-				return { vars: obj.vars ?? {}, failed: obj.failed ?? [], complete: true };
+				return { entries: obj.entries ?? [], failed: obj.failed ?? [], complete: true };
 			} catch {
-				return { vars: {}, failed: [], complete: false };
+				return { entries: [], failed: [], complete: false };
 			}
 		});
 	}
 
-	restore(vars_: Record<string, string>): Promise<{ restored: string[]; failed: { name: string; reason: string }[] }> {
-		if (Object.keys(vars_).length === 0) return Promise.resolve({ restored: [], failed: [] });
+	restore(entries: SnapshotEntry[]): Promise<{ restored: string[]; failed: { name: string; reason: string }[] }> {
+		if (entries.length === 0) return Promise.resolve({ restored: [], failed: [] });
 		return this.enqueue(async () => {
-			const res = await this.executeCellNow(restoreCode(vars_), { maxOutputChars: 8_000_000 });
+			const res = await this.executeCellNow(restoreCode(entries), { maxOutputChars: 8_000_000 });
 			const payload = res.payloads[RESTORE_MIME];
 			if (payload === undefined) return { restored: [], failed: [] };
 			try {

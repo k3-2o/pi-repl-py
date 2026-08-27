@@ -7,12 +7,12 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveHelperDirs } from "../src/engine/helpers-locate.js";
 import type { RestoreResult } from "../src/engine/index.js";
-import { capLinesForContext, MAX_OUTPUT_LINE_CHARS } from "../src/engine/index.js";
+import { capLinesForContext, EngineManager, MAX_OUTPUT_LINE_CHARS, pruneSnapshotDirs } from "../src/engine/index.js";
 import { JupyterSession } from "../src/engine/session.js";
 import { encodeFrame, ZmtpFrameParser } from "../src/engine/zmtp.js";
 import { buildHelpersMap, buildHelpersMapForCwd } from "../src/extension/helpers.js";
@@ -683,7 +683,6 @@ describe("render-core: code indent on wrap", () => {
 	});
 });
 
-
 describe("render-core: cached code re-render", () => {
 	test("repeated frames render identically from the cache", () => {
 		const deps = testDeps();
@@ -818,3 +817,30 @@ describe("EngineLifecycle reset notices", () => {
 	});
 });
 
+describe("pruneSnapshotDirs keeps only the newest snapshots", () => {
+	test("deletes oldest snapshot dirs and never the live one", () => {
+		const root = mkdtempSync(join(tmpdir(), "pi-repl-prune-"));
+		try {
+			const mk = (name: string, ageMs: number) => {
+				const dir = join(root, name);
+				mkdirSync(dir, { recursive: true });
+				const f = join(dir, "namespace.snapshot");
+				writeFileSync(f, "{}");
+				const t = Date.now() - ageMs;
+				utimesSync(f, new Date(t), new Date(t));
+				return dir;
+			};
+			const old1 = mk("old-1", 40 * 24 * 3600 * 1000);
+			const old2 = mk("old-2", 30 * 24 * 3600 * 1000);
+			const fresh = mk("fresh", 1000);
+			mkdirSync(join(root, "no-manifest")); // unrelated dir with no snapshot: untouched
+			pruneSnapshotDirs(root, 2);
+			expect(existsSync(old1)).toBe(false);
+			expect(existsSync(old2)).toBe(true);
+			expect(existsSync(fresh)).toBe(true);
+			expect(existsSync(join(root, "no-manifest"))).toBe(true);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+});

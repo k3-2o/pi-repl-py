@@ -69,7 +69,7 @@ function formatEngineResetNotice(restore: RestoreResult | null, origin: AcquireO
 					restore.failed.map((f) => f.name),
 					20,
 				)}`,
-				"Functions, classes, and live handles cannot be snapshotted; redefine them.",
+				"Live handles, open resources, and source-less functions cannot be snapshotted; redefine them.",
 			);
 		}
 		lines.push("Anything defined after the last snapshot is also gone.");
