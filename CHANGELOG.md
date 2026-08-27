@@ -1,3 +1,11 @@
+## [0.6.11] - 2026-08-27
+
+### Changed
+
+- Resumed conversations announce their restore on the first cell: revived and lost names are named, so the agent re-verifies instead of walking into a namespace it may not have.
+- Snapshots now capture cell-defined functions and classes by source and re-execute them on restore; entries are capped per binding and in total, writes are atomic, and old session snapshot directories are pruned.
+- Expanded cells render highlighted code from a cache instead of re-highlighting every frame; per-cell wrap caches are bounded against resize churn.
+
 ## [0.6.10] - 2026-08-26
 
 ### Changed
