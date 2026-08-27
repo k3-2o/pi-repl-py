@@ -102,6 +102,14 @@ backstop for cells wedged in C code (which ignore interrupts), the engine gives 
 cell up to 20 seconds to settle and keeps the kernel if it does; only a cell that is still
 running after that grace is killed, and the next call rebuilds from the last snapshot.
 
+**History is off.** Every execute goes out with `store_history: false`. IPython's `In`/`Out`
+retention keeps every last-expression result object alive in the kernel, and that retention
+cannot be reclaimed from a user cell — deleting `Out` and `_`/`__`/`___` from `user_ns`
+followed by `gc.collect()` leaves the objects alive (measured: 62 MB idle grows past 400 MB
+after two bare big results and never comes back). Disabling history bounds the kernel to at
+most the latest result. The transcript is the record instead, and results still publish over
+iopub: single-mode execution calls `sys.displayhook` regardless of `store_history`.
+
 ## Helpers loading
 
 At boot, the kernel and the host both read the same merged helper list (project

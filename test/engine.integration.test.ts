@@ -399,6 +399,34 @@ describe("host × python-kernel integration", () => {
 		},
 	);
 
+	test("cells run with history off so results cannot accumulate", { timeout: 60_000 }, async () => {
+		// --- store_history is deliberately false on every execute (see executeRequest in
+		// --- session.ts): IPython retains each result object in In/Out, and that retention is
+		// --- NOT reclaimable from user cells — deleting Out and _/__/___ from user_ns and
+		// --- gc.collect() leaves the objects alive (measured: 62MB idle → >400MB after two
+		// --- bare big results, unrecoverable). Disabling history keeps the kernel flat: the
+		// --- display hook still publishes results on iopub (single-mode execution, independent
+		// --- of store_history), so the transcript keeps the value the retention would have held.
+		// --- This test pins the bound: many result-producing cells leave Out/In at most one. ---
+		const d = tempDir();
+		const m = engine({ cwd: d });
+
+		await m.execute("x = 40");
+		for (let i = 0; i < 8; i++) {
+			const r = await m.execute(`result_${i} = x + ${i}
+result_${i}`);
+			expect(r.status).toBe("ok");
+			expect(r.result).toContain(String(40 + i));
+		}
+
+		// history must not grow: at most one Out slot (the latest result) and no In accumulation
+		const probe = await m.execute(
+			"print(len(get_ipython().user_ns.get('Out', {})) <= 1, len(get_ipython().user_ns.get('In', [])) <= 1)",
+		);
+		expect(probe.status).toBe("ok");
+		expect(probe.stdout.trim()).toBe("True True");
+	});
+
 	test("an unexpectedly-dead kernel is discovered and the next cell rebuilds", { timeout: 90_000 }, async () => {
 		const d = tempDir();
 		const m = engine({ cwd: d });

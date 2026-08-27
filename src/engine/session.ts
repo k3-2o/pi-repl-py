@@ -123,10 +123,16 @@ export class JupyterSession {
 }
 
 export function executeRequest(code: string, silent: boolean): Record<string, unknown> {
+	// --- store_history is always false: IPython retains every last-expression result in its
+	// --- In/Out history, and that retention is NOT reclaimable from user cells (deleting Out
+	// --- entries and _/__/___ from user_ns leaves the objects alive). With history off, cells
+	// --- stop feeding that growth entirely. The contract does not depend on In/Out: results
+	// --- are published over iopub via the display hook (single-mode execution, unaffected by
+	// --- store_history) and returned in the cell's transcript. ---
 	return {
 		code,
 		silent,
-		store_history: !silent,
+		store_history: false,
 		user_expressions: {},
 		allow_stdin: false,
 		stop_on_error: true,
