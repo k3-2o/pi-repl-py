@@ -14,6 +14,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EngineManager } from "../src/engine/index.ts";
+import { EngineLifecycle } from "../src/extension/session-engine.ts";
 
 const tempDirs: string[] = [];
 const engines: EngineManager[] = [];
@@ -189,6 +190,43 @@ describe("host × python-kernel integration", () => {
 		expect(r2.status).toBe("ok");
 		expect(r2.stdout).toContain("42");
 		expect(r2.stdout).toContain("hello");
+	});
+
+	test("a snapshot that wedges the boot is skipped and the session still starts", { timeout: 90_000 }, async () => {
+		const d = tempDir();
+		const snap = { path: join(d, "ns.snapshot"), debounceMs: 200 };
+		const m1 = engine({ cwd: d, snapshot: snap });
+		// __setstate__ sleeps forever, so unpickling this value during restore wedges the boot
+		const r1 = await m1.execute(
+			"class W:\n    def __setstate__(self, state):\n        import time\n        time.sleep(60)\n    def __init__(self):\n        self.x = 1\nw = W()",
+		);
+		expect(r1.status).toBe("ok");
+		await new Promise((resolve) => setTimeout(resolve, 800));
+		await m1.snapshotState();
+
+		// the lifecycle owns the boot deadline; give it a short one so the wedge is detected fast
+		const lc = new EngineLifecycle<EngineManager>({
+			create: () => engine({ cwd: d, snapshot: snap }),
+			async dispose(m) {
+				await m.dispose();
+			},
+			async discard(m) {
+				await m.kill();
+			},
+			bootTimeoutMs: 8_000,
+		});
+		const started = Date.now();
+		const { engine: m2, restore } = await lc.acquire("cell");
+		// bounded: two attempts (8s deadline each) plus one real boot, not a 60s pickle sleep
+		expect(Date.now() - started).toBeLessThan(45_000);
+		expect(restore).toBe(null);
+		const notice = lc.takeResetNotice();
+		expect(notice?.notice).toContain("wedged");
+		expect(notice?.notice).toContain("skipped");
+		// the replacement engine serves cells: the wedged kernel did not poison the session
+		const r2 = await m2.execute("2 + 2");
+		expect(r2.status).toBe("ok");
+		expect(r2.result).toContain("4");
 	});
 
 	test("a cell-defined function and class survive restart via source capture", { timeout: 90_000 }, async () => {

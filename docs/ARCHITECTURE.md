@@ -205,6 +205,14 @@ global one and both sides are guaranteed to agree. The venv is built automatical
 interpreter follows the order above. No setting is needed. The per-cell silence watchdog is
 off by default (`PI_REPL_TIMEOUT_MS=0`: a silent but working cell may run on).
 
+The boot itself is bounded regardless: kernel start, helpers preload, and snapshot restore are
+kernel cells with no deadline of their own, and `acquire()` dedupes, so one wedged boot (an npm
+update swapping the venv under a live kernel, a snapshot value whose unpickling never returns)
+would hang the first cell and every cell after it. The lifecycle races each boot attempt against
+`PI_REPL_BOOT_TIMEOUT_MS` (default 90s): a wedged attempt is killed and retried once with the
+snapshot deliberately skipped, landing on an honest "wedged while reviving; skipped" notice; a
+second wedge fails the cell loudly instead of hanging.
+
 ## Reference documentation
 
 - Design rationale: [design.md](design.md)

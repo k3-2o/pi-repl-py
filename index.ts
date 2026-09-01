@@ -58,6 +58,11 @@ export default function (pi: ExtensionAPI) {
 	const pendingErrorResults = new Map<string, { details: ExecuteDetails }>();
 
 	const lifecycle = new EngineLifecycle<EngineManager>({
+		// --- boot deadline: bounds kernel start + helpers preload + snapshot restore. An npm
+		// --- update swaps the venv and helpers under a live kernel, and the first boot after
+		// --- it can wedge (poisoned pickle, half-built venv); without this the first cell
+		// --- hangs forever, because acquire() dedupes onto the same hung boot. ---
+		bootTimeoutMs: Number(process.env.PI_REPL_BOOT_TIMEOUT_MS ?? 90_000) || 90_000,
 		create() {
 			const { cwd, sessionFile } = location;
 			const sessionKey = sessionFile ? basename(sessionFile).replace(/\.jsonl$/, "") : undefined;

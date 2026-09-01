@@ -806,11 +806,16 @@ describe("render-core: bare identifier coloring", () => {
 describe("EngineLifecycle reset notices", () => {
 	// --- a fake engine so the lifecycle policy is testable without a kernel ---
 	class FakeEngine implements RevivableEngine {
+		/** Restore calls seen, so tests can assert the skip flag on the retry. */
+		readonly restoreCalls: boolean[] = [];
 		constructor(
 			private readonly restore: RestoreResult | null,
 			readonly history: boolean,
+			private readonly hang = false,
 		) {}
-		async restoreState(): Promise<RestoreResult | null> {
+		async restoreState(skip?: boolean): Promise<RestoreResult | null> {
+			this.restoreCalls.push(skip ?? false);
+			if (this.hang) return new Promise<never>(() => {});
 			return this.restore;
 		}
 		hasSnapshotHistory(): boolean {
@@ -890,6 +895,49 @@ describe("EngineLifecycle reset notices", () => {
 		expect(formatResetToast("startup", { path: "/tmp/x", restored: [], failed: [] })).toBe(
 			"repl session resumed, nothing could be revived",
 		);
+	});
+
+	test("a boot that wedges is killed and retried fresh, with the snapshot skipped honestly", async () => {
+		const queue: FakeEngine[] = [new FakeEngine(restored(["data"]), true, true), new FakeEngine(null, true)];
+		const discarded: FakeEngine[] = [];
+		const lc = new EngineLifecycle<FakeEngine>({
+			create: () => queue.shift()!,
+			async dispose() {},
+			async discard(e) {
+				discarded.push(e);
+			},
+			bootTimeoutMs: 40,
+		});
+		const [wedged, fresh] = queue;
+		const { engine, restore } = await lc.acquire("cell");
+		expect(engine).toBe(fresh);
+		expect(restore).toBe(null);
+		expect(discarded).toEqual([wedged]);
+		// the retry booted WITHOUT the snapshot, so the poisoned pickle can't wedge twice
+		expect(fresh.restoreCalls).toEqual([true]);
+		const notice = lc.takeResetNotice();
+		expect(notice?.notice).toContain("wedged");
+		expect(notice?.notice).toContain("skipped");
+	});
+
+	test("a boot that wedges twice fails loudly instead of hanging the session", async () => {
+		const created: FakeEngine[] = [];
+		const discarded: FakeEngine[] = [];
+		const lc = new EngineLifecycle<FakeEngine>({
+			create: () => {
+				const e = new FakeEngine(null, true, true);
+				created.push(e);
+				return e;
+			},
+			async dispose() {},
+			async discard(e) {
+				discarded.push(e);
+			},
+			bootTimeoutMs: 40,
+		});
+		await expect(lc.acquire("cell")).rejects.toThrow("timed out twice");
+		expect(created).toHaveLength(2);
+		expect(discarded).toEqual(created);
 	});
 });
 

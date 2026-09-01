@@ -387,11 +387,15 @@ export class EngineManager {
 		}
 	}
 
-	async restoreState(): Promise<RestoreResult | null> {
+	async restoreState(skip = false): Promise<RestoreResult | null> {
+		// --- start unconditionally: the boot deadline in the lifecycle bounds this call, so
+		// --- booting eagerly here (even with nothing to revive) is what makes a wedged boot
+		// --- detectable instead of deferring the wedge to the first cell. ---
+		await this.start();
+		if (skip) return null;
 		const config = this.options.snapshot;
 		if (!config) return null;
 		if (!existsSync(config.path)) return null;
-		await this.start();
 		try {
 			const payload = JSON.parse(readFileSync(config.path, "utf8")) as {
 				version?: number;
