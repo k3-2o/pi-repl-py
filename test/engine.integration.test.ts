@@ -9,7 +9,7 @@
  * real kernel — each test boots one or more genuine ipykernel subprocesses,
  * which is why this suite is slow and kept out of `just check`.
  */
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -29,6 +29,16 @@ function engine(opts: Record<string, unknown>) {
 	engines.push(m);
 	return m;
 }
+
+// --- kernels must not outlive their test: the watchdog assertions are timing-sensitive,
+// --- and a pile of idle ipykernel processes from earlier tests starves the CPU enough to
+// --- push inter-beat gaps past the silence window, flaking "output keeps the watchdog fed"
+// --- into a false kill. Each test therefore runs against a quiet machine; afterAll remains
+// --- only as a safety net for engines created outside a test body. ---
+afterEach(async () => {
+	await Promise.allSettled(engines.splice(0).map((m) => m.kill().catch(() => {})));
+	for (const d of tempDirs.splice(0)) rmSync(d, { recursive: true, force: true });
+});
 
 afterAll(async () => {
 	await Promise.allSettled(engines.splice(0).map((m) => m.kill()));
