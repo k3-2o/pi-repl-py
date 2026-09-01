@@ -14,7 +14,7 @@ export function buildPromptGuidelines(preloaded: string[]): string[] {
 	return [
 		"Write modern idiomatic Python.",
 		"Find, filter, fetch, sample: narrow the output in Python, then print only the window that decides the next step (a head, a shape, a slice), not the whole.",
-		"Make surgical, precise changes over rewrites or whole-file dumps: a small unique anchor, replace, verify, read the file back before trusting it.",
+		"Make surgical, precise changes over rewrites or whole-file dumps: replace, verify, read the file back before trusting it.",
 		"Prefer to reuse existing variables, functions, imports, classes, and data from prior cells/namespaces over recomputing.",
 		"If output begins with <repl_engine_reset>, the runtime rebuilt and the notebook was restored from the last snapshot; reverify surviving names before building on them.",
 		...(preloaded.length
