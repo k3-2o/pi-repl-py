@@ -1,8 +1,9 @@
 # Architecture
 
-pi-repl runs in **two processes**. pi hosts the TypeScript extension, and the extension manages a
-separate Python `ipykernel` process where user code runs. The host talks to that kernel using the
-standard Jupyter protocol. There is no Python middleman and no private framing layer between them.
+pi-repl runs in **two processes**: pi hosts the TypeScript extension, which manages a separate
+Python `ipykernel` process where user code runs, speaking the standard Jupyter protocol directly
+(no Python middleman, no private framing). A cell can raise or wedge the kernel without taking pi
+down; the host stays answerable.
 
 ```
 pi
@@ -16,150 +17,109 @@ pi
              └─ python -m ipykernel -f <connection-file>   the evaluator
 ```
 
-The host is TypeScript, and the evaluator is Python in a separate process. This means a cell can
-raise an exception or make the kernel unusable without taking pi down. The host can still report
-what happened.
-
 ## Why the host speaks ZMTP itself
 
-The obvious way for a TypeScript host to drive an `ipykernel` is to load a ZMQ client
-library. That does not work here: libzmq's native Node bindings crash `bun`. So an earlier
-design put a Python middleman (`guest.py`) between the host and the kernel, translating a
-private JSON protocol over a file descriptor into the real Jupyter protocol.
-
-The current design removes the middleman. Instead of working around the missing library, the
-host implements the small slice of ZMTP 3.0 that a Jupyter client needs. ZMTP is the socket
-protocol used by Jupyter's channels: the host uses a DEALER socket for shell and control, and a
-SUB socket for iopub (`src/engine/zmtp.ts`).
-The payoff:
+A TypeScript host cannot load libzmq's native Node bindings (they crash `bun`), and the earlier
+Python middleman (`guest.py`) that translated a private JSON protocol is gone. The host instead
+implements the small slice of ZMTP 3.0 a Jupyter client needs — DEALER for shell/control, SUB for
+iopub (`src/engine/zmtp.ts`). The payoff:
 
 - **one process boundary** instead of two;
 - **one standard protocol** (Jupyter) instead of a private one on top of it;
 - **no invented framing** to maintain;
-- **Messages are authenticated with HMAC.** The host signs and verifies Jupyter messages with
-  the kernel's HMAC key. The earlier design used a nonce to prevent false completion messages;
-  the standard message signature now provides that check.
+- **messages are authenticated with HMAC** — the host signs and verifies every message with the
+  kernel's HMAC key, replacing the old nonce that guarded against false completion messages.
 
 ## The Python environment (the venv)
 
-The evaluator is a real `ipykernel` kernel, so it needs a Python environment with
-`ipykernel` installed. This is a hard runtime dependency. A script cannot replace it.
-(`jupyter_client` is *not* needed: the host is the client.)
+The evaluator is a real ipykernel, so it needs Python with `ipykernel` installed — a hard runtime
+dependency (`jupyter_client` is *not* needed: the host is the client). A package install runs
+`postinstall` (`scripts/setup-venv.mjs`), which builds a stable per-user venv at
+`~/.pi/agent/pi-repl/venv/bin/python3` — stable because it sits outside the package dir that npm
+replaces on each update. If `python3` or the network is missing at install time, it prints a
+notice and the host falls back at runtime.
 
-When installed as a pi package, `npm install` runs `postinstall`
-(`scripts/setup-venv.mjs`), which builds a stable per-user venv:
-
-```
-~/.pi/agent/pi-repl/venv/bin/python3
-```
-
-That path is stable across updates because it sits outside the package's own directory,
-which npm replaces on each update. If `python3` or the network is missing at install time,
-`postinstall` prints a clear notice and the host falls back at runtime.
-
-At spawn, `resolvePythonPath` uses exactly one interpreter, the install venv:
-
-1. `~/.pi/agent/pi-repl/venv` (the package install)
-2. `$PYTHON`, then `python3` (only if the install venv is missing)
-
-It deliberately does NOT auto-pick the repo's or current directory's `.venv`: a per-project
-venv is not guaranteed to have `ipykernel`, so preferring it (as earlier versions did) made
-the kernel die from a `ModuleNotFoundError` whenever cwd happened to contain such a venv. The
-kernel therefore always runs in the stable install environment. The kernel starts in the
-session's cwd, falling back to the host's own cwd if that directory no longer exists (a
-deleted project dir), so a stale cwd can never prevent the kernel from coming up.
+At spawn, `resolvePythonPath` uses exactly one interpreter: the install venv, else `$PYTHON` /
+`python3`. It never auto-picks a repo or cwd `.venv` — such a venv may lack ipykernel, which
+killed the kernel whenever cwd happened to contain one. The kernel starts in the session's cwd
+and falls back to the host cwd if that directory is gone, so a stale cwd never prevents boot.
 
 ## The kernel client
 
-`KernelClient.start` spawns `python -m ipykernel -f <connection-file>` with a per-run
-connection file in the temp directory, connects the three channels as ZMTP sockets, and
-waits for a `kernel_info_reply` before declaring the kernel ready. Cells run as standard
-Jupyter `execute_request`s, routed by `msg_id`:
+`KernelClient.start` spawns `python -m ipykernel -f <connection-file>` (a per-run connection file
+in the temp dir), connects the three channels over ZMTP, and waits for `kernel_info_reply` before
+declaring the kernel ready. Cells run as standard `execute_request`s, routed by `msg_id`:
 
-- **iopub** carries output messages such as `stream`, `execute_result`, `display_data`, and
-  `error`. It also carries private-MIME payloads for snapshot, restore, and namespace data.
-- **shell** carries the authoritative `execute_reply` (status, ename, evalue).
-- **control** carries interrupts (`interrupt_request`) and shutdown.
+- **iopub** — output: `stream`, `execute_result`, `display_data`, `error`, plus private-MIME
+  payloads for snapshot/restore/namespace data;
+- **shell** — the authoritative `execute_reply` (status, ename, evalue);
+- **control** — interrupts (`interrupt_request`) and shutdown.
 
-Two details of this protocol are important enough to have dedicated contract tests.
+Four protocol details have contract tests.
 
-**A cell is not complete until two messages arrive.** The shell reply and the iopub output stream
-travel on different connections, so a tiny reply can arrive before a large output has
-finished draining on iopub. A cell settles only when **both** the `execute_reply` and the
-matching iopub `status idle` (published after every byte of output) have arrived. Settling
-on the reply alone would drop output that was still in flight.
+**A cell settles only on two messages.** The shell reply and the iopub stream travel on different
+connections, so a tiny reply can beat a large output. A cell completes only when **both** the
+`execute_reply` and the matching iopub `status idle` (published after every byte) arrive;
+settling on the reply alone would drop output still in flight.
 
-**Output is capped per channel and per line.** Each channel accumulates output against a character
-budget (`maxOutputChars`), checked within each message, so overflow trips the moment a message
-exceeds the budget rather than when it churns on. Each individual line is also capped at a generous
-length (4096 chars), so a single genuinely oversized line cannot own the whole budget — while
-legitimately long REPL output (JSON, reprs, errors) still passes through whole. Both truncations
-are announced with explicit markers so the model knows output was cut.
+**Output is capped per channel and per line**, both announced with markers: channels accumulate
+against `maxOutputChars` (checked within each message), and each line is capped at 4096 chars, so
+one oversized line cannot own the budget while long JSON/reprs/errors pass whole.
 
-**Cancellation is real.** An abort sends an `interrupt_request` on the control channel,
-which raises a genuine `KeyboardInterrupt` in the running cell; the namespace survives. As a
-backstop for cells wedged in C code (which ignore interrupts), the engine gives an aborted
-cell up to 20 seconds to settle and keeps the kernel if it does; only a cell that is still
-running after that grace is killed, and the next call rebuilds from the last snapshot.
+**Cancellation is real.** An abort sends `interrupt_request`, raising a genuine
+`KeyboardInterrupt`; the namespace survives. Cells wedged in C code (which ignore interrupts)
+get a 20-second grace, then the kernel is killed and the next call rebuilds from the last
+snapshot.
 
-**History is off.** Every execute goes out with `store_history: false`. IPython's `In`/`Out`
-retention keeps every last-expression result object alive in the kernel, and that retention
-cannot be reclaimed from a user cell — deleting `Out` and `_`/`__`/`___` from `user_ns`
-followed by `gc.collect()` leaves the objects alive (measured: 62 MB idle grows past 400 MB
-after two bare big results and never comes back). Disabling history bounds the kernel to at
-most the latest result. The transcript is the record instead, and results still publish over
-iopub: single-mode execution calls `sys.displayhook` regardless of `store_history`.
+**History is off.** IPython's `In`/`Out` retention pins every last-expression result and cannot be
+reclaimed from a user cell (measured: 62 MB → 400+ MB after two bare big results, unrecoverable),
+so every execute goes out with `store_history: false`, bounding the kernel to the latest result.
+Results still publish over iopub: single-mode execution calls `sys.displayhook` regardless.
 
 ## Helpers loading
 
-At boot, the kernel and the host both read the same merged helper list (project
-`.pi/helpers/` directories plus the global `~/.pi/agent/pi-repl/helpers/`), so what the
-prompt advertises is what the kernel holds. Both directories are optional; nothing ships
-with the package. The exact merge order is under "The fixed layout" below.
+At boot, the kernel and the host both read the same merged helper list (project `.pi/helpers/` up
+to the git root, then the global `~/.pi/agent/pi-repl/helpers/`), so what the prompt advertises is
+what the kernel holds: the kernel execs each eligible `*.py` into its namespace; the host reads
+the same files' `helper_description` verbatim into the tool prompt. `_`-prefixed files are
+skipped by both. Merge order and shadowing are under "The fixed layout" below.
 
-- **The kernel** executes each eligible `*.py` file in its namespace, so the file's definitions
-  and imports become available.
-- **The host** reads the same files to build the helper list shown in the `execute` tool's
-  prompt, so the model sees each `helper_description` verbatim.
+The `promptGuidelines` are built once, when `execute` is registered, and the kernel loads helpers
+only at boot, so a helpers change needs a **session restart or `/reload`**.
 
-Both sides read the same list, so the names described to the model come from files the
-kernel also loads. A file renamed with a `_` prefix is skipped by both sides. The
-`promptGuidelines` are built once, when the `execute` tool is registered, so a helpers
-change needs a **session restart or `/reload`** to reach the prompt. The kernel also loads
-helpers only at boot.
-
-There are no custom discovery intrinsics (`ls()` / `help()`) injected into a bare kernel.
-The model discovers what is loaded by listing the namespace with ordinary Python:
+No discovery intrinsics (`ls()` / `help()`) are injected; list the namespace with ordinary Python:
 
 ```python
 [k for k in globals() if not k.startswith('_')]
 ```
 
-For the full helper contract, including descriptions, docstrings, and disabling, see
-[helpers.md](helpers.md).
+Full contract: [helpers.md](helpers.md).
 
 ## Snapshots & honest resets
 
-After each successful cell, the host schedules a debounced snapshot. A private kernel cell
-pickles the kernel's `globals` (entry by entry, so one value that cannot be pickled costs
-only itself) and publishes the result back over a private MIME payload. The host stores it as
-`namespace.snapshot`, keyed to the session file under
-`~/.pi/agent/pi-repl/state/<session>/`.
+After each successful cell, a debounced snapshot pickles the kernel's `globals` entry by entry
+(one un-picklable value costs only itself) and publishes it back over a private MIME payload; the
+host stores it as `namespace.snapshot` under `~/.pi/agent/pi-repl/state/<session>/`.
 
-When a fresh engine is built, it restores that snapshot. Values are pickled entry by entry, and
-functions and classes defined in cells are captured by source and re-executed on restore (plain
-pickle cannot revive them, since they live in `__main__`). Bindings that still fail — live
-handles, open resources, source-less functions — are reported by name, never dropped silently.
-Entries are capped per-binding and in total (128 MiB default), and the snapshot file is written
-via temp-file-and-rename so a crash cannot corrupt the last good copy; old session snapshot
-directories are pruned to the newest 25, and snapshot dirs whose owning conversation file no
-longer exists in any project session root are swept entirely (deleting a conversation deletes
-its snapshots with it). "ephemeral" and the live session are always exempt. If the evaluator was rebuilt mid-session, the next
-cell's result is prefixed with a `<repl_engine_reset>` block that names what was revived and
-what was lost, so the model re-verifies before reusing state that may be gone. The human gets
-only a terse `ui.notify` toast ("repl kernel rebuilt, 3 names revived") instead of the marker;
-the two are derived from the same restore result, so they never disagree. A resumed
-conversation announces the same pair on its first cell, but only when the conversation has a
+A fresh engine restores that snapshot **in the background**: recovery is a quiet-gap job that
+never runs ahead of a user cell, so a large revive does not delay the first cell; only a
+mid-session rebuild (kernel death) forces the restore before the cell that found the kernel dead.
+Functions and classes defined in cells are captured by source and re-executed on restore (plain
+pickle cannot revive them in `__main__`); bindings that still fail are reported by name, never
+dropped silently. Entries are capped per-binding and in total (128 MiB default); the file is
+written via temp-file-and-rename so a crash cannot corrupt the last good copy; session dirs are
+pruned to the newest 25, and dirs whose conversation file no longer exists are swept entirely —
+deleting a conversation deletes its snapshots. "ephemeral" and the live session are exempt.
+
+A revive that never completes (a poisoned pickle) is bounded by an engine restore-cell watchdog
+(`PI_REPL_BOOT_TIMEOUT_MS`, default 90s): the kernel is killed and the restore marked skipped —
+"wedged while reviving; skipped" — instead of hanging the queue.
+
+The first cell's result after a revive carries a `<repl_engine_reset>` block naming what was
+revived and lost, so the model re-verifies before trusting state that may be gone; because
+recovery is async, that is the first cell **after the restore completes** (usually the first cell
+of a resumed conversation). The human gets only a terse `ui.notify` toast, derived from the same
+restore result so the two never disagree. A resumed conversation announces only when it has a
 saved past; a first-ever session stays quiet.
 
 ## Failure modes
@@ -168,7 +128,7 @@ saved past; a first-ever session stays quiet.
 | --- | --- |
 | Cell throws | `error` status with traceback; kernel namespace intact |
 | Cell silent or wedged | the watchdog sends an `interrupt_request`; a caller abort kills the kernel only if it is still running after a 20-second grace |
-| Kernel dies | the running cell settles with an error; the next call builds a fresh kernel and restores the last snapshot |
+| Kernel dies | the running cell settles with an error; the next call builds a fresh kernel and restores the last snapshot **before** the triggering cell |
 | Host exits | `process.on("exit")` SIGKILLs live kernels (a child does not die with its parent) |
 | Output flood | capped per channel, truncation announced |
 
@@ -181,14 +141,14 @@ saved past; a first-ever session stays quiet.
   snapshot/restore round-trips, output caps, silence timeout, abort, and rebuilding from a
   snapshot after the kernel dies.
 
-The gate is `just check`. It runs Biome formatting and linting, dead-code checks, and host tests.
-`just integration` adds the real-kernel suite.
+The gate is `just check` (Biome formatting/lint, dead-code checks, host tests); `just integration`
+adds the real-kernel suite.
 
 ## The fixed layout
 
-There is no configuration file. Most state lives under one directory in the user's home. A
-small number of environment variables can still change runtime behavior, such as the silence
-watchdog timeout.
+There is no configuration file. Most state lives under one directory in the user's home. A small
+number of environment variables can still change runtime behavior, such as the silence watchdog
+timeout.
 
 ```
 ~/.pi/agent/pi-repl/
@@ -197,21 +157,24 @@ watchdog timeout.
   state/        per-session namespace snapshots
 ```
 
-Helpers merge project and global dirs: `resolveHelperDirs` walks from the working
-directory up to the git root collecting `.pi/helpers/`, then appends
-`~/.pi/agent/pi-repl/helpers`. Both the prompt loader and the kernel's `readHelperSources`
-walk the same ordered list with first-seen-wins, so a project helper shadows the same-named
-global one and both sides are guaranteed to agree. The venv is built automatically, and the
-interpreter follows the order above. No setting is needed. The per-cell silence watchdog is
-off by default (`PI_REPL_TIMEOUT_MS=0`: a silent but working cell may run on).
+State dirs are keyed `<project-slug>__<conversation>` so two conversations that share a filename
+can never share a snapshot (a pre-slug dir migrates on the owning conversation's next start), and
+`EngineLifecycle.acquire` binds each engine to its conversation, tearing a foreign engine down
+before building a new one — sessions cannot bleed into each other.
 
-The boot itself is bounded regardless: kernel start, helpers preload, and snapshot restore are
-kernel cells with no deadline of their own, and `acquire()` dedupes, so one wedged boot (an npm
-update swapping the venv under a live kernel, a snapshot value whose unpickling never returns)
-would hang the first cell and every cell after it. The lifecycle races each boot attempt against
-`PI_REPL_BOOT_TIMEOUT_MS` (default 90s): a wedged attempt is killed and retried once with the
-snapshot deliberately skipped, landing on an honest "wedged while reviving; skipped" notice; a
-second wedge fails the cell loudly instead of hanging.
+Helpers merge project and global dirs: `resolveHelperDirs` walks up to the git root collecting
+`.pi/helpers/`, then appends the global dir; the prompt loader and the kernel's `readHelperSources`
+walk the same ordered list first-seen-wins, so a project helper shadows a same-named global one
+and both sides agree. No setting is needed. The per-cell silence watchdog is off by default
+(`PI_REPL_TIMEOUT_MS=0`).
+
+Boot is bounded regardless: kernel start and helpers preload are kernel cells with no deadline of
+their own, and `acquire()` dedupes, so one wedged boot (an npm update swapping the venv under a
+live kernel, a hanging helper import) would hang the first cell and every cell after. The
+lifecycle races each boot attempt against `PI_REPL_BOOT_TIMEOUT_MS` (default 90s): a wedged
+attempt is killed and retried once with the snapshot deliberately skipped — "wedged while
+reviving; skipped" — and a second wedge fails loudly. The same deadline bounds a restore whose
+unpickling never returns.
 
 ## Reference documentation
 

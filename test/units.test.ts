@@ -7,14 +7,13 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveHelperDirs } from "../src/engine/helpers-locate.js";
 import type { RestoreResult } from "../src/engine/index.js";
 import {
 	capLinesForContext,
-	EngineManager,
 	MAX_OUTPUT_LINE_CHARS,
 	pruneOrphanedSnapshotDirs,
 	pruneSnapshotDirs,
@@ -41,6 +40,7 @@ import {
 	type RevivableEngine,
 } from "../src/extension/session-engine.js";
 import { withSkillsBlock } from "../src/extension/skill-hook.js";
+import { resolveStateDir, sessionStateDirName } from "../src/extension/state-layout.js";
 
 describe("helpers loader: description is the truth", () => {
 	test("helper_description renders verbatim, including the call shape", () => {
@@ -804,19 +804,40 @@ describe("render-core: bare identifier coloring", () => {
 });
 
 describe("EngineLifecycle reset notices", () => {
-	// --- a fake engine so the lifecycle policy is testable without a kernel ---
+	// --- a fake engine so the lifecycle policy is testable without a kernel. start() hangs
+	// --- to simulate a wedged boot; the restore result is settleable by the test so the
+	// --- async-recovery contract (acquire never waits, notice follows completion) is provable. ---
 	class FakeEngine implements RevivableEngine {
-		/** Restore calls seen, so tests can assert the skip flag on the retry. */
-		readonly restoreCalls: boolean[] = [];
+		readonly started: boolean[] = [];
+		private resolveRestore!: (r: RestoreResult | null) => void;
+		private restoreSettled: Promise<RestoreResult | null>;
 		constructor(
 			private readonly restore: RestoreResult | null,
 			readonly history: boolean,
 			private readonly hang = false,
-		) {}
-		async restoreState(skip?: boolean): Promise<RestoreResult | null> {
-			this.restoreCalls.push(skip ?? false);
+			readonly skip: boolean = false,
+			pending = false,
+		) {
+			// a skipped engine's recovery settles null, exactly like EngineManager
+			this.restoreSettled = pending
+				? new Promise((resolve) => {
+						this.resolveRestore = resolve;
+					})
+				: Promise.resolve(skip ? null : this.restore);
+		}
+		async start(): Promise<void> {
+			this.started.push(this.skip); // records the skip flag each boot attempt
 			if (this.hang) return new Promise<never>(() => {});
-			return this.restore;
+		}
+		restoreResult(): Promise<RestoreResult | null> {
+			return this.restoreSettled;
+		}
+		/** Settle a pending recovery, as the engine's quiet-gap restore would. */
+		finishRestore(r: RestoreResult | null): void {
+			this.resolveRestore(r);
+		}
+		restoreWasSkipped(): boolean {
+			return this.skip;
 		}
 		hasSnapshotHistory(): boolean {
 			return this.history;
@@ -825,11 +846,14 @@ describe("EngineLifecycle reset notices", () => {
 
 	const deps = (restore: RestoreResult | null, history: boolean) =>
 		({
-			create: () => new FakeEngine(restore, history),
+			create: (skip?: boolean) => new FakeEngine(restore, history, false, skip ?? false),
 			async dispose() {},
 		}) as EngineLifecycleDeps<FakeEngine>;
 
 	const restored = (n: string[]): RestoreResult => ({ path: "/tmp/ns.snapshot", restored: n, failed: [] });
+
+	// --- notices land once the (background) recovery settles; the fakes above resolve it on
+	// --- the microtask queue, so by the time acquire() has returned the notice is present ---
 
 	test("a mid-session rebuild announces on the next cell", async () => {
 		const lc = new EngineLifecycle(deps(restored(["data"]), false));
@@ -881,6 +905,81 @@ describe("EngineLifecycle reset notices", () => {
 		expect(lc.takeResetNotice()).toBeUndefined();
 	});
 
+	test("acquire returns before a slow recovery completes; the notice follows the restore", async () => {
+		const created: FakeEngine[] = [];
+		const lc = new EngineLifecycle<FakeEngine>({
+			create: (skip?: boolean) => {
+				const e = new FakeEngine(null, true, false, skip ?? false, true); // pending restore
+				created.push(e);
+				return e;
+			},
+			async dispose() {},
+		});
+		const acquire = lc.acquire("startup"); // not awaited until the guard below
+		const { engine, created: wasCreated } = await acquire;
+		expect(wasCreated).toBe(true);
+		// the recovery is still in flight: acquire must have returned without it
+		expect(lc.takeResetNotice()).toBeUndefined();
+		// the quiet-gap restore settles later; the notice lands then
+		created[0]!.finishRestore(restored(["data"]));
+		await new Promise((resolve) => setImmediate(resolve));
+		const notice = lc.takeResetNotice();
+		expect(notice).toBeDefined();
+		expect(notice?.notice).toContain("Revived (1): data");
+		expect(engine).toBe(created[0]);
+	});
+
+	test("a different conversation's acquire replaces the engine instead of bleeding into it", async () => {
+		const created: FakeEngine[] = [];
+		const disposed: FakeEngine[] = [];
+		const lc = new EngineLifecycle<FakeEngine>({
+			create: (skip?: boolean) => {
+				const e = new FakeEngine(restored(["conv-state"]), true, false, skip ?? false);
+				created.push(e);
+				return e;
+			},
+			async dispose(e) {
+				disposed.push(e);
+			},
+		});
+		await lc.acquire("startup", "conv-A");
+		await lc.acquire("cell", "conv-A"); // same conversation: the engine is reused, not rebuilt
+		expect(created).toHaveLength(1);
+		const first = created[0]!;
+		await lc.acquire("startup", "conv-B"); // different conversation: flush + rebuild
+		expect(disposed).toEqual([first]);
+		expect(created).toHaveLength(2);
+		// the new conversation got its own engine + its own (fresh) announcement
+		const notice = lc.takeResetNotice();
+		expect(notice?.notice).toContain("started fresh");
+		expect(notice?.notice).toContain("Revived (1): conv-state");
+	});
+
+	test("an engine bound to no key serves any acquire without a teardown", async () => {
+		const lc = new EngineLifecycle(deps(restored(["data"]), true));
+		await lc.acquire("startup");
+		await lc.acquire("cell", "some-key"); // key appears later: nothing to bleed, no teardown
+		expect(lc.takeResetNotice()).toBeDefined();
+	});
+
+	test("a wedged recovery is announced as skipped, honestly", async () => {
+		// the engine's restore-cell watchdog found a poisoned pickle, killed the kernel, and
+		// marked ITSELF skipped (restoreResult settles null, restoreWasSkipped is true): the
+		// lifecycle must say "wedged; skipped", never "no snapshot available"
+		const lc = new EngineLifecycle<FakeEngine>({
+			create: () => new FakeEngine(null, true, false, true),
+			async dispose() {},
+		});
+		const { engine } = await lc.acquire("cell");
+		expect(engine.restoreWasSkipped()).toBe(true);
+		const notice = lc.takeResetNotice();
+		expect(notice).toBeDefined();
+		expect(notice?.notice).toContain("wedged");
+		expect(notice?.notice).toContain("skipped");
+		expect(notice?.restore).toBe(null);
+		expect(notice?.wedged).toBe(true);
+	});
+
 	test("the reset toast is terse and agrees with the marker's counts", () => {
 		// rebuilt mid-session with a full revive
 		expect(formatResetToast("cell", restored(["a", "b"]))).toBe("repl kernel rebuilt, 2 names revived");
@@ -895,37 +994,46 @@ describe("EngineLifecycle reset notices", () => {
 		expect(formatResetToast("startup", { path: "/tmp/x", restored: [], failed: [] })).toBe(
 			"repl session resumed, nothing could be revived",
 		);
+		// a wedged revive names the skip so nobody mistakes it for "nothing saved"
+		expect(formatResetToast("cell", null, true)).toBe("repl kernel rebuilt, snapshot revive skipped (wedged)");
+		expect(formatResetToast("startup", null, true)).toBe("repl session resumed, snapshot revive skipped (wedged)");
 	});
 
 	test("a boot that wedges is killed and retried fresh, with the snapshot skipped honestly", async () => {
-		const queue: FakeEngine[] = [new FakeEngine(restored(["data"]), true, true), new FakeEngine(null, true)];
+		const created: FakeEngine[] = [];
 		const discarded: FakeEngine[] = [];
 		const lc = new EngineLifecycle<FakeEngine>({
-			create: () => queue.shift()!,
+			create: (skip?: boolean) => {
+				const hang = created.length === 0; // first engine hangs at boot
+				const e = new FakeEngine(hang ? null : restored(["data"]), true, hang, skip ?? false);
+				created.push(e);
+				return e;
+			},
 			async dispose() {},
 			async discard(e) {
 				discarded.push(e);
 			},
 			bootTimeoutMs: 40,
 		});
-		const [wedged, fresh] = queue;
 		const { engine, restore } = await lc.acquire("cell");
-		expect(engine).toBe(fresh);
+		expect(engine).toBe(created[1]);
 		expect(restore).toBe(null);
-		expect(discarded).toEqual([wedged]);
-		// the retry booted WITHOUT the snapshot, so the poisoned pickle can't wedge twice
-		expect(fresh.restoreCalls).toEqual([true]);
+		expect(discarded).toEqual([created[0]]);
+		// the retry booted WITHOUT the snapshot, so the poisoned snapshot can't wedge twice
+		expect(created[1]!.skip).toBe(true);
+		expect(created[1]!.started).toEqual([true]);
 		const notice = lc.takeResetNotice();
 		expect(notice?.notice).toContain("wedged");
 		expect(notice?.notice).toContain("skipped");
+		expect(notice?.restore).toBe(null);
 	});
 
 	test("a boot that wedges twice fails loudly instead of hanging the session", async () => {
 		const created: FakeEngine[] = [];
 		const discarded: FakeEngine[] = [];
 		const lc = new EngineLifecycle<FakeEngine>({
-			create: () => {
-				const e = new FakeEngine(null, true, true);
+			create: (skip?: boolean) => {
+				const e = new FakeEngine(null, true, true, skip ?? false);
 				created.push(e);
 				return e;
 			},
@@ -938,6 +1046,58 @@ describe("EngineLifecycle reset notices", () => {
 		await expect(lc.acquire("cell")).rejects.toThrow("timed out twice");
 		expect(created).toHaveLength(2);
 		expect(discarded).toEqual(created);
+	});
+});
+
+describe("session state layout: keys never collide across conversations", () => {
+	test("the state dir key joins the project slug with the conversation name", () => {
+		expect(sessionStateDirName("/root/sessions/--proj-a--/2026-01-01T00-00-00Z_111.jsonl")).toBe(
+			"--proj-a--__2026-01-01T00-00-00Z_111",
+		);
+		// two conversations with the same basename in different projects get different keys
+		const a = sessionStateDirName("/root/sessions/--proj-a--/shared.jsonl");
+		const b = sessionStateDirName("/root/sessions/--proj-b--/shared.jsonl");
+		expect(a).not.toBe(b);
+	});
+
+	test("a legacy bare-name dir migrates to the slug key on the owning conversation's start", () => {
+		const root = mkdtempSync(join(tmpdir(), "pi-repl-statekey-"));
+		try {
+			const sessions = join(root, "sessions");
+			const state = join(root, "state");
+			mkdirSync(join(sessions, "--proj-a--"), { recursive: true });
+			const conv = "2026-01-01T00-00-00Z_111";
+			writeFileSync(join(sessions, "--proj-a--", `${conv}.jsonl`), "x");
+			// pre-slug dir exists for this conversation
+			const legacy = join(state, conv);
+			mkdirSync(legacy, { recursive: true });
+			writeFileSync(join(legacy, "namespace.snapshot"), "{}");
+			const resolved = resolveStateDir(state, join(sessions, "--proj-a--", `${conv}.jsonl`));
+			expect(resolved.snapshotPath).toBe(join(state, `--proj-a--__${conv}`, "namespace.snapshot"));
+			expect(existsSync(resolved.snapshotPath)).toBe(true); // migrated, so the snapshot survives
+			expect(existsSync(legacy)).toBe(false);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test("migration is skipped when the slug dir already owns a snapshot", () => {
+		const root = mkdtempSync(join(tmpdir(), "pi-repl-statekey-"));
+		try {
+			const state = join(root, "state");
+			const dir = join(state, "--proj-a--__conv");
+			mkdirSync(dir, { recursive: true });
+			writeFileSync(join(dir, "namespace.snapshot"), "newer");
+			const legacy = join(state, "conv");
+			mkdirSync(legacy, { recursive: true });
+			writeFileSync(join(legacy, "namespace.snapshot"), "older");
+			const resolved = resolveStateDir(state, join(root, "sessions", "--proj-a--", "conv.jsonl"));
+			expect(resolved.snapshotPath).toBe(join(dir, "namespace.snapshot"));
+			expect(readFileSync(resolved.snapshotPath, "utf8")).toBe("newer");
+			expect(existsSync(legacy)).toBe(true); // untouched; the orphan sweep sees it as live
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 });
 
@@ -1019,6 +1179,42 @@ describe("pruneSnapshotDirs keeps only the newest snapshots", () => {
 			expect(existsSync(d)).toBe(true);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
+		}
+	});
+	test("the orphan sweep recognizes both legacy and slug-keyed dirs, so deletion cleans both", () => {
+		const root = mkdtempSync(join(tmpdir(), "pi-repl-orphan-"));
+		const sessions = mkdtempSync(join(tmpdir(), "pi-repl-sess-"));
+		try {
+			// proj-a: alive.jsonl (slug dir) and carryover.jsonl (legacy pre-slug dir, not yet migrated)
+			const a = join(sessions, "--proj-a--");
+			mkdirSync(a);
+			writeFileSync(join(a, "alive.jsonl"), "x");
+			writeFileSync(join(a, "carryover.jsonl"), "x");
+			// proj-b: deleted.jsonl was deleted → both its dir formats must be swept
+			const b = join(sessions, "--proj-b--");
+			mkdirSync(b);
+			const mk = (name: string) => {
+				const d = join(root, name);
+				mkdirSync(d);
+				writeFileSync(join(d, "namespace.snapshot"), "{}");
+				return d;
+			};
+			const aliveSlug = mk("--proj-a--__alive");
+			const carryoverLegacy = mk("carryover"); // live conversation, legacy format: kept
+			const deletedSlug = mk("--proj-b--__deleted");
+			const deletedLegacy = mk("deleted"); // same conversation's pre-slug dir: swept too
+			const ephemeral = mk("ephemeral");
+
+			const removed = pruneOrphanedSnapshotDirs(root, sessions, "--proj-a--__alive");
+			expect(removed).toBe(2);
+			expect(existsSync(aliveSlug)).toBe(true);
+			expect(existsSync(carryoverLegacy)).toBe(true);
+			expect(existsSync(deletedSlug)).toBe(false);
+			expect(existsSync(deletedLegacy)).toBe(false);
+			expect(existsSync(ephemeral)).toBe(true);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(sessions, { recursive: true, force: true });
 		}
 	});
 });

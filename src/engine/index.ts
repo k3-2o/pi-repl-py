@@ -30,6 +30,12 @@ const DEFAULT_SNAPSHOT_DEBOUNCE_MS = 1500;
 /** Total snapshot size cap (base64 payload). Per-entry entries are capped at the same
  * bound; larger bindings are reported as skipped names. Mirrors the pi-codex scheme. */
 const DEFAULT_SNAPSHOT_MAX_BYTES = 128 * 1024 * 1024;
+/** Quiet-gap window before the background restore fires after boot; never ahead of a user cell. */
+const RESTORE_QUIET_MS = 250;
+/** Deadline for one restore cell (a poisoned pickle can wedge the kernel's single queue for
+ * ever). The reaper kills the kernel and marks the restore skipped so the next call rebuilds
+ * honestly. Mirrors the boot deadline in the lifecycle; also settable per engine via env. */
+const DEFAULT_RESTORE_DEADLINE_MS = 90_000;
 
 interface EngineExecuteError {
 	/** Error class name, e.g. "TypeError". */
@@ -82,6 +88,8 @@ export interface EngineOptions {
 		/** Total base64 payload cap; also the per-entry cap. Oversized entries are skipped with a reason. Default 128 MiB. */
 		maxBytes?: number;
 	};
+	/** Do not revive the snapshot on this engine (used after a wedged restore was detected once). */
+	skipRestore?: boolean;
 }
 
 // --- process-wide cleanup: a child does not die with its parent, so SIGKILL live kernels on exit ---
@@ -158,7 +166,12 @@ export function pruneOrphanedSnapshotDirs(
 		for (const proj of readdirSync(sessionsRoot, { withFileTypes: true })) {
 			if (!proj.isDirectory()) continue;
 			for (const f of readdirSync(join(sessionsRoot, proj.name))) {
-				if (f.endsWith(".jsonl")) liveNames.add(f.slice(0, -".jsonl".length));
+				if (!f.endsWith(".jsonl")) continue;
+				const name = f.slice(0, -".jsonl".length);
+				// --- both state-dir formats are live while their conversation lives: the legacy
+				// --- bare-name dir (pre-slug upgrade) and the slug-keyed dir (see state-layout) ---
+				liveNames.add(name);
+				liveNames.add(`${proj.name}__${name}`);
 			}
 		}
 	} catch {
@@ -191,9 +204,20 @@ export class EngineManager {
 	/** Last-seen top-level namespace names; snapshots are gated on this set changing. */
 	private lastNamespaceNames?: string[];
 	private pythonPath?: string;
+	/** The kernel whose namespace has (or is being) revived from the last snapshot. */
+	private restoredKernel?: KernelClient;
+	/** A wedged revive marks the engine: later kernels on this engine boot without restoring. */
+	private restoreSkipped: boolean;
+	private restoreTimer?: ReturnType<typeof setTimeout>;
+	private restoreResolve?: (result: RestoreResult | null) => void;
+	private restorePromise?: Promise<RestoreResult | null>;
+	private restoreSettledResult?: RestoreResult | null;
 
 	constructor(options: EngineOptions = {}) {
 		this.options = options;
+		this.restoreSkipped = options.skipRestore ?? false;
+		// no snapshot capability: recovery is trivially "nothing to revive"
+		if (!options.snapshot) this.settleRestore(null);
 	}
 
 	get isRunning(): boolean {
@@ -255,6 +279,9 @@ export class EngineManager {
 			throw new Error("Engine has been shut down");
 		}
 		this.state = "running";
+		// recovery is not on the first call's critical path: revive this kernel in the
+		// first quiet gap (never ahead of a user cell) and settle restoreResult().
+		this.maybeScheduleRestore();
 	}
 
 	/** Abrupt teardown: SIGKILL the kernel; safe from process.on("exit"). */
@@ -302,6 +329,19 @@ export class EngineManager {
 				this.kernel = undefined;
 				this.startPromise = undefined;
 				await this.start();
+				// --- a mid-session rebuild must revive the last snapshot BEFORE the cell that
+				// --- triggered it (unlike a session-start boot, where recovery runs in the
+				// --- background quiet gap and the first cell is served immediately). A wedged
+				// --- revive kills the new kernel too; boot a fresh one — the restore is now
+				// --- marked skipped, so the cell proceeds on live state instead of wedging. ---
+				await this.restoreWithReap().catch(() => null);
+				// read health through the getter: TS narrows this.kernel to undefined after the
+				// assignment above, but start() may have replaced it with a live kernel
+				if (!this.isRunning) {
+					this.kernel = undefined;
+					this.startPromise = undefined;
+					await this.start();
+				}
 			}
 			if (this.isShutdown()) {
 				throw new Error("Engine has been shut down");
@@ -387,15 +427,123 @@ export class EngineManager {
 		}
 	}
 
-	async restoreState(skip = false): Promise<RestoreResult | null> {
-		// --- start unconditionally: the boot deadline in the lifecycle bounds this call, so
-		// --- booting eagerly here (even with nothing to revive) is what makes a wedged boot
-		// --- detectable instead of deferring the wedge to the first cell. ---
-		await this.start();
-		if (skip) return null;
+	/** Resolves with this engine's recovery outcome: the revived names, or null when there was
+	 * nothing to restore, restore was skipped, or restore failed. Never rejects. The restore runs
+	 * as a background quiet-gap job, so this promise is the ONLY hook the lifecycle needs to
+	 * announce a resume or rebuild — acquire() never awaits it. */
+	restoreResult(): Promise<RestoreResult | null> {
+		if (this.restoreSettledResult !== undefined) return Promise.resolve(this.restoreSettledResult);
+		if (!this.restorePromise) {
+			this.restorePromise = new Promise<RestoreResult | null>((resolve) => {
+				this.restoreResolve = resolve;
+			});
+		}
+		return this.restorePromise;
+	}
+
+	/** True when restoring was deliberately skipped (a prior revive wedged or the engine was
+	 * built with skipRestore). Lets the lifecycle say exactly why a revival did not happen. */
+	restoreWasSkipped(): boolean {
+		return this.restoreSkipped;
+	}
+
+	private settleRestore(result: RestoreResult | null): void {
+		if (this.restoreSettledResult !== undefined) return;
+		this.restoreSettledResult = result;
+		this.restoreResolve?.(result);
+		this.restoreResolve = undefined;
+	}
+
+	/** Arm the background revive for the freshly booted kernel. It fires in the first quiet gap
+	 * (the same rule as the debounced snapshot: never ahead of a user cell) and settles
+	 * restoreResult(). A fresh engine therefore serves its first cell without waiting for the
+	 * restore, while a mid-session rebuild (execute's zombie path) forces it synchronously. */
+	private maybeScheduleRestore(): void {
 		const config = this.options.snapshot;
-		if (!config) return null;
-		if (!existsSync(config.path)) return null;
+		if (!config) return;
+		if (this.restoreSkipped) {
+			this.settleRestore(null);
+			return;
+		}
+		if (this.kernel && this.kernel === this.restoredKernel) return; // this kernel already revived
+		if (!existsSync(config.path)) {
+			this.settleRestore(null);
+			return;
+		}
+		if (this.restoreTimer) return; // already armed
+		const arm = () => {
+			this.restoreTimer = setTimeout(() => {
+				this.restoreTimer = undefined;
+				// --- quiet-gap rule, mirroring scheduleSnapshot: a pickling restore must not
+				// --- queue ahead of the user's next cell on the kernel's single queue ---
+				if (this.inFlightCells > 0 || !this.kernel?.isRunning) {
+					arm();
+					return;
+				}
+				void this.runRestore();
+			}, RESTORE_QUIET_MS);
+			this.restoreTimer.unref?.();
+		};
+		arm();
+	}
+
+	/** Run the restore cell with a watchdog. A snapshot value whose unpickling never returns
+	 * wedges the kernel's single queue forever; the reaper SIGKILLs the kernel and marks the
+	 * restore skipped, so the next call rebuilds honestly ("wedged while reviving; skipped")
+	 * instead of hanging every later cell behind the restore. */
+	private async restoreWithReap(): Promise<RestoreResult | null> {
+		const config = this.options.snapshot;
+		if (!config || !this.kernel || this.restoreSkipped) {
+			this.settleRestore(null);
+			return null;
+		}
+		if (this.kernel === this.restoredKernel) return this.restoreResult();
+		const deadlineMs =
+			Number(process.env.PI_REPL_BOOT_TIMEOUT_MS ?? this.options.env?.PI_REPL_BOOT_TIMEOUT_MS ?? 0) ||
+			DEFAULT_RESTORE_DEADLINE_MS;
+		const reaper = setTimeout(() => {
+			this.restoreSkipped = true;
+			this.settleRestore(null);
+			this.kernel?.kill();
+		}, deadlineMs);
+		reaper.unref?.();
+		try {
+			return await this.restoreState(false).catch(() => null);
+		} finally {
+			clearTimeout(reaper);
+		}
+	}
+
+	private async runRestore(): Promise<void> {
+		await this.restoreWithReap();
+	}
+
+	/** Revive this engine's kernel from the snapshot file. Idempotent per kernel: a second call
+	 * shares the outcome of an in-flight restore instead of double-running the restore cell. */
+	async restoreState(skip = false): Promise<RestoreResult | null> {
+		// --- start unconditionally: direct callers may not have started the engine, and a
+		// --- wedged boot is detectable only while a boot attempt is actually under way ---
+		await this.start();
+		if (skip) {
+			this.settleRestore(null);
+			return null;
+		}
+		const config = this.options.snapshot;
+		const kernel = this.kernel;
+		if (!config || !kernel || this.restoreSkipped) {
+			this.settleRestore(null);
+			return null;
+		}
+		if (kernel === this.restoredKernel) {
+			// already revived or reviving on this kernel: share the outcome, never double-run
+			return this.restoreResult();
+		}
+		// claim the kernel now so the quiet-gap scheduler cannot start a second restore cell
+		this.restoredKernel = kernel;
+		if (!existsSync(config.path)) {
+			this.settleRestore(null);
+			return null;
+		}
 		try {
 			const payload = JSON.parse(readFileSync(config.path, "utf8")) as {
 				version?: number;
@@ -407,9 +555,12 @@ export class EngineManager {
 				payload.version === 2
 					? (payload.entries ?? [])
 					: Object.entries(payload.vars ?? {}).map(([name, b64]) => ({ name, kind: "value", payload: b64 }));
-			const reply = await this.kernel!.restore(entries);
-			return { path: config.path, restored: reply.restored, failed: reply.failed };
+			const reply = await kernel.restore(entries);
+			const result: RestoreResult = { path: config.path, restored: reply.restored, failed: reply.failed };
+			this.settleRestore(result);
+			return result;
 		} catch {
+			this.settleRestore(null);
 			return null;
 		}
 	}

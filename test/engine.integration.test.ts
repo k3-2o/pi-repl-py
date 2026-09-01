@@ -170,6 +170,41 @@ describe("host × python-kernel integration", () => {
 		expect(r.stdout).toContain("C G");
 	});
 
+	test(
+		"a fresh engine serves the first cell before the quiet-gap restore; the restore then lands",
+		{ timeout: 90_000 },
+		async () => {
+			const d = tempDir();
+			const snap = { path: join(d, "ns.snapshot"), debounceMs: 200 };
+			const m1 = engine({ cwd: d, snapshot: snap });
+			await m1.execute("saved = {'a': 42, 'big': list(range(200_000))}");
+			await m1.snapshotState();
+			await m1.kill();
+
+			const m2 = engine({ cwd: d, snapshot: snap });
+			// recovery is a background quiet-gap job: the first cell is served on the freshly
+			// booted kernel and must NOT wait for the restore (the restore is armed only to fire
+			// when the kernel is idle, so it can never be ahead of this cell)
+			const first = await m2.execute("print('early', 'saved' in globals())");
+			expect(first.status).toBe("ok");
+			expect(first.stdout).toContain("early");
+			expect(first.stdout).toContain("False"); // not revived yet — and the cell didn't block on it
+
+			// the restore lands in the quiet gap and the name goes live
+			const deadline = Date.now() + 30_000;
+			let seen = false;
+			while (Date.now() < deadline && !seen) {
+				await new Promise((resolve) => setTimeout(resolve, 250));
+				const r = await m2.execute("print('saved' in globals())");
+				seen = r.stdout.includes("True");
+			}
+			expect(seen).toBe(true);
+			const check = await m2.execute("print(saved['a'])");
+			expect(check.status).toBe("ok");
+			expect(check.stdout).toContain("42");
+		},
+	);
+
 	test("a variable set in one engine survives restart via the snapshot file", { timeout: 60_000 }, async () => {
 		const d = tempDir();
 		const snap = { path: join(d, "ns.snapshot"), debounceMs: 200 };
@@ -192,42 +227,64 @@ describe("host × python-kernel integration", () => {
 		expect(r2.stdout).toContain("hello");
 	});
 
-	test("a snapshot that wedges the boot is skipped and the session still starts", { timeout: 90_000 }, async () => {
-		const d = tempDir();
-		const snap = { path: join(d, "ns.snapshot"), debounceMs: 200 };
-		const m1 = engine({ cwd: d, snapshot: snap });
-		// __setstate__ sleeps forever, so unpickling this value during restore wedges the boot
-		const r1 = await m1.execute(
-			"class W:\n    def __setstate__(self, state):\n        import time\n        time.sleep(60)\n    def __init__(self):\n        self.x = 1\nw = W()",
-		);
-		expect(r1.status).toBe("ok");
-		await new Promise((resolve) => setTimeout(resolve, 800));
-		await m1.snapshotState();
+	test(
+		"a snapshot whose revive wedges is skipped in the background and the session still starts",
+		{ timeout: 90_000 },
+		async () => {
+			const d = tempDir();
+			const snap = { path: join(d, "ns.snapshot"), debounceMs: 200 };
+			const m1 = engine({ cwd: d, snapshot: snap });
+			// __setstate__ sleeps forever, so unpickling this value during restore wedges the kernel
+			const r1 = await m1.execute(
+				"class W:\n    def __setstate__(self, state):\n        import time\n        time.sleep(60)\n    def __init__(self):\n        self.x = 1\nw = W()",
+			);
+			expect(r1.status).toBe("ok");
+			await new Promise((resolve) => setTimeout(resolve, 800));
+			await m1.snapshotState();
 
-		// the lifecycle owns the boot deadline; give it a short one so the wedge is detected fast
-		const lc = new EngineLifecycle<EngineManager>({
-			create: () => engine({ cwd: d, snapshot: snap }),
-			async dispose(m) {
-				await m.dispose();
-			},
-			async discard(m) {
-				await m.kill();
-			},
-			bootTimeoutMs: 8_000,
-		});
-		const started = Date.now();
-		const { engine: m2, restore } = await lc.acquire("cell");
-		// bounded: two attempts (8s deadline each) plus one real boot, not a 60s pickle sleep
-		expect(Date.now() - started).toBeLessThan(45_000);
-		expect(restore).toBe(null);
-		const notice = lc.takeResetNotice();
-		expect(notice?.notice).toContain("wedged");
-		expect(notice?.notice).toContain("skipped");
-		// the replacement engine serves cells: the wedged kernel did not poison the session
-		const r2 = await m2.execute("2 + 2");
-		expect(r2.status).toBe("ok");
-		expect(r2.result).toContain("4");
-	});
+			// the boot deadline bounds kernel start + helpers preload; the restore cell has its own
+			// engine-level watchdog (same env var), and the lifecycle skips reviving after the boot
+			// deadline trips. Both get a short deadline so the wedge is detected fast.
+			const lc = new EngineLifecycle<EngineManager>({
+				create: (skip) =>
+					engine({ cwd: d, snapshot: snap, skipRestore: skip, env: { PI_REPL_BOOT_TIMEOUT_MS: "3000" } }),
+				async dispose(m) {
+					await m.dispose();
+				},
+				async discard(m) {
+					await m.kill();
+				},
+				bootTimeoutMs: 8_000,
+			});
+			const started = Date.now();
+			const { engine: m2, restore } = await lc.acquire("cell");
+			// recovery is async: acquire returns after BOOT, not after the wedged restore settles
+			expect(Date.now() - started).toBeLessThan(15_000);
+			expect(restore).toBe(null);
+
+			// the poisoned revive is detected in the background: the reaper kills the wedged kernel
+			// and the engine marks the restore skipped; the announcement follows once that settles
+			const noticeDeadline = Date.now() + 30_000;
+			let notice: ReturnType<typeof lc.takeResetNotice> | undefined;
+			while (Date.now() < noticeDeadline && !notice) {
+				notice = lc.takeResetNotice();
+				if (!notice) await new Promise((resolve) => setTimeout(resolve, 200));
+			}
+			expect(notice?.notice).toContain("wedged");
+			expect(notice?.notice).toContain("skipped");
+			expect(notice?.restore).toBe(null);
+			expect(notice?.wedged).toBe(true);
+
+			// the replacement kernel serves cells and never re-touches the poisoned snapshot
+			const r2 = await m2.execute("2 + 2");
+			expect(r2.status).toBe("ok");
+			expect(r2.result).toContain("4");
+			// the wedge was skipped once, not retried: the namespace stays empty but alive
+			const r3 = await m2.execute("print('w' in globals())");
+			expect(r3.status).toBe("ok");
+			expect(r3.stdout).toContain("False");
+		},
+	);
 
 	test("a cell-defined function and class survive restart via source capture", { timeout: 90_000 }, async () => {
 		const d = tempDir();

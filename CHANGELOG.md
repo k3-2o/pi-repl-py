@@ -1,3 +1,21 @@
+## [0.6.14] - 2026-09-01
+
+### Changed
+
+- Snapshot recovery runs in the background and never delays the first tool call; the
+  `<repl_engine_reset>` notice lands on the first cell after the restore completes.
+- Mid-session rebuilds restore the last snapshot before the triggering cell.
+- A restore that never completes is killed after `PI_REPL_BOOT_TIMEOUT_MS` (default 90s)
+  and marked skipped, reported as "wedged while reviving; skipped".
+
+### Fixed
+
+- Sessions can no longer bleed into each other: the engine is bound to its conversation,
+  and a different conversation's acquire tears the old one down instead of reusing it.
+- State dirs are keyed `<project-slug>__<conversation>`; legacy dirs migrate on the owning
+  conversation's next start, and the orphan sweep recognizes both formats, so deleting a
+  conversation removes its snapshots.
+
 ## [0.6.13] - 2026-09-01
 
 ### Fixed

@@ -8,6 +8,7 @@ import { withSkillsBlock } from "./src/extension/skill-hook.js";
 import { EngineManager, pruneOrphanedSnapshotDirs, pruneSnapshotDirs } from "./src/engine/index.js";
 import { ExecuteCellComponent, type ExecuteDetails, type ExecuteRenderState } from "./src/extension/render.js";
 import { EngineLifecycle, formatResetToast } from "./src/extension/session-engine.js";
+import { conversationName, resolveStateDir } from "./src/extension/state-layout.js";
 import { EXECUTE_DESCRIPTION, buildExecutePromptGuidelines, EXECUTE_PROMPT_SNIPPET } from "./src/extension/tool-meta.js";
 
 const executeSchema = Type.Object({
@@ -58,33 +59,44 @@ export default function (pi: ExtensionAPI) {
 	const pendingErrorResults = new Map<string, { details: ExecuteDetails }>();
 
 	const lifecycle = new EngineLifecycle<EngineManager>({
-		// --- boot deadline: bounds kernel start + helpers preload + snapshot restore. An npm
-		// --- update swaps the venv and helpers under a live kernel, and the first boot after
-		// --- it can wedge (poisoned pickle, half-built venv); without this the first cell
-		// --- hangs forever, because acquire() dedupes onto the same hung boot. ---
+		// --- boot deadline: bounds kernel start + helpers preload (recovery is a background
+		// --- quiet-gap job, bounded by the engine's own restore-cell watchdog). An npm update
+		// --- swaps the venv and helpers under a live kernel, and the first boot after it can
+		// --- wedge; without this the first cell hangs forever, because acquire() dedupes onto
+		// --- the same hung boot. ---
 		bootTimeoutMs: Number(process.env.PI_REPL_BOOT_TIMEOUT_MS ?? 90_000) || 90_000,
-		create() {
+		create(skipRestore = false) {
 			const { cwd, sessionFile } = location;
-			const sessionKey = sessionFile ? basename(sessionFile).replace(/\.jsonl$/, "") : undefined;
-			// --- kernel namespace state lives under ~/.pi/agent/pi-repl, keyed by session, so it never clutters the project ---
-			const stateDir = join(homedir(), ".pi", "agent", "pi-repl", "state", sessionKey ?? "ephemeral");
-			// --- keep the state root from growing one dir per session forever; the live dir is exempt ---
-			if (sessionKey) {
+			// --- kernel namespace state lives under ~/.pi/agent/pi-repl/state, keyed by
+			// --- <project-slug>__<conversation>, so it never clutters the project and two
+			// --- conversations can never share a snapshot dir (resolveStateDir migrates any
+			// --- pre-slug legacy dir on start). Ephemeral sessions get no snapshot at all. ---
+			const stateRoot = join(homedir(), ".pi", "agent", "pi-repl", "state");
+			let snapshot: { path: string } | undefined;
+			let currentDir: string | undefined;
+			if (sessionFile) {
+				const { dir, snapshotPath } = resolveStateDir(stateRoot, sessionFile);
+				currentDir = basename(dir);
+				snapshot = { path: snapshotPath };
+				// --- keep the state root from growing one dir per session forever; the live dir is exempt ---
 				try {
-					pruneSnapshotDirs(join(stateDir, ".."), 25, sessionKey);
+					pruneSnapshotDirs(stateRoot, 25, currentDir);
 				} catch {}
 				// --- cascade deletions: if a conversation is deleted, its snapshots die with it.
 				// --- sessionFile is sessions/<project-root>/<name>.jsonl, so the sessions root is
 				// --- two parent hops up; dirs whose conversation file exists in no project root
-				// --- (and that aren't this session or the ephemeral fallback) are swept. ---
+				// --- (and that aren't this session or the ephemeral fallback) are swept, in both
+				// --- the legacy bare-name and slug-keyed formats. ---
 				try {
-					pruneOrphanedSnapshotDirs(join(stateDir, ".."), sessionFile ? dirname(dirname(sessionFile)) : undefined, sessionKey);
+					pruneOrphanedSnapshotDirs(stateRoot, sessionFile ? dirname(dirname(sessionFile)) : undefined, currentDir);
 				} catch {}
 			}
 			return new EngineManager({
 				cwd,
-				// --- snapshots are keyed to a session file; ephemeral sessions get none ---
-				snapshot: sessionKey ? { path: join(stateDir, "namespace.snapshot") } : undefined,
+				// --- snapshots are keyed to the conversation; ephemeral sessions get none.
+				// --- skipRestore is true on the lifecycle's retry after a wedged boot. ---
+				snapshot,
+				skipRestore,
 			});
 		},
 		async dispose(engine) {
@@ -109,7 +121,8 @@ export default function (pi: ExtensionAPI) {
 		// --- warm the engine (and its revive) in the background; no popup. ---
 		// --- acquire() dedupes, so the first execute awaits this same in-flight boot ---
 		location = { cwd: ctx.cwd, sessionFile: ctx.sessionManager.getSessionFile() ?? undefined };
-		void lifecycle.acquire("startup").catch(() => {
+		const sessionKey = location.sessionFile ? conversationName(location.sessionFile) : undefined;
+		void lifecycle.acquire("startup", sessionKey).catch(() => {
 			// --- boot/revive handled on the execute path; swallow so a background warm can never
 			// --- surface an unhandled rejection. A resume's notice lands on the first cell. ---
 		});
@@ -175,7 +188,8 @@ export default function (pi: ExtensionAPI) {
 			// --- without this the host only renders the result once the first partial or the final result lands ---
 			onUpdate?.({ content: [], details: {} });
 			// --- previous engine died mid-session; acquire revives it ---
-			const { engine: m } = await lifecycle.acquire("cell");
+			const sessionKey = location.sessionFile ? conversationName(location.sessionFile) : undefined;
+			const { engine: m } = await lifecycle.acquire("cell", sessionKey);
 			try {
 				// --- accumulate partial updates so the row height doesn't oscillate ---
 				let streamed = "";
@@ -189,7 +203,7 @@ export default function (pi: ExtensionAPI) {
 				// --- reset notice leads so the model reads that its namespace was rebuilt; the
 				// --- human gets a terse notification instead of the marker, fire and forget ---
 				const reset = lifecycle.takeResetNotice();
-				if (reset?.notice) ctx?.ui?.notify?.(formatResetToast(reset.origin, reset.restore), "info");
+				if (reset?.notice) ctx?.ui?.notify?.(formatResetToast(reset.origin, reset.restore, reset.wedged), "info");
 				const sections = [reset?.notice, r.stdout, r.stderr, r.result];
 				const errorLines = r.error ? composeErrorLines(r.error) : undefined;
 				if (r.status === "error" && errorLines) sections.push(errorLines.join("\n"));
