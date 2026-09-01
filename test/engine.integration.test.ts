@@ -334,10 +334,14 @@ describe("host × python-kernel integration", () => {
 
 	test("the silence watchdog allows a cell that keeps producing output", { timeout: 60_000 }, async () => {
 		const d = tempDir();
-		const m = engine({ cwd: d, env: { PI_REPL_TIMEOUT_MS: "800" } });
+		// --- 25ms beats against a 1.6s window (64x margin): the cell outlives the window, so a
+		// --- watchdog that ignored output would still kill it, but a transient host stall would
+		// --- have to exceed 1.5s to falsely kill a healthy cell. The kill path itself is pinned
+		// --- by the exceeds-window test above; this is the positive control. ---
+		const m = engine({ cwd: d, env: { PI_REPL_TIMEOUT_MS: "1600" } });
 
 		const r = await m.execute(
-			"import time\nfor _ in range(20):\n    print('beat')\n    time.sleep(0.05)\nprint('done')",
+			"import time\nfor _ in range(80):\n    print('beat')\n    time.sleep(0.025)\nprint('done')",
 		);
 		expect(r.status).toBe("ok");
 		expect(r.stdout).toContain("done");
