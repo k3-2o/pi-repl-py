@@ -439,6 +439,55 @@ describe("render-core: layout", () => {
 		expect(rendered).toContain("demo explosion");
 	});
 
+	test("a pure-traceback error cell does not claim it had no output", () => {
+		const deps = testDeps();
+		const state = makeState({
+			expanded: true,
+			isError: true,
+			details: {
+				status: "error",
+				errorName: "ZeroDivisionError",
+				errorStack: ["Traceback (most recent call last):", "ZeroDivisionError: division by zero"],
+			},
+		});
+		const plain = stripAnsi(renderExecuteCell(state, 80, deps).join("\n"));
+		expect(plain).toContain("traceback:");
+		expect(plain).toContain("ZeroDivisionError");
+		expect(plain).not.toContain("no output");
+	});
+
+	test("the expanded panel always ends with a cushion row, never text on the edge", () => {
+		const deps = testDeps();
+		const cases: Array<{ name: string; details: any; expectText: string }> = [
+			// traceback renders bare (no trailing newline) and must still get the cushion
+			{
+				name: "traceback",
+				details: { status: "error", errorName: "E", errorStack: ["Traceback (most recent call last):", "E: boom"] },
+				expectText: "E: boom",
+			},
+			// the placeholder renders bare and must also sit above the edge
+			{ name: "placeholder", details: { status: "ok", durationMs: 5 }, expectText: "no output" },
+			// a result repr carries no trailing newline either
+			{ name: "result", details: { status: "ok", result: "'res'" }, expectText: "'res'" },
+		];
+		for (const { name, details, expectText } of cases) {
+			const lines = renderExecuteBody(makeState({ expanded: true, details }), 80, deps);
+			const last = stripAnsi(lines[lines.length - 1]).trim();
+			const above = stripAnsi(lines[lines.length - 2]).trim();
+			expect(last, `${name}: bottom row must be blank`).toBe("");
+			expect(above, `${name}: content sits above the cushion`).toContain(expectText);
+		}
+		// blob paths already ended blank via the stream's trailing newline; the cushion must
+		// recognize that row and not stack a second one
+		const streamed = renderExecuteBody(
+			makeState({ expanded: true, details: { status: "ok", stdout: "hi\n" } }),
+			80,
+			deps,
+		);
+		expect(stripAnsi(streamed[streamed.length - 1]).trim()).toBe("");
+		expect(stripAnsi(streamed[streamed.length - 2]).trim()).toBe("hi");
+	});
+
 	test("empty output says so; a running cell says it is waiting", () => {
 		const deps = testDeps();
 		const done = makeState({ expanded: true, details: { status: "ok", durationMs: 5 } });

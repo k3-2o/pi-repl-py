@@ -517,6 +517,9 @@ function renderOutput(
 	}
 
 	if (details?.errorStack && details.errorStack.length > 0) {
+		// --- a traceback IS output: without this flag a pure-traceback error cell (no
+		// --- stdout/stderr/result, the common error shape) also rendered "no output" below it ---
+		renderedText = true;
 		output.push(` ${OUTPUT_INDENT}${deps.fg("dim", "traceback:")}`);
 		for (const line of details.errorStack) {
 			const safe = sanitizeTuiOutput(line || " ");
@@ -528,6 +531,13 @@ function renderOutput(
 		const message = state.isPartial || statusKind(state) === "running" ? "waiting for output..." : "no output";
 		addWrapped(output, OUTPUT_INDENT, deps.fg("muted", message), width, deps, { sanitize: false });
 	}
+
+	// --- bottom cushion: streams end with a newline, so blobs already render a trailing blank
+	// --- row; traceback and the placeholder have no such newline and would sit flush against
+	// --- the panel's bottom edge. Normalize: the panel always ends with one blank painted row.
+	// --- (SGR stripped before the blank test; the colored rows themselves stay untouched.) ---
+	const lastRow = output[output.length - 1];
+	if (lastRow !== undefined && lastRow.replace(SGR_PATTERN, "").trim() !== "") output.push("");
 
 	// --- expanded cells render the whole output: the data cap bounds it ---
 	if (output.length > 0 && hasCode) lines.push("");
