@@ -1,3 +1,14 @@
+## [0.6.13] - 2026-09-01
+
+### Fixed
+
+- A kernel boot that wedges (for example after an npm update swaps the venv under a live kernel, or a snapshot value that never finishes unpickling) no longer hangs the first cell forever: the boot is bounded by `PI_REPL_BOOT_TIMEOUT_MS` (default 90s), the wedged kernel is killed, and the session retries once with the snapshot deliberately skipped, announcing exactly that.
+- Pure-traceback error cells no longer render a bogus "no output" line beneath the traceback in the expanded tool view, and the expanded panel always ends with a blank cushion row instead of text flush against the edge.
+
+### Changed
+
+- The prompt's edit guideline drops "a small unique anchor"; anchored replacements are the documented-brittle edit mode in notebook harnesses.
+
 ## [0.6.12] - 2026-08-27
 
 ### Changed
