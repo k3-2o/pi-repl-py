@@ -1,5 +1,10 @@
 """A small, provider-backed web client for the persistent pi-repl workspace."""
 
+# To make this helper work you must log in to every platform it uses
+# (searches: serper, exa, tavily, firecrawl; read: firecrawl, tavily, exa;
+# map: tavily, firecrawl), get an API key from each, and export it in your
+# shell config (~/.bashrc) so the pi process inherits it when it starts.
+
 helper_description = """web — preloaded web client for live web work.
 web.search(query) returns a list of dicts (title, url, snippet, published, score); web.read(url) returns the page text as a string; web.map(url) returns a list of page URLs.
 Instead of: hand-rolling urllib against a search provider, scraping pages, and hoping a key is set."""
