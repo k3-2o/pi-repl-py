@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { inflateSync } from "node:zlib";
 import { EngineManager } from "../src/engine/index.ts";
 import { EngineLifecycle } from "../src/extension/session-engine.ts";
+import { inheritForkSnapshot, resolveStateDir } from "../src/extension/state-layout.ts";
 
 const tempDirs: string[] = [];
 const engines: EngineManager[] = [];
@@ -391,6 +392,40 @@ print(os.getcwd() != ${JSON.stringify(d)})`);
 		const r = await m2.execute("print(legacy['v'])");
 		expect(r.status).toBe("ok");
 		expect(r.stdout).toContain("7");
+	});
+
+	test("a /fork'd conversation inherits the parent's namespace and restores it", { timeout: 60_000 }, async () => {
+		const d = tempDir();
+		const sessionsRoot = mkdtempSync(join(tmpdir(), "pi-repl-fork-int-"));
+		tempDirs.push(sessionsRoot);
+		const slugDir = join(sessionsRoot, "proj-a");
+		mkdirSync(slugDir, { recursive: true });
+		const parentFile = join(slugDir, "parent.jsonl");
+		const forkFile = join(slugDir, "forked.jsonl");
+		const stateRoot = join(d, "state");
+
+		// parent session: real engine, real snapshot
+		const parentSnap = resolveStateDir(stateRoot, parentFile).snapshotPath;
+		const m1 = engine({ cwd: d, snapshot: { path: parentSnap, debounceMs: 200 } });
+		await m1.execute("inherited = {'fork': 'yes', 'n': 42}");
+		await m1.snapshotState();
+		await m1.kill();
+
+		// the fork: pi-style header naming the parent, then the inherit pass
+		writeFileSync(parentFile, '{"type":"session","version":3,"id":"parent"}\n');
+		writeFileSync(forkFile, JSON.stringify({ type: "session", version: 3, id: "forked", parentSession: parentFile }));
+		const forkSnap = resolveStateDir(stateRoot, forkFile).snapshotPath;
+		expect(existsSync(forkSnap)).toBe(false);
+		inheritForkSnapshot(stateRoot, forkFile, forkSnap);
+
+		// the fork's engine restores like any resume: same revive, same notice path
+		const m2 = engine({ cwd: d, snapshot: { path: forkSnap, debounceMs: 200 } });
+		const restore = await m2.restoreState();
+		expect(restore?.restored).toContain("inherited");
+		const r = await m2.execute("print(inherited['fork'], inherited['n'])");
+		expect(r.status).toBe("ok");
+		expect(r.stdout).toContain("yes");
+		expect(r.stdout).toContain("42");
 	});
 
 	test(

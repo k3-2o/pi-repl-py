@@ -9,7 +9,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { resolveHelperDirs } from "../src/engine/helpers-locate.js";
 import type { RestoreResult } from "../src/engine/index.js";
 import {
@@ -46,7 +46,12 @@ import {
 	type RevivableEngine,
 } from "../src/extension/session-engine.js";
 import { withSkillsBlock } from "../src/extension/skill-hook.js";
-import { resolveStateDir, sessionStateDirName } from "../src/extension/state-layout.js";
+import {
+	forkParentSnapshot,
+	inheritForkSnapshot,
+	resolveStateDir,
+	sessionStateDirName,
+} from "../src/extension/state-layout.js";
 
 describe("helpers loader: description is the truth", () => {
 	test("helper_description renders verbatim, including the call shape", () => {
@@ -1495,5 +1500,62 @@ describe("snapshot gate retry", () => {
 		await m.scheduleSnapshotIfChanged();
 		await settle();
 		expect(snapshotCalls).toBe(0);
+	});
+});
+
+describe("fork inheritance", () => {
+	function forkWorld() {
+		const stateRoot = mkdtempSync(join(tmpdir(), "pi-repl-fork-state-"));
+		const sessionsRoot = mkdtempSync(join(tmpdir(), "pi-repl-fork-sessions-"));
+		const slugDir = join(sessionsRoot, "proj-a");
+		mkdirSync(slugDir, { recursive: true });
+		const parentFile = join(slugDir, "parent.jsonl");
+		const forkFile = join(slugDir, "forked.jsonl");
+		writeFileSync(parentFile, '{"type":"session","version":3,"id":"parent"}\n');
+		return { stateRoot, parentFile, forkFile };
+	}
+
+	const parentSnap = (stateRoot: string, parentFile: string) => resolveStateDir(stateRoot, parentFile).snapshotPath;
+	const forkSnap = (stateRoot: string, forkFile: string) => resolveStateDir(stateRoot, forkFile).snapshotPath;
+
+	test("a fork with a parentSession copies the parent's snapshot exactly once", () => {
+		const { stateRoot, parentFile, forkFile } = forkWorld();
+		mkdirSync(dirname(parentSnap(stateRoot, parentFile)), { recursive: true });
+		writeFileSync(parentSnap(stateRoot, parentFile), '{"version":3,"entries":[]}');
+		writeFileSync(forkFile, JSON.stringify({ type: "session", parentSession: parentFile }));
+
+		const target = forkSnap(stateRoot, forkFile);
+		expect(existsSync(target)).toBe(false);
+		inheritForkSnapshot(stateRoot, forkFile, target);
+		expect(readFileSync(target, "utf8")).toBe('{"version":3,"entries":[]}');
+		expect(existsSync(`${target}.tmp`)).toBe(false); // atomic copy leaves no temp
+		expect(readFileSync(parentSnap(stateRoot, parentFile), "utf8")).toBe('{"version":3,"entries":[]}'); // parent untouched
+
+		// idempotent: a fork that already has history is never overwritten
+		writeFileSync(target, "newer-fork-history");
+		inheritForkSnapshot(stateRoot, forkFile, target);
+		expect(readFileSync(target, "utf8")).toBe("newer-fork-history");
+	});
+
+	test("a fork whose parent never snapshotted stays empty", () => {
+		const { stateRoot, parentFile, forkFile } = forkWorld();
+		writeFileSync(forkFile, JSON.stringify({ type: "session", parentSession: parentFile }));
+		const target = forkSnap(stateRoot, forkFile);
+		inheritForkSnapshot(stateRoot, forkFile, target);
+		expect(existsSync(target)).toBe(false);
+	});
+
+	test("a resumed session (no parentSession) is untouched", () => {
+		const { stateRoot, forkFile } = forkWorld();
+		writeFileSync(forkFile, '{"type":"session","version":3,"id":"plain"}\n');
+		forkParentSnapshot(stateRoot, forkFile, forkSnap(stateRoot, forkFile));
+		inheritForkSnapshot(stateRoot, forkFile, forkSnap(stateRoot, forkFile));
+		expect(existsSync(forkSnap(stateRoot, forkFile))).toBe(false);
+	});
+
+	test("an unreadable session file is not treated as a fork", () => {
+		const { stateRoot, forkFile } = forkWorld();
+		writeFileSync(forkFile, "not json at all");
+		expect(forkParentSnapshot(stateRoot, forkFile, forkSnap(stateRoot, forkFile))).toBeUndefined();
 	});
 });

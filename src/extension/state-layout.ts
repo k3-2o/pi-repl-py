@@ -1,5 +1,5 @@
 // --- state lives at ~/.pi/agent/pi-repl/state/<slug>__<conv>: legacy bare-name dirs migrate on the owning conversation's next start, and the sweep knows both formats, so nothing live is swept and a deleted conversation loses its snapshots ---
-import { existsSync, renameSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 export function conversationName(sessionFile: string): string {
@@ -29,4 +29,29 @@ export function resolveStateDir(stateRoot: string, sessionFile: string): { dir: 
 		}
 	}
 	return { dir, snapshotPath: join(dir, "namespace.snapshot") };
+}
+
+/** The /fork header's parentSession -> the parent's own snapshot file, when the fork has no history yet. */
+export function forkParentSnapshot(stateRoot: string, sessionFile: string, snapshotPath: string): string | undefined {
+	if (existsSync(snapshotPath)) return undefined; // the fork already built its own history
+	let header: { parentSession?: unknown };
+	try {
+		const first = readFileSync(sessionFile, "utf8").split("\n", 1)[0] ?? "";
+		header = JSON.parse(first) as { parentSession?: unknown };
+	} catch {
+		return undefined; // unreadable / not a session file — not a fork
+	}
+	if (typeof header.parentSession !== "string" || header.parentSession === "") return undefined;
+	const parent = resolveStateDir(stateRoot, header.parentSession);
+	return existsSync(parent.snapshotPath) ? parent.snapshotPath : undefined;
+}
+
+/** Copy the parent's last snapshot into the fork's own key once; the fork then restores like any resume, and the parent is never touched. */
+export function inheritForkSnapshot(stateRoot: string, sessionFile: string, snapshotPath: string): void {
+	const parentSnap = forkParentSnapshot(stateRoot, sessionFile, snapshotPath);
+	if (parentSnap === undefined) return;
+	mkdirSync(dirname(snapshotPath), { recursive: true });
+	const tmp = `${snapshotPath}.tmp`;
+	copyFileSync(parentSnap, tmp);
+	renameSync(tmp, snapshotPath);
 }

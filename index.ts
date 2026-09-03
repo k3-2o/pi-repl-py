@@ -9,7 +9,7 @@ import { buildHelpersPromptSection } from "./src/extension/helpers.js";
 import { EngineManager, pruneOrphanedSnapshotDirs, pruneSnapshotDirs } from "./src/engine/index.js";
 import { ExecuteCellComponent, type ExecuteDetails, type ExecuteRenderState } from "./src/extension/render.js";
 import { EngineLifecycle, formatHelperFailuresLine, formatHelperToast, formatResetToast } from "./src/extension/session-engine.js";
-import { conversationName, resolveStateDir } from "./src/extension/state-layout.js";
+import { conversationName, inheritForkSnapshot, resolveStateDir } from "./src/extension/state-layout.js";
 import { EXECUTE_DESCRIPTION, buildExecutePromptGuidelines, EXECUTE_PROMPT_SNIPPET } from "./src/extension/tool-meta.js";
 
 const executeSchema = Type.Object({
@@ -72,6 +72,10 @@ export default function (pi: ExtensionAPI) {
 				const { dir, snapshotPath } = resolveStateDir(stateRoot, sessionFile);
 				currentDir = basename(dir);
 				snapshot = { path: snapshotPath };
+				// --- a /fork'd conversation inherits the parent's last namespace (copied once into the fork's own key) ---
+				try {
+					inheritForkSnapshot(stateRoot, sessionFile, snapshotPath);
+				} catch {}
 				// --- keep the state root from growing one dir per session forever; the live dir is exempt ---
 				try {
 					pruneSnapshotDirs(stateRoot, 25, currentDir);
