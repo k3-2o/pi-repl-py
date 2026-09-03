@@ -1,5 +1,3 @@
-// --- KernelClient: one ipykernel subprocess driven directly over ZMTP (no guest middleman). ---
-
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
@@ -9,6 +7,7 @@ import { resolveHelperDirs } from "./helpers-locate.js";
 import {
 	type ConnectionFile,
 	executeRequest,
+	isTrustedMessage,
 	JupyterSession,
 	NAMES_MIME,
 	type ParsedMessage,
@@ -36,20 +35,18 @@ export interface CellResult {
 	result?: string;
 	error?: { name: string; message: string; stack: string[] };
 	status: "ok" | "error" | "aborted";
-	/** Per-channel output was capped; the host adds a truncation marker. */
 	truncated?: { stdout: boolean; stderr: boolean };
 }
 
 export interface CellOptions {
 	signal?: AbortSignal;
 	onStream?: (chunk: string, name: "stdout" | "stderr") => void;
-	/** Cap per-channel output accumulation. Default 1 MiB (the old guest cap). */
 	maxOutputChars?: number;
 }
 
 export interface SnapshotEntry {
 	name: string;
-	/** "value" pickles the object; "def" re-executes captured source (functions and classes). */
+	/** "value" = zlib-compressed pickle (v3 files; v2 are plain); "def" re-executes captured source (functions and classes). */
 	kind: "value" | "def";
 	payload: string;
 }
@@ -60,12 +57,15 @@ export interface SnapshotReply {
 	complete: boolean;
 }
 
-// --- boot preload: exec each helper; ls()/help() are gone, discovery is globals() ---
+export interface HelperLoadResult {
+	name: string;
+	ok: boolean;
+	/** First error line, e.g. "NameError: name 'x' is not defined"; undefined when ok. */
+	error?: string;
+}
 
 /** Read the helpers dir (same skip rules as the extension's prompt loader). */
-/** A directory for the kernel to start in; if the requested cwd is gone, fall back to the
- * evaluator's own cwd rather than letting spawn() die with ENOENT. A deleted project dir is
- * a real resume case (pi guards it too) — the kernel must still come up. */
+/** Kernel cwd falls back to the host cwd when the requested dir is gone (a deleted project is a real resume case). */
 function resolveCwd(requested?: string): string {
 	if (requested && existsSync(requested)) return requested;
 	return process.cwd();
@@ -97,14 +97,8 @@ function buildSkipList(helperNames: string[]): string {
 
 function snapshotCode(helperNames: string[], maxBytes: number): string {
 	const skip = buildSkipList(helperNames);
-	// --- functions and classes defined in cells cannot be pickled by reference, so their
-	// --- source is captured instead and re-executed on restore. getsource works for
-	// --- functions because the code object carries the cell's filename in linecache; for
-	// --- classes inspect's module-file lookup misses, so a class is captured by locating
-	// --- its header from a member method's co_firstlineno and dedent-scanning the block.
-	// --- fallback pickles the value and reports it if that also fails; per-entry and total
-	// --- byte caps mirror the pi-codex scheme: oversized bindings become skipped names.
-	return `import pickle as _pk, base64 as _b64, json as _js, inspect as _in, linecache as _lc
+	// --- defs/classes can't be pickled by reference: capture source and re-exec on restore; oversized entries are skipped by name ---
+	return `import pickle as _pk, base64 as _b64, json as _js, zlib as _zl, inspect as _in, linecache as _lc
 def _repl_class_source(_c):
     _m = getattr(_c, '__init__', None)
     if _m is None or not _in.isfunction(_m):
@@ -174,7 +168,7 @@ for _k, _v in list(globals().items()):
         __repl_kind = 'value'
     try:
         if __repl_p is None:
-            __repl_p = _b64.b64encode(_pk.dumps(_v)).decode()
+            __repl_p = _b64.b64encode(_zl.compress(_pk.dumps(_v), 1)).decode()
         __repl_b = len(__repl_p)
         if __repl_b > __repl_max:
             __repl_f.append({'name': _k, 'reason': 'exceeds per-entry snapshot cap'})
@@ -188,15 +182,14 @@ for _k, _v in list(globals().items()):
 get_ipython().display_pub.publish({${JSON.stringify(SNAPSHOT_MIME)}: _js.dumps({'version': 2, 'entries': __repl_e, 'failed': __repl_f})})`;
 }
 
-function restoreCode(entries: SnapshotEntry[]): string {
+function restoreCode(entries: SnapshotEntry[], compressedValues: boolean): string {
 	const per = entries
 		.map(({ name, kind, payload }) => {
 			const n = JSON.stringify(name);
 			const body =
 				kind === "def"
 					? // re-execute captured source and register it in linecache under the code
-						// object's filename so a later snapshot can capture it as source again;
-						// exec also binds the name the source defines.
+						// --- exec also registers the source in linecache so a later snapshot can capture it again ---
 						`__repl_src = _b64.b64decode(${JSON.stringify(payload)}).decode()
     exec(__repl_src, globals())
     __repl_obj = globals().get(${n})
@@ -207,7 +200,9 @@ function restoreCode(entries: SnapshotEntry[]): string {
             __repl_fname = getattr(getattr(__repl_init, '__code__', None), 'co_filename', None)
         if __repl_fname:
             _lc.cache[__repl_fname] = (len(__repl_src.splitlines()), None, __repl_src.splitlines(True), __repl_fname)`
-					: `globals()[${n}] = _pk.loads(_b64.b64decode(${JSON.stringify(payload)}))`;
+					: compressedValues
+						? `globals()[${n}] = _pk.loads(_zl.decompress(_b64.b64decode(${JSON.stringify(payload)})))`
+						: `globals()[${n}] = _pk.loads(_b64.b64decode(${JSON.stringify(payload)}))`;
 			return `try:
     ${body}
     __repl_r['restored'].append(${n})
@@ -215,7 +210,7 @@ except Exception as _e:
     __repl_r['failed'].append({'name': ${n}, 'reason': str(_e)})`;
 		})
 		.join("\n");
-	return `import pickle as _pk, base64 as _b64, json as _js, linecache as _lc
+	return `import pickle as _pk, base64 as _b64, json as _js, zlib as _zl, linecache as _lc
 __repl_r = {'restored': [], 'failed': []}
 ${per}
 get_ipython().display_pub.publish({${JSON.stringify(RESTORE_MIME)}: _js.dumps(__repl_r)})`;
@@ -241,7 +236,6 @@ interface ActiveCell {
 	result?: string;
 	error?: { name: string; message: string; stack: string[] };
 	status: CellResult["status"];
-	/** Private-MIME payloads published by this cell (snapshot/restore/names). */
 	payloads: Record<string, string>;
 	lastActivity: number;
 	timedOut: boolean;
@@ -252,11 +246,8 @@ interface ActiveCell {
 	resolve(result: CellResult & { payloads: Record<string, string> }): void;
 	reject(error: Error): void;
 	settled: boolean;
-	/** The shell execute_reply arrived (carries the authoritative status). */
 	replySeen: boolean;
-	/** The matching iopub status idle arrived (published after all output). */
 	idleSeen: boolean;
-	/** The execute_reply content, held until both halves are seen. */
 	reply?: ParsedMessage;
 }
 
@@ -267,6 +258,7 @@ export class KernelClient {
 	private iopub?: ZmtpSocket;
 	private readonly session: JupyterSession;
 	private readonly helperSources: { name: string; source: string }[];
+	private helperBootReport: HelperLoadResult[] = [];
 	private readonly timeoutMs: number;
 	private activeCell?: ActiveCell;
 	private connectionFilePath?: string;
@@ -274,6 +266,10 @@ export class KernelClient {
 	/** Serializes all kernel ops: one execute at a time, snapshots between cells. */
 	private queue: Promise<unknown> = Promise.resolve();
 	private _onUnexpectedExit?: () => void;
+	get helperReport(): readonly HelperLoadResult[] {
+		return this.helperBootReport;
+	}
+
 	/** Engine hook: an unexpected kernel death (not a deliberate kill) should drop the instance. */
 	setOnUnexpectedExit(fn: () => void): void {
 		this._onUnexpectedExit = fn;
@@ -282,7 +278,7 @@ export class KernelClient {
 	private silenceKillTimer?: ReturnType<typeof setTimeout>;
 	private pendingReplies = new Map<
 		string,
-		{ resolve(m: ParsedMessage): void; timer?: ReturnType<typeof setTimeout> }
+		{ resolve(m: ParsedMessage): void; timer?: ReturnType<typeof setTimeout>; expectedType: string }
 	>();
 
 	private constructor(conn: ConnectionFile, opts: KernelOptions) {
@@ -293,7 +289,6 @@ export class KernelClient {
 		this.timeoutMs = opts.timeoutMs ?? 0;
 	}
 
-	/** Spawn ipykernel, connect all channels, and wait until it answers. */
 	static async start(pythonPath: string, opts: KernelOptions = {}): Promise<KernelClient> {
 		const connPath = join(tmpdir(), `pi-repl-kernel-${randomUUID()}.json`);
 		const child = spawn(pythonPath, ["-m", "ipykernel", "-f", connPath, "--no-stdout"], {
@@ -325,7 +320,6 @@ export class KernelClient {
 				conn = readConnectionFile(connPath);
 				break;
 			} catch {
-				// --- not present yet, or mid-write: retry ---
 				await new Promise((resolve) => setTimeout(resolve, 25));
 			}
 		}
@@ -334,8 +328,7 @@ export class KernelClient {
 		kc.child = child;
 		kc.connectionFilePath = connPath;
 		child.on("exit", () => {
-			// --- a dead kernel settles the running cell; the engine rebuilds. clear child/ready
-			// --- so isRunning reflects death and the engine never resumes a zombie process. ---
+			// --- clear child/ready on death so isRunning reflects it and the engine never resumes a zombie ---
 			kc.settleActive(new Error("kernel process exited"));
 			kc.child = undefined;
 			kc.ready = false;
@@ -351,7 +344,7 @@ export class KernelClient {
 		try {
 			await kc.connectChannels(conn);
 			await kc.probeReady();
-			await kc.preload();
+			kc.helperBootReport = await kc.preload();
 			kc.ready = true;
 		} catch (error) {
 			kc.kill();
@@ -384,16 +377,28 @@ export class KernelClient {
 		return this.waitForReply(msgId, KERNEL_READY_TIMEOUT_MS, "kernel_info_reply").then(() => {});
 	}
 
-	/** Exec every helper file into the kernel namespace. No custom intrinsics. */
-	private preload(): Promise<void> {
-		let code = "";
-		for (const h of this.helperSources) code += `\n${h.source}\n`;
-		return this.executeCell(code, { maxOutputChars: DEFAULT_MAX_OUTPUT_CHARS }).then(() => {});
+	/** One cell per helper: a broken helper (syntax error or top-level raise) must cost itself alone, not abort the rest. */
+	private async preload(): Promise<HelperLoadResult[]> {
+		const report: HelperLoadResult[] = [];
+		for (const h of this.helperSources) {
+			const res = await this.executeCell(h.source, { maxOutputChars: DEFAULT_MAX_OUTPUT_CHARS });
+			if (res.status === "ok") {
+				report.push({ name: h.name, ok: true });
+			} else {
+				const err = res.error;
+				report.push({
+					name: h.name,
+					ok: false,
+					error: err ? `${err.name}: ${err.message}` : "failed to load",
+				});
+			}
+		}
+		return report;
 	}
 
 	private onShellMessage(frames: Buffer[]): void {
 		const msg = this.session.parseMessage(frames);
-		if (!msg) return;
+		if (!isTrustedMessage(msg)) return;
 		const active = this.activeCell;
 		if (msg.msg_type === "execute_reply" && active && msg.parent.msg_id === active.msgId) {
 			// --- the shell reply races the iopub stream: record it, settle only after idle ---
@@ -407,14 +412,14 @@ export class KernelClient {
 
 	private onControlMessage(frames: Buffer[]): void {
 		const msg = this.session.parseMessage(frames);
-		if (!msg) return;
+		if (!isTrustedMessage(msg)) return;
 		// interrupt_reply / shutdown_reply — nothing awaits them; keep draining.
 		this.resolveReply(msg);
 	}
 
 	private onIopubMessage(frames: Buffer[]): void {
 		const msg = this.session.parseMessage(frames);
-		if (!msg) return;
+		if (!isTrustedMessage(msg)) return;
 		const active = this.activeCell;
 		if (!active || msg.parent.msg_id !== active.msgId) return;
 		active.lastActivity = Date.now();
@@ -490,13 +495,15 @@ export class KernelClient {
 				reject(new Error(`kernel did not answer ${expectedType} in time`));
 			}, timeoutMs);
 			timer.unref?.();
-			this.pendingReplies.set(msgId, { resolve, timer });
+			this.pendingReplies.set(msgId, { resolve, timer, expectedType });
 		});
 	}
 
 	private resolveReply(msg: ParsedMessage): void {
 		const pending = this.pendingReplies.get(msg.parent.msg_id as string);
 		if (!pending) return;
+		// --- any reply echoes the parent id; only the awaited type settles the wait, the timer stays armed for it ---
+		if (msg.msg_type !== pending.expectedType) return;
 		this.pendingReplies.delete(msg.parent.msg_id as string);
 		if (pending.timer) clearTimeout(pending.timer);
 		pending.resolve(msg);
@@ -614,8 +621,7 @@ export class KernelClient {
 				if (quiet >= this.timeoutMs && !active.settled) {
 					active.timedOut = true;
 					this.interrupt();
-					// --- the interrupt is a real KeyboardInterrupt, but a cell that swallows/ignores
-					// --- it never replies; escalate to a kill so the queue is freed, mirroring index.ts. ---
+					// --- a cell that swallows the interrupt never replies; escalate to a kill so the queue frees ---
 					this.silenceKillTimer ??= setTimeout(() => {
 						if (!active.settled) this.kill();
 					}, SILENCE_KILL_GRACE_MS);
@@ -670,10 +676,13 @@ export class KernelClient {
 		});
 	}
 
-	restore(entries: SnapshotEntry[]): Promise<{ restored: string[]; failed: { name: string; reason: string }[] }> {
+	restore(
+		entries: SnapshotEntry[],
+		compressedValues = false,
+	): Promise<{ restored: string[]; failed: { name: string; reason: string }[] }> {
 		if (entries.length === 0) return Promise.resolve({ restored: [], failed: [] });
 		return this.enqueue(async () => {
-			const res = await this.executeCellNow(restoreCode(entries), { maxOutputChars: 8_000_000 });
+			const res = await this.executeCellNow(restoreCode(entries, compressedValues), { maxOutputChars: 8_000_000 });
 			const payload = res.payloads[RESTORE_MIME];
 			if (payload === undefined) return { restored: [], failed: [] };
 			try {

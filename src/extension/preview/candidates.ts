@@ -1,9 +1,5 @@
-// --- candidates: a Python-flavored file detector plus generic line scoring ---
-
 import { descriptor } from "./descriptor.js";
 import type { Candidate } from "./types.js";
-
-// --- Python file effects: verb + literal path, in the idioms this evaluator runs ---
 
 const PY_CHAINED_METHOD: ReadonlyArray<[string, string, number]> = [
 	["write_text", "write", 95],

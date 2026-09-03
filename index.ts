@@ -5,9 +5,10 @@ import { homedir } from "node:os";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 import { withSkillsBlock } from "./src/extension/skill-hook.js";
+import { buildHelpersPromptSection } from "./src/extension/helpers.js";
 import { EngineManager, pruneOrphanedSnapshotDirs, pruneSnapshotDirs } from "./src/engine/index.js";
 import { ExecuteCellComponent, type ExecuteDetails, type ExecuteRenderState } from "./src/extension/render.js";
-import { EngineLifecycle, formatResetToast } from "./src/extension/session-engine.js";
+import { EngineLifecycle, formatHelperFailuresLine, formatHelperToast, formatResetToast } from "./src/extension/session-engine.js";
 import { conversationName, resolveStateDir } from "./src/extension/state-layout.js";
 import { EXECUTE_DESCRIPTION, buildExecutePromptGuidelines, EXECUTE_PROMPT_SNIPPET } from "./src/extension/tool-meta.js";
 
@@ -59,18 +60,11 @@ export default function (pi: ExtensionAPI) {
 	const pendingErrorResults = new Map<string, { details: ExecuteDetails }>();
 
 	const lifecycle = new EngineLifecycle<EngineManager>({
-		// --- boot deadline: bounds kernel start + helpers preload (recovery is a background
-		// --- quiet-gap job, bounded by the engine's own restore-cell watchdog). An npm update
-		// --- swaps the venv and helpers under a live kernel, and the first boot after it can
-		// --- wedge; without this the first cell hangs forever, because acquire() dedupes onto
-		// --- the same hung boot. ---
+		// --- bound the boot: a wedged first boot would hang every cell (acquire() dedupes onto it) ---
 		bootTimeoutMs: Number(process.env.PI_REPL_BOOT_TIMEOUT_MS ?? 90_000) || 90_000,
 		create(skipRestore = false) {
 			const { cwd, sessionFile } = location;
-			// --- kernel namespace state lives under ~/.pi/agent/pi-repl/state, keyed by
-			// --- <project-slug>__<conversation>, so it never clutters the project and two
-			// --- conversations can never share a snapshot dir (resolveStateDir migrates any
-			// --- pre-slug legacy dir on start). Ephemeral sessions get no snapshot at all. ---
+			// --- state lives under ~/.pi/agent/pi-repl/state/<slug>__<conv>; conversations never share a snapshot; ephemeral sessions get none ---
 			const stateRoot = join(homedir(), ".pi", "agent", "pi-repl", "state");
 			let snapshot: { path: string } | undefined;
 			let currentDir: string | undefined;
@@ -82,19 +76,14 @@ export default function (pi: ExtensionAPI) {
 				try {
 					pruneSnapshotDirs(stateRoot, 25, currentDir);
 				} catch {}
-				// --- cascade deletions: if a conversation is deleted, its snapshots die with it.
-				// --- sessionFile is sessions/<project-root>/<name>.jsonl, so the sessions root is
-				// --- two parent hops up; dirs whose conversation file exists in no project root
-				// --- (and that aren't this session or the ephemeral fallback) are swept, in both
-				// --- the legacy bare-name and slug-keyed formats. ---
+				// --- sweep state dirs whose conversation file exists in no project root: deleting a conversation deletes its snapshots (both dir formats) ---
 				try {
 					pruneOrphanedSnapshotDirs(stateRoot, sessionFile ? dirname(dirname(sessionFile)) : undefined, currentDir);
 				} catch {}
 			}
 			return new EngineManager({
 				cwd,
-				// --- snapshots are keyed to the conversation; ephemeral sessions get none.
-				// --- skipRestore is true on the lifecycle's retry after a wedged boot. ---
+				// --- snapshots are per-conversation; skipRestore marks the wedged-boot retry ---
 				snapshot,
 				skipRestore,
 			});
@@ -116,15 +105,12 @@ export default function (pi: ExtensionAPI) {
 			pi.setActiveTools(pi.getActiveTools().filter((name) => name !== "execute"));
 			return;
 		}
-		// --- active: the whole surface collapses to the one tool ---
 		pi.setActiveTools(["execute"]);
-		// --- warm the engine (and its revive) in the background; no popup. ---
-		// --- acquire() dedupes, so the first execute awaits this same in-flight boot ---
+		// --- warm the engine in the background; acquire() dedupes, so the first execute awaits this same boot ---
 		location = { cwd: ctx.cwd, sessionFile: ctx.sessionManager.getSessionFile() ?? undefined };
 		const sessionKey = location.sessionFile ? conversationName(location.sessionFile) : undefined;
 		void lifecycle.acquire("startup", sessionKey).catch(() => {
-			// --- boot/revive handled on the execute path; swallow so a background warm can never
-			// --- surface an unhandled rejection. A resume's notice lands on the first cell. ---
+			// --- swallow the warm boot's rejection: boot/revive are handled on the execute path ---
 		});
 	});
 
@@ -141,14 +127,14 @@ export default function (pi: ExtensionAPI) {
 		return { content: event.content, details: stashed.details, isError: true };
 	});
 
-	// --- pi gates skills on the read tool (absent in repl); re-emit them via withSkillsBlock. ---
-	pi.on("before_agent_start", (event) => {
+	// --- pi gates skills on the read tool (absent in repl); the helper roster is rebuilt per session from the session cwd, not the launch cwd, so resumes advertise what the kernel loaded ---
+	pi.on("before_agent_start", (event, ctx) => {
 		if (!active()) return;
-		const systemPrompt = withSkillsBlock(
-			event.systemPrompt,
-			event.systemPromptOptions?.skills ?? [],
-		);
-		return systemPrompt === undefined ? undefined : { systemPrompt };
+		const skillsPrompt = withSkillsBlock(event.systemPrompt, event.systemPromptOptions?.skills ?? []);
+		let systemPrompt = skillsPrompt ?? event.systemPrompt;
+		const helpersBlock = buildHelpersPromptSection(ctx?.cwd ?? process.cwd());
+		if (helpersBlock) systemPrompt = `${systemPrompt}\n\n${helpersBlock}`;
+		return systemPrompt === event.systemPrompt ? undefined : { systemPrompt };
 	});
 
 	pi.registerTool<typeof executeSchema, ExecuteDetails, Partial<ExecuteRenderState>>({
@@ -156,7 +142,7 @@ export default function (pi: ExtensionAPI) {
 		label: "execute",
 		description: EXECUTE_DESCRIPTION,
 		promptSnippet: EXECUTE_PROMPT_SNIPPET,
-		promptGuidelines: buildExecutePromptGuidelines(process.cwd()),
+		promptGuidelines: buildExecutePromptGuidelines(),
 		parameters: executeSchema,
 		renderShell: "self",
 		renderCall(args, theme, context) {
@@ -184,10 +170,8 @@ export default function (pi: ExtensionAPI) {
 				throw new Error("pi-repl is dormant in this session. Start pi with --repl (or PI_REPL_FORCE=1) to use execute.");
 			}
 			if (ctx?.cwd) location = { cwd: ctx.cwd, sessionFile: ctx.sessionManager?.getSessionFile?.() ?? undefined };
-			// --- establish the body slot at call time so Ctrl+O can expand a live (still-awaiting) stream;
-			// --- without this the host only renders the result once the first partial or the final result lands ---
+			// --- establish the body slot at call time so Ctrl+O can expand a live, still-streaming cell ---
 			onUpdate?.({ content: [], details: {} });
-			// --- previous engine died mid-session; acquire revives it ---
 			const sessionKey = location.sessionFile ? conversationName(location.sessionFile) : undefined;
 			const { engine: m } = await lifecycle.acquire("cell", sessionKey);
 			try {
@@ -200,11 +184,19 @@ export default function (pi: ExtensionAPI) {
 						onUpdate?.({ content: [{ type: "text", text: streamed }], details: {} });
 					},
 				});
-				// --- reset notice leads so the model reads that its namespace was rebuilt; the
-				// --- human gets a terse notification instead of the marker, fire and forget ---
+				// --- reset notice leads so the model reads the rebuild; the human gets a terse toast instead ---
 				const reset = lifecycle.takeResetNotice();
 				if (reset?.notice) ctx?.ui?.notify?.(formatResetToast(reset.origin, reset.restore, reset.wedged), "info");
-				const sections = [reset?.notice, r.stdout, r.stderr, r.result];
+				// --- helper verdicts once per boot: toast for the human, marker for the model only when a helper failed (all-good boots stay silent) ---
+				const helperReport = m.takeHelperReport();
+				if (helperReport && helperReport.length > 0) ctx?.ui?.notify?.(formatHelperToast(helperReport), "info");
+				const sections = [
+					reset?.notice,
+					formatHelperFailuresLine(helperReport),
+					r.stdout,
+					r.stderr,
+					r.result,
+				];
 				const errorLines = r.error ? composeErrorLines(r.error) : undefined;
 				if (r.status === "error" && errorLines) sections.push(errorLines.join("\n"));
 				if (r.status === "aborted") sections.push("[cell aborted]");

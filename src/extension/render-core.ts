@@ -114,12 +114,7 @@ function marker(state: ExecuteRenderState, deps: RenderDeps): string {
 	}
 }
 
-/**
- * highlight.js python emits no scope for plain identifiers, so they arrive as raw (uncolored)
- * text mixed with SGR-colored tokens and bare punctuation. Re-color only whole identifier runs
- * that sit outside any colored span, leaving keywords, strings, numbers, and other already
- * colored tokens untouched.
- */
+/** highlight.js emits no scope for bare Python identifiers — re-color only raw runs outside colored spans. */
 function colorBareIdentifiers(line: string, paint: (id: string) => string): string {
 	if (!line.includes("\x1b") && !/[a-zA-Z_]/.test(line)) return line;
 	const out: string[] = [];
@@ -160,7 +155,6 @@ function colorBareIdentifiers(line: string, paint: (id: string) => string): stri
 			i = end;
 			continue;
 		}
-		// only raw (uncolored) text may be repainted; colored tokens pass through untouched
 		if (colored) out.push(line[i]);
 		else pending += line[i];
 		i++;
@@ -242,9 +236,7 @@ function sanitizeTuiOutput(text: string): string {
 		.replace(/[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f-\x9f]/g, "�");
 }
 
-/** Wrap a ready-colored span into `lines`: first row takes the prefix, wrapped
- * continuations take indent (and an optional extra indent), each row is
- * truncated to pane width and closed if it ends on an open SGR color. */
+/** Wrap a colored span: first row takes the prefix, continuations the indent; truncate to width and close open SGR colors. */
 function pushWrappedLines(
 	lines: string[],
 	prefix: string,
@@ -306,12 +298,7 @@ function renderCode(state: ExecuteRenderState, lines: string[], width: number, d
 	return true;
 }
 
-/**
- * Streaming output is append-only, so a wrapped blob only changes at its tail.
- * The cache lives on the (persistent) state object via a WeakMap, letting an
- * updated body re-wrap just the appended delta: O(chunk) instead of O(output).
- * Fresh states (unit tests, first render) fall back to a full wrap.
- */
+/** Output is append-only: the cached wrap re-wraps just the tail — O(chunk) instead of O(output). */
 interface BlobWrapEntry {
 	text: string;
 	color: string;
@@ -321,20 +308,14 @@ interface BlobWrapEntry {
 }
 
 const blobWrapCache = new WeakMap<ExecuteRenderState, Map<number, BlobWrapEntry>>();
-/** Wrapped+highlighted rows rebuild only when their inputs (text/width) change; the
- * TUI re-renders bodies on every frame, so these caches turn per-frame work into
- * one build per change. They live on the persistent per-call state, which the host
- * keeps for the session, so a small bound per state keeps resize churn bounded. */
+/** Row caches keyed by text/width turn per-frame renders into one build per change; bounded per state against resize churn. */
 interface CodeEntry {
 	code: string;
 	lines: string[];
 }
 const codeWrapCache = new WeakMap<ExecuteRenderState, Map<number, CodeEntry>>();
 
-/** Window resizes add a per-width entry per cell; keep a small bound so a long
- * session with resize churn cannot grow the wrap caches without limit. Map
- * iteration order is insertion order, so evicting the first key drops the oldest
- * width rather than the one in use. */
+/** Bound per-width cache entries; insertion order evicts the oldest width first. */
 const MAX_CACHED_WIDTHS_PER_STATE = 3;
 function boundWidthCache(perWidth: Map<number, unknown>): void {
 	while (perWidth.size >= MAX_CACHED_WIDTHS_PER_STATE) {
@@ -352,9 +333,7 @@ function widthOf(ch: string): number {
 	return code < 0x80 ? 1 : CJK_WIDE_RE.test(ch) ? 2 : 1;
 }
 
-/** Fast single-pass word wrap for ANSI-free text: pi-tui's ANSI-aware wrap is
- * ~45ms on a 45K blob; sanitized output needs no ANSI handling, so this splits
- * at spaces with an O(width) scan per row and hard-breaks overlong words. */
+/** Fast word wrap for sanitized text: pi-tui's ANSI-aware wrap costs ~45ms on a 45K blob. */
 function wrapPlainText(text: string, width: number): string[] {
 	if (width <= 0 || text.length <= width) return [text];
 	// --- fast path: pure ASCII, break by char index ---
@@ -430,8 +409,7 @@ function wrapPlainText(text: string, width: number): string[] {
 	return rows;
 }
 
-/** Wrap a raw output line exactly the way the section loops did: sanitize, wrap (fast),
- * then colorize row-by-row so the color span never bleeds across rows. */
+/** Sanitize → fast wrap → colorize rows, so an SGR span never bleeds across rows. */
 function wrapRawOutputLine(lines: string[], raw: string, color: string, width: number, deps: RenderDeps): string[] {
 	const before = lines.length;
 	const safe = sanitizeTuiOutput(raw || " ");
@@ -517,8 +495,7 @@ function renderOutput(
 	}
 
 	if (details?.errorStack && details.errorStack.length > 0) {
-		// --- a traceback IS output: without this flag a pure-traceback error cell (no
-		// --- stdout/stderr/result, the common error shape) also rendered "no output" below it ---
+		// --- a traceback IS output: without this, a pure-traceback error cell also rendered "no output" below it ---
 		renderedText = true;
 		output.push(` ${OUTPUT_INDENT}${deps.fg("dim", "traceback:")}`);
 		for (const line of details.errorStack) {
@@ -532,10 +509,7 @@ function renderOutput(
 		addWrapped(output, OUTPUT_INDENT, deps.fg("muted", message), width, deps, { sanitize: false });
 	}
 
-	// --- bottom cushion: streams end with a newline, so blobs already render a trailing blank
-	// --- row; traceback and the placeholder have no such newline and would sit flush against
-	// --- the panel's bottom edge. Normalize: the panel always ends with one blank painted row.
-	// --- (SGR stripped before the blank test; the colored rows themselves stay untouched.) ---
+	// --- the panel always ends with one blank row: streams end with a newline, tracebacks and placeholders don't ---
 	const lastRow = output[output.length - 1];
 	if (lastRow !== undefined && lastRow.replace(SGR_PATTERN, "").trim() !== "") output.push("");
 
@@ -544,7 +518,6 @@ function renderOutput(
 	lines.push(...output);
 }
 
-/** Paint the status-matched panel background across the row, surviving inner SGR resets. */
 export function paintBackground(line: string, width: number, kind: StatusKind, deps: RenderDeps): string {
 	const bgAnsi = deps.getBgAnsi(backgroundFor(kind));
 	const padded = line + " ".repeat(Math.max(0, width - deps.visibleWidth(line)));

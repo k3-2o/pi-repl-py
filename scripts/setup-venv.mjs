@@ -1,16 +1,5 @@
 #!/usr/bin/env node
-/**
- * postinstall: build the stable per-user Python venv the evaluator needs.
- *
- * On a package install the venv is built at a stable path the engine knows:
- *
- *   ~/.pi/agent/pi-repl/venv/bin/python3
- *
- * The venv is repaired in place: if it exists but ipykernel is not importable,
- * this reflushes the venv and reinstalls rather than trusting a half-built one.
- * Failures are NOT silent: a bad build exits non-zero so `npm install` / `pi
- * install` visibly fails instead of leaving a broken evaluator.
- */
+/** postinstall: build the stable per-user venv at ~/.pi/agent/pi-repl/venv; repair in place if ipykernel is missing; a bad build fails the install loudly. */
 
 import { execSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
@@ -22,8 +11,7 @@ const PY = join(VENV_DIR, "bin", "python3");
 const DEPS = ["ipykernel"];
 const HELPERS_DIR = join(homedir(), ".pi", "agent", "pi-repl", "helpers");
 
-// A venv that exists but can't import ipykernel is broken. Never trust the
-// binary alone — a half-built venv otherwise looks "already up" forever.
+// A venv that can't import ipykernel is broken — never trust the binary alone.
 function ipykernelOk() {
   try {
     execSync(`${PY} -c "import ipykernel"`, { stdio: "ignore" });
@@ -50,10 +38,7 @@ function findSystemPython() {
   return null;
 }
 
-// ---------------------------------------------------------------- helpers dir
-// The helpers dir is user-owned. We create it empty on install. The REPL
-// provides shell and file IO natively; helpers are for things the user adds
-// themselves (e.g. web_search, custom skills). Existing files are never clobbered.
+// --- helpers dir: user-owned, created empty; existing files are never clobbered ---
 function seedHelpersDir() {
   try {
     mkdirSync(HELPERS_DIR, { recursive: true });
@@ -89,9 +74,7 @@ function main() {
     }
     log("done. The pi-repl evaluator will use this venv.");
   } catch (error) {
-    // A real failure must not exit 0 with a broken venv. npm/pi will see the
-    // nonzero exit and report the install as failed instead of silently
-    // handing the user a dead evaluator.
+    // a real failure must exit non-zero — never hand the user a dead evaluator
     fail(`could not build the evaluator venv (${error && error.message ? error.message : error}). `);
   }
 }

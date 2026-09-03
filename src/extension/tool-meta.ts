@@ -1,15 +1,9 @@
-// --- tool-meta: thin surface assembling the execute tool's prompt from pure modules ---
-// --- the model contract lives in prompt.ts; only the helpers wiring stays here ---
-
-import { buildHelpersMap, buildHelpersMapForCwd } from "./helpers.js";
 import { buildPromptGuidelines, executePromptSnippet, executeToolDescription } from "./prompt.js";
 
 export const EXECUTE_DESCRIPTION = executeToolDescription;
 export const EXECUTE_PROMPT_SNIPPET = executePromptSnippet;
 
-// --- build the guidelines from project + global helper dirs ---
-export function buildExecutePromptGuidelines(cwd?: string): string[] {
-	const map = cwd ? buildHelpersMapForCwd(cwd) : buildHelpersMap();
-	const preloaded = map.length > 0 ? map : [];
-	return buildPromptGuidelines(preloaded);
+// --- static guidelines only; the per-session helper roster is spliced into the system prompt (helpers.ts) ---
+export function buildExecutePromptGuidelines(): string[] {
+	return buildPromptGuidelines();
 }

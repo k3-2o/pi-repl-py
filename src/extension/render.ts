@@ -30,10 +30,7 @@ function makeDeps(theme: Theme): RenderDeps {
 	};
 }
 
-/** O(1) key: a host-bumped dirty counter plus mode state. `withSpinner` folds
- * the animation frame so the header alone animates while running; the body key
- * excludes it, so a running cell only redraws when output actually changes
- * instead of re-wrapping the whole body every 120ms. */
+/** O(1) body key excludes the spinner frame, so a running cell redraws only when output changes, not every 120ms. */
 function renderVersion(state: ExecuteRenderState, withSpinner: boolean): string {
 	const spinner = withSpinner && statusKind(state) === "running" ? Math.floor(Date.now() / 120) % 4 : -1;
 	return `${state.version ?? 0}|${state.expanded}|${spinner}`;

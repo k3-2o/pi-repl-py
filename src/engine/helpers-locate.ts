@@ -5,7 +5,6 @@ import { dirname, join, resolve } from "node:path";
 
 const GLOBAL_HELPERS_DIR = join(homedir(), ".pi", "agent", "pi-repl", "helpers");
 
-/** Ordered candidate dirs: nearest .pi/helpers up to the git root, then the global dir last. */
 export function resolveHelperDirs(cwd?: string, globalDir?: string): string[] {
 	const dirs: string[] = [];
 	if (cwd) {

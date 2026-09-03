@@ -13,6 +13,7 @@ import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { inflateSync } from "node:zlib";
 import { EngineManager } from "../src/engine/index.ts";
 import { EngineLifecycle } from "../src/extension/session-engine.ts";
 
@@ -60,6 +61,21 @@ describe("host × python-kernel integration", () => {
 		expect(r3.stdout).toContain("x is 10");
 		expect(r3.stdout).toContain("20");
 	});
+
+	test(
+		"a deleted session cwd does not prevent the kernel from booting (cwd fallback)",
+		{ timeout: 60_000 },
+		async () => {
+			const d = tempDir();
+			const m = engine({ cwd: d });
+			// the resume case the fallback exists for: the project dir is gone by boot time
+			rmSync(d, { recursive: true, force: true });
+			const r = await m.execute(`import os
+print(os.getcwd() != ${JSON.stringify(d)})`);
+			expect(r.status).toBe("ok");
+			expect(r.stdout).toContain("True");
+		},
+	);
 
 	test("a raising cell reports a real traceback and does not kill the namespace", { timeout: 60_000 }, async () => {
 		const d = tempDir();
@@ -171,6 +187,53 @@ describe("host × python-kernel integration", () => {
 	});
 
 	test(
+		"a broken helper fails alone: the others still load, and the boot report names it",
+		{ timeout: 60_000 },
+		async () => {
+			const d = tempDir();
+			const helpers = tempDir();
+			writeFileSync(join(helpers, "scraper.py"), "def scraper(\n"); // SyntaxError
+			writeFileSync(join(helpers, "double.py"), "def double(n):\n    return n * 2\n");
+			const m = engine({ cwd: d, env: { PI_HELPERS_DIR: helpers } });
+
+			const r = await m.execute("print('has double:', 'double' in globals())");
+			expect(r.status).toBe("ok");
+			expect(r.stdout).toContain("has double: True"); // the sibling helper survived
+
+			const report = m.takeHelperReport();
+			expect(report).not.toBeNull();
+			expect(report!.length).toBe(2); // alphabetical: double loads, scraper fails
+			const double = report!.find((h) => h.name === "double");
+			const scraper = report!.find((h) => h.name === "scraper");
+			expect(double?.ok).toBe(true);
+			expect(scraper?.ok).toBe(false);
+			expect(scraper?.error).toContain("SyntaxError");
+
+			// the report is handed out exactly once per boot
+			expect(m.takeHelperReport()).toBeNull();
+		},
+	);
+
+	test(
+		"an all-good boot reports every helper loaded and stays quiet on the second take",
+		{ timeout: 60_000 },
+		async () => {
+			const d = tempDir();
+			const helpers = tempDir();
+			writeFileSync(join(helpers, "web.py"), "def web():\n    return 'W'\n");
+			writeFileSync(join(helpers, "core.py"), "def core():\n    return 'C'\n");
+			const m = engine({ cwd: d, env: { PI_HELPERS_DIR: helpers } });
+
+			await m.execute("1 + 1"); // settle the boot, then take the report
+			const report = m.takeHelperReport();
+			expect(report).not.toBeNull();
+			expect(report!.filter((h) => h.ok).map((h) => h.name)).toEqual(["core", "web"]);
+			expect(report!.some((h) => !h.ok)).toBe(false);
+			expect(m.takeHelperReport()).toBeNull();
+		},
+	);
+
+	test(
 		"a fresh engine serves the first cell before the quiet-gap restore; the restore then lands",
 		{ timeout: 90_000 },
 		async () => {
@@ -225,6 +288,109 @@ describe("host × python-kernel integration", () => {
 		expect(r2.status).toBe("ok");
 		expect(r2.stdout).toContain("42");
 		expect(r2.stdout).toContain("hello");
+	});
+
+	test(
+		"bindings skipped at save time are named in the resume result, not dropped silently",
+		{ timeout: 60_000 },
+		async () => {
+			const d = tempDir();
+			// tiny caps: the huge binding exceeds the per-entry cap and is skipped AT SAVE time
+			const snap = { path: join(d, "ns.snapshot"), debounceMs: 200, maxBytes: 1000 };
+			const m1 = engine({ cwd: d, snapshot: snap });
+
+			const r1 = await m1.execute("import os\nhuge = os.urandom(5000)\nkept = {'k': 1}");
+			expect(r1.status).toBe("ok");
+			const saved = await m1.snapshotState();
+			expect(saved?.saved).toContain("kept");
+			expect(saved?.failed.find((f) => f.name === "huge")?.reason).toContain("cap");
+
+			const m2 = engine({ cwd: d, snapshot: snap });
+			const restore = await m2.restoreState();
+			expect(restore?.restored).toContain("kept");
+			// the save-time skip surfaces in the restore result (and thus the resume notice),
+			// which previously only named failures that happened again during restore
+			expect(restore?.failed.some((f) => f.name === "huge")).toBe(true);
+			const r2 = await m2.execute("print('huge' in globals(), kept['k'])");
+			expect(r2.status).toBe("ok");
+			expect(r2.stdout).toContain("False");
+			expect(r2.stdout).toContain("1");
+		},
+	);
+
+	test("same-name mutations survive a crash via the periodic refresh", { timeout: 60_000 }, async () => {
+		const d = tempDir();
+		const snap = { path: join(d, "ns.snapshot"), debounceMs: 50, periodMs: 200 };
+		const m1 = engine({ cwd: d, snapshot: snap });
+
+		const r1 = await m1.execute("data = {'k': 1}");
+		expect(r1.status).toBe("ok");
+		// name-change snapshot lands
+		await new Promise((resolve) => setTimeout(resolve, 500));
+
+		// in-place mutation: names unchanged, so only the staleness clock can re-arm
+		const r2 = await m1.execute("data['k'] = 42");
+		expect(r2.status).toBe("ok");
+		// the period elapses; the first cell after it sees the stale clock and refreshes
+		await new Promise((resolve) => setTimeout(resolve, 700));
+		const r3 = await m1.execute("1 + 1");
+		expect(r3.status).toBe("ok");
+		await new Promise((resolve) => setTimeout(resolve, 500));
+		await m1.kill(); // crash path: no dispose flush — only the forced refresh can save it
+
+		const m2 = engine({ cwd: d, snapshot: snap });
+		const restore = await m2.restoreState();
+		expect(restore?.restored).toContain("data");
+		const r4 = await m2.execute("print(data['k'])");
+		expect(r4.status).toBe("ok");
+		expect(r4.stdout).toContain("42");
+	});
+
+	test("snapshot files are version 3 with zlib-compressed value payloads", { timeout: 60_000 }, async () => {
+		const d = tempDir();
+		const snap = { path: join(d, "ns.snapshot"), debounceMs: 200 };
+		const m1 = engine({ cwd: d, snapshot: snap });
+		await m1.execute("payload_v = {'a': 1}");
+		await m1.snapshotState();
+		const file = JSON.parse(readFileSync(snap.path, "utf8")) as {
+			version: number;
+			entries: { name: string; kind: string; payload: string }[];
+		};
+		expect(file.version).toBe(3);
+		const entry = file.entries.find((e) => e.name === "payload_v");
+		expect(entry).toBeDefined();
+		// the payload must be a zlib stream (a raw pickle would fail to decompress)
+		expect(inflateSync(Buffer.from(entry!.payload, "base64")).length).toBeGreaterThan(0);
+	});
+
+	test("a version 2 snapshot file (plain pickles) still restores", { timeout: 60_000 }, async () => {
+		const d = tempDir();
+		const snap = { path: join(d, "ns.snapshot"), debounceMs: 200 };
+		const m1 = engine({ cwd: d, snapshot: snap });
+		await m1.execute("legacy = {'v': 7}");
+		await m1.snapshotState();
+		// downgrade the file to the pre-compression format: unwrap each value payload to the raw pickle
+		const file = JSON.parse(readFileSync(snap.path, "utf8")) as {
+			version: number;
+			entries: { name: string; kind: string; payload: string }[];
+			failed: unknown[];
+		};
+		expect(file.version).toBe(3);
+		for (const e of file.entries) {
+			if (e.kind === "value") {
+				const raw = inflateSync(Buffer.from(e.payload, "base64"));
+				e.payload = Buffer.from(raw).toString("base64");
+			}
+		}
+		file.version = 2;
+		writeFileSync(snap.path, JSON.stringify(file));
+
+		const m2 = engine({ cwd: d, snapshot: snap });
+		const restore = await m2.restoreState();
+		expect(restore?.restored).toContain("legacy");
+		const r = await m2.execute("print(legacy['v'])");
+		expect(r.status).toBe("ok");
+		expect(r.stdout).toContain("7");
 	});
 
 	test(

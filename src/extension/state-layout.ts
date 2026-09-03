@@ -1,34 +1,21 @@
-// --- where a conversation's kernel state lives: ~/.pi/agent/pi-repl/state/<key>.
-// --- Keys must never collide across conversations, so the project-root slug joins the
-// --- conversation name. Pre-slug legacy dirs (bare name) migrate to the slug key on the
-// --- owning conversation's next start; the orphan sweep still recognizes both formats,
-// --- so nothing live is ever swept and a deleted conversation loses all its snapshots. ---
+// --- state lives at ~/.pi/agent/pi-repl/state/<slug>__<conv>: legacy bare-name dirs migrate on the owning conversation's next start, and the sweep knows both formats, so nothing live is swept and a deleted conversation loses its snapshots ---
 import { existsSync, renameSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
-/** The conversation's own name: the session file's basename without .jsonl (unique per conversation). */
 export function conversationName(sessionFile: string): string {
 	return basename(sessionFile).replace(/\.jsonl$/, "");
 }
 
-/** Slug-keyed state dir name: unique among all conversations under one sessions root, so two
- * conversations whose files happen to share a basename (copied/renamed session files) can never
- * share a snapshot. */
+/** Slug-keyed dir name: conversations whose files share a basename can never share a snapshot. */
 export function sessionStateDirName(sessionFile: string): string {
 	return `${basename(dirname(sessionFile))}__${conversationName(sessionFile)}`;
 }
 
-/** The pre-slug dir name; still honored when migrating or scanning live conversations. */
 function legacyStateDirName(sessionFile: string): string {
 	return conversationName(sessionFile);
 }
 
-/**
- * Resolve a conversation's state dir and snapshot file, migrating a legacy bare-name dir to the
- * slug key on first start. Two conversations whose files share a basename therefore never share a
- * snapshot file: whichever starts first migrates the legacy dir to its own key; the other starts
- * empty rather than bleeding into the first's namespace.
- */
+/** Resolve the state dir, migrating a legacy bare-name dir on first start — whichever conversation starts first owns the legacy dir; the other starts empty. */
 export function resolveStateDir(stateRoot: string, sessionFile: string): { dir: string; snapshotPath: string } {
 	const dir = join(stateRoot, sessionStateDirName(sessionFile));
 	const legacy = join(stateRoot, legacyStateDirName(sessionFile));

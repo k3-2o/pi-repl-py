@@ -1,4 +1,3 @@
-// --- descriptor: collapse the raw line into one readable, safe, width-capped string ---
 const DESCRIPTOR_MAX_WIDTH = 64;
 
 function collapseWhitespace(text: string): string {

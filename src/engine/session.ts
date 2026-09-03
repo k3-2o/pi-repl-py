@@ -1,12 +1,8 @@
-// --- Jupyter messaging over ZMTP: [identities] <IDS|MSG> [sig, h, p, m, c] ---
-// ids are empty for a client's own channels (kernel ROUTER strips them);
-// sig = hex(HMAC-SHA256(key, h||p||m||c)) over the exact bytes; key from the
-// connection file. Checked against jupyter_client's session.py.
+// --- Jupyter over ZMTP: [<IDS|MSG>] sig h p m c; sig = hex(HMAC-SHA256(key, h||p||m||c)); ids are empty for client channels ---
 
 import { createHmac, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 
-/** The kernel's connection file: ip/ports/key, written by ipykernel at boot. */
 export interface ConnectionFile {
 	ip: string;
 	transport: "tcp" | "ipc";
@@ -37,7 +33,6 @@ export interface JupyterHeader {
 	version: string;
 }
 
-/** A parsed inbound message: JSON parts + whether the signature verified. */
 export interface ParsedMessage {
 	msg_id: string;
 	msg_type: string;
@@ -52,7 +47,6 @@ function pack(obj: unknown): Buffer {
 	return Buffer.from(JSON.stringify(obj));
 }
 
-/** One client-side session: mints ids, signs and frames outbound messages. */
 export class JupyterSession {
 	readonly sessionId: string;
 	readonly username: string;
@@ -77,7 +71,6 @@ export class JupyterSession {
 		return Buffer.from(hmac.digest("hex"), "ascii");
 	}
 
-	/** Build the wire frames for an outbound message: [DELIM, sig, h, p, m, c]. */
 	buildFrames(
 		msgType: string,
 		content: Record<string, unknown>,
@@ -100,7 +93,6 @@ export class JupyterSession {
 		return [DELIM, signature, h, p, m, c];
 	}
 
-	/** Parse an inbound multipart message (identities stripped by ZMTP); null if malformed. */
 	parseMessage(frames: Buffer[]): ParsedMessage | null {
 		// --- indexOf uses ===; frames are distinct Buffers, so match by value ---
 		const delimIdx = frames.findIndex((f) => f.equals(DELIM));
@@ -123,12 +115,7 @@ export class JupyterSession {
 }
 
 export function executeRequest(code: string, silent: boolean): Record<string, unknown> {
-	// --- store_history is always false: IPython retains every last-expression result in its
-	// --- In/Out history, and that retention is NOT reclaimable from user cells (deleting Out
-	// --- entries and _/__/___ from user_ns leaves the objects alive). With history off, cells
-	// --- stop feeding that growth entirely. The contract does not depend on In/Out: results
-	// --- are published over iopub via the display hook (single-mode execution, unaffected by
-	// --- store_history) and returned in the cell's transcript. ---
+	// --- store_history off: IPython's In/Out pins every result and can't be reclaimed from cells (62MB → 400+MB); the display hook still publishes results ---
 	return {
 		code,
 		silent,
@@ -144,7 +131,11 @@ export const SNAPSHOT_MIME = "application/vnd.pi-repl.snapshot+json";
 export const RESTORE_MIME = "application/vnd.pi-repl.restore+json";
 export const NAMES_MIME = "application/vnd.pi-repl.names+json";
 
-/** Read a private-MIME payload out of an execute_result/display_data content. */
+/** Route-gate: drop malformed and unsigned traffic — anything that fails the kernel's HMAC is not the kernel. */
+export function isTrustedMessage(msg: ParsedMessage | null): msg is ParsedMessage {
+	return msg !== null && msg.signatureOk;
+}
+
 export function readPayload(content: Record<string, unknown>, mime: string): string | null {
 	const data = content.data;
 	if (data && typeof data === "object") {

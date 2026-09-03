@@ -107,7 +107,9 @@ mid-session rebuild (kernel death) forces the restore before the cell that found
 Functions and classes defined in cells are captured by source and re-executed on restore (plain
 pickle cannot revive them in `__main__`); bindings that still fail are reported by name, never
 dropped silently. Entries are capped per-binding and in total (128 MiB default); the file is
-written via temp-file-and-rename so a crash cannot corrupt the last good copy; session dirs are
+written via temp-file-and-rename so a crash cannot corrupt the last good copy; a binding skipped
+at save time is named in the resume notice, never dropped silently, and a failed snapshot leaves
+the retry gate in place (only a persisted write advances it); a periodic refresh (default 2 min, `snapshot.periodMs`, 0 disables) bounds the loss window for same-name mutations and stands down when the last snapshot exceeded 8 MiB; value entries are zlib-compressed (file format version 3 — v1/v2 files remain restorable); session dirs are
 pruned to the newest 25, and dirs whose conversation file no longer exists are swept entirely —
 deleting a conversation deletes its snapshots. "ephemeral" and the live session are exempt.
 

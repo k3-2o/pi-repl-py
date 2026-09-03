@@ -79,6 +79,10 @@ A helper may define `helper_description`:
 helper_description = """double(x) — multiply a value by two."""
 ```
 
+The value must be a **triple-quoted string** (`"""..."""` or `'''...'''`): a plain-quoted
+assignment is not recognized, and the helper is advertised with a pointer text telling the
+model to inspect it (`print(double.__doc__)`) instead.
+
 The host reads this value and puts it in the `execute` tool description verbatim. It is guidance for the model, not a registration mechanism or generated API. Keep it short: it
 is included in the model's context on every turn.
 
@@ -126,6 +130,15 @@ At startup, two parts of pi-repl read the same merged helper list (project dirs 
 
 1. The kernel executes each eligible `.py` file. Its definitions become names in the Python workspace.
 2. The host reads `helper_description` to build the helper guidance shown to the model.
+
+Both resolve the list from the **session's working directory** (not the folder pi was launched
+from), so a resumed session advertises exactly the helpers its kernel loads. The per-session
+list is rebuilt at every agent start and stated in the system prompt.
+
+Each helper file executes in its **own cell**, so a broken helper (a syntax error or a top-level
+raise) fails alone and does not stop the others. When a helper fails to load, the next cell's
+output carries a `<repl_helpers_failed: name (error)>` line, and you get a toast; an
+all-good boot stays silent.
 
 The host does not inspect `def` lines or infer signatures from filenames. A helper does not need to define one particular symbol. The file is the unit of loading; its public names are the names it defines or imports for use in
 the workspace.

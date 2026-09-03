@@ -1,5 +1,4 @@
-// --- skills cannot reach the prompt in --repl: pi gates <available_skills> on the read tool
-// (hasRead), which repl doesn't have. Re-emit them with pi's own formatter in pi's slot. ---
+// --- pi gates skills on the read tool (absent in repl); re-emit them with pi's own formatter in pi's slot ---
 import { formatSkillsForPrompt, type Skill } from "@mariozechner/pi-coding-agent";
 
 const CWD_MARKER = "\nCurrent working directory:"; // skills sit just before this, pi's last line

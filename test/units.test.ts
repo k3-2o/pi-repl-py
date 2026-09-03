@@ -14,13 +14,17 @@ import { resolveHelperDirs } from "../src/engine/helpers-locate.js";
 import type { RestoreResult } from "../src/engine/index.js";
 import {
 	capLinesForContext,
+	EngineManager,
+	FORCED_SNAPSHOT_MAX_BYTES,
 	MAX_OUTPUT_LINE_CHARS,
 	pruneOrphanedSnapshotDirs,
 	pruneSnapshotDirs,
 } from "../src/engine/index.js";
-import { JupyterSession } from "../src/engine/session.js";
+import { KernelClient } from "../src/engine/kernel.js";
+import { type ConnectionFile, isTrustedMessage, JupyterSession } from "../src/engine/session.js";
 import { encodeFrame, ZmtpFrameParser } from "../src/engine/zmtp.js";
-import { buildHelpersMap, buildHelpersMapForCwd } from "../src/extension/helpers.js";
+import { buildHelpersMap, buildHelpersMapForCwd, buildHelpersPromptSection } from "../src/extension/helpers.js";
+import { buildPromptGuidelines } from "../src/extension/prompt.js";
 import {
 	backgroundFor,
 	closeOpenSgr,
@@ -36,6 +40,8 @@ import {
 import {
 	EngineLifecycle,
 	type EngineLifecycleDeps,
+	formatHelperFailuresLine,
+	formatHelperToast,
 	formatResetToast,
 	type RevivableEngine,
 } from "../src/extension/session-engine.js";
@@ -165,6 +171,116 @@ describe("helpers loader: description is the truth", () => {
 	});
 });
 
+describe("helper boot announcements", () => {
+	function withEnv(key: string, value: string | undefined, fn: () => void) {
+		const prev = process.env[key];
+		if (value === undefined) delete process.env[key];
+		else process.env[key] = value;
+		try {
+			fn();
+		} finally {
+			if (prev === undefined) delete process.env[key];
+			else process.env[key] = prev;
+		}
+	}
+
+	test("the per-session prompt section lists the cwd's helpers, or is absent", () => {
+		const proj = mkdtempSync(join(tmpdir(), "pi-repl-sec-"));
+		const global = mkdtempSync(join(tmpdir(), "pi-repl-sec-global-"));
+		mkdirSync(join(proj, ".git"), { recursive: true });
+		mkdirSync(join(proj, ".pi", "helpers"), { recursive: true });
+		writeFileSync(
+			join(proj, ".pi", "helpers", "web.py"),
+			'helper_description = """web(q) the PROJECT version."""\ndef web(q): return "project"\n',
+		);
+		withEnv("PI_HELPERS_GLOBAL_DIR", global, () => {
+			const block = buildHelpersPromptSection(proj);
+			expect(block).toBeDefined();
+			expect(block).toContain("Preloaded helpers");
+			expect(block).toContain("web(q) the PROJECT version.");
+		});
+		const empty = mkdtempSync(join(tmpdir(), "pi-repl-sec-empty-"));
+		expect(buildHelpersPromptSection(empty)).toBeUndefined();
+	});
+
+	test("PI_HELPERS_DIR replaces the whole tier list in the prompt section, like the kernel", () => {
+		const proj = mkdtempSync(join(tmpdir(), "pi-repl-sec-"));
+		const dir = mkdtempSync(join(tmpdir(), "pi-repl-sec-dir-"));
+		mkdirSync(join(proj, ".git"), { recursive: true });
+		mkdirSync(join(proj, ".pi", "helpers"), { recursive: true });
+		writeFileSync(join(proj, ".pi", "helpers", "project_only.py"), 'helper_description = """project"""\n');
+		writeFileSync(join(dir, "override.py"), 'helper_description = """override"""\n');
+		withEnv("PI_HELPERS_DIR", dir, () => {
+			const block = buildHelpersPromptSection(proj);
+			expect(block?.includes("override")).toBe(true);
+			expect(block?.includes("project_only")).toBe(false); // project tier is replaced, not merged
+		});
+		withEnv("PI_HELPERS_GLOBAL_DIR", undefined, () => {});
+	});
+
+	test("PI_HELPERS_GLOBAL_DIR swaps the global tier, not the project walk", () => {
+		const proj = mkdtempSync(join(tmpdir(), "pi-repl-sec-"));
+		const global = mkdtempSync(join(tmpdir(), "pi-repl-sec-global-"));
+		mkdirSync(join(proj, ".git"), { recursive: true });
+		mkdirSync(join(proj, ".pi", "helpers"), { recursive: true });
+		writeFileSync(join(proj, ".pi", "helpers", "core.py"), 'helper_description = """core"""\n');
+		writeFileSync(join(global, "extra.py"), 'helper_description = """extra"""\n');
+		withEnv("PI_HELPERS_GLOBAL_DIR", global, () => {
+			const block = buildHelpersPromptSection(proj);
+			expect(block?.includes("core")).toBe(true);
+			expect(block?.includes("extra")).toBe(true);
+		});
+	});
+
+	test("a file without a description points at the triple-quoted contract", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-repl-helpers-"));
+		writeFileSync(join(dir, "bare.py"), "def bare(x):\n    return x\n");
+		const bullet = buildHelpersMap(dir).find((b) => b.includes("bare"));
+		expect(bullet).toContain("triple-quoted");
+		expect(bullet).toContain("bare.__doc__");
+	});
+
+	test("formatHelperFailuresLine: silent when good, one line when broken", () => {
+		expect(formatHelperFailuresLine(null)).toBeUndefined();
+		expect(
+			formatHelperFailuresLine([
+				{ name: "web", ok: true },
+				{ name: "core", ok: true },
+			]),
+		).toBeUndefined();
+		const line = formatHelperFailuresLine([
+			{ name: "web", ok: true },
+			{ name: "scraper", ok: false, error: "NameError: x is not defined" },
+		]);
+		expect(line).toContain("<repl_helpers_failed:");
+		expect(line).toContain("scraper (NameError: x is not defined)");
+		expect(line).not.toContain("web");
+	});
+
+	test("formatHelperToast: names the loaded set and appends failures", () => {
+		const good = formatHelperToast([
+			{ name: "web", ok: true },
+			{ name: "core", ok: true },
+		]);
+		expect(good).toBe("repl helpers loaded: web, core");
+		const mixed = formatHelperToast([
+			{ name: "web", ok: true },
+			{ name: "scraper", ok: false, error: "SyntaxError: invalid syntax" },
+		]);
+		expect(mixed).toContain("web");
+		expect(mixed).toContain("failed: scraper (SyntaxError: invalid syntax)");
+		const none = formatHelperToast([{ name: "scraper", ok: false, error: "boom" }]);
+		expect(none).toBe("repl no helpers loaded · failed: scraper (boom)");
+	});
+
+	test("static guidelines teach both markers and carry no concrete helper list", () => {
+		const bullets = buildPromptGuidelines();
+		expect(bullets.some((b) => b.includes("<repl_engine_reset>"))).toBe(true);
+		expect(bullets.some((b) => b.includes("<repl_helpers_failed>"))).toBe(true);
+		expect(bullets.some((b) => b.includes("Preloaded helpers"))).toBe(false); // the rosters move to the system prompt
+	});
+});
+
 describe("jupyter session framing", () => {
 	test("buildFrames emits exactly [DELIM, sig, header, parent, metadata, content]", () => {
 		const s = new JupyterSession({ key: "testkey" });
@@ -195,6 +311,53 @@ describe("jupyter session framing", () => {
 		const parsed = s.parseMessage(tampered);
 		expect(parsed?.content.code).toBe("x = 2");
 		expect(parsed?.signatureOk).toBe(false);
+	});
+
+	test("isTrustedMessage routes only verified traffic", () => {
+		expect(isTrustedMessage(null)).toBe(false); // malformed
+		expect(isTrustedMessage({ signatureOk: false } as never)).toBe(false); // unsigned / bad HMAC
+		expect(isTrustedMessage({ signatureOk: true } as never)).toBe(true); // verified
+	});
+
+	test("a wrong-type reply does not satisfy a pending wait (parent id alone is not enough)", () => {
+		// KernelClient's runtime constructor does not spawn anything — build it directly so the
+		// private reply router is testable without a kernel process.
+		const Seam = KernelClient as unknown as new (
+			conn: ConnectionFile,
+			opts: object,
+		) => {
+			pendingReplies: Map<string, { resolve(m: unknown): void; expectedType: string }>;
+			resolveReply(msg: { msg_type: string; parent: { msg_id: string } }): void;
+		};
+		const kc = new Seam(
+			{
+				ip: "127.0.0.1",
+				transport: "tcp",
+				shell_port: 1,
+				iopub_port: 2,
+				stdin_port: 3,
+				control_port: 4,
+				hb_port: 5,
+				key: "k",
+				signature_scheme: "hmac-sha256",
+			},
+			{},
+		);
+		let resolved: unknown;
+		kc.pendingReplies.set("probe-1", {
+			resolve: (m) => {
+				resolved = m;
+			},
+			expectedType: "kernel_info_reply",
+		});
+		// a shell/control reply riding the probe's parent must not settle the wait
+		kc.resolveReply({ msg_type: "execute_reply", parent: { msg_id: "probe-1" } });
+		expect(resolved).toBeUndefined();
+		expect(kc.pendingReplies.has("probe-1")).toBe(true);
+		// the awaited type does
+		kc.resolveReply({ msg_type: "kernel_info_reply", parent: { msg_id: "probe-1" } });
+		expect(resolved).toMatchObject({ msg_type: "kernel_info_reply" });
+		expect(kc.pendingReplies.has("probe-1")).toBe(false);
 	});
 
 	test("an explicit msg_id is used verbatim (the kernel echoes it as parent)", () => {
@@ -249,8 +412,6 @@ describe("zmtp framing", () => {
 		expect(parser.feed(Buffer.from("ello"))).toHaveLength(1);
 	});
 });
-
-// ── render-core ───────────────────────────────────────────────────────────────
 
 const ANSI = /\x1b\[[0-9;]*m/g;
 const stripAnsi = (text: string) => text.replace(ANSI, "");
@@ -1216,5 +1377,123 @@ describe("pruneSnapshotDirs keeps only the newest snapshots", () => {
 			rmSync(root, { recursive: true, force: true });
 			rmSync(sessions, { recursive: true, force: true });
 		}
+	});
+});
+
+describe("snapshot gate retry", () => {
+	// The name-diff gate may only advance on a PERSISTED snapshot: a failed write must leave
+	// it in place, or a transient failure would silently end every later snapshot. The fake
+	// kernel below drives the real EngineManager gate + debounce through its private seam.
+	function gatedEngine(
+		onSnapshot: () => Promise<{ entries: never[]; failed: never[]; complete: boolean }>,
+		opts: { periodMs?: number } = {},
+	) {
+		const d = mkdtempSync(join(tmpdir(), "pi-repl-gate-"));
+		const m = new EngineManager({
+			cwd: d,
+			snapshot: { path: join(d, "ns.snapshot"), debounceMs: 1, periodMs: opts.periodMs ?? 0 },
+		});
+		const anyM = m as unknown as {
+			kernel: object;
+			state: string;
+			lastNamespaceNames: string[] | undefined;
+			lastPersistedAt: number;
+			lastSnapshotBytes: number;
+			scheduleSnapshotIfChanged(): Promise<void>;
+		};
+		anyM.state = "running";
+		anyM.lastNamespaceNames = [];
+		anyM.lastPersistedAt = 0;
+		anyM.lastSnapshotBytes = 0;
+		anyM.kernel = {
+			listNames: async () => ["a"],
+			snapshot: onSnapshot,
+		} as never;
+		return anyM;
+	}
+
+	const settle = () => new Promise((resolve) => setTimeout(resolve, 30));
+
+	test("a failed snapshot leaves the gate in place, so the next cell retries", async () => {
+		let snapshotCalls = 0;
+		const m = gatedEngine(async () => {
+			snapshotCalls += 1;
+			return { entries: [], failed: [], complete: false };
+		});
+		await m.scheduleSnapshotIfChanged();
+		await settle();
+		expect(snapshotCalls).toBe(1);
+		// same names, gate never advanced → the diff is still visible and the debounce re-arms
+		await m.scheduleSnapshotIfChanged();
+		await settle();
+		expect(snapshotCalls).toBe(2);
+	});
+
+	test("a persisted snapshot advances the gate and stops re-arming", async () => {
+		let snapshotCalls = 0;
+		const m = gatedEngine(async () => {
+			snapshotCalls += 1;
+			return { entries: [], failed: [], complete: true };
+		});
+		await m.scheduleSnapshotIfChanged();
+		await settle();
+		expect(snapshotCalls).toBe(1);
+		// the write succeeded; the gate now holds today's names → unchanged cells skip
+		await m.scheduleSnapshotIfChanged();
+		await settle();
+		expect(snapshotCalls).toBe(1);
+	});
+
+	test("a stale snapshot forces a refresh even when names are unchanged", async () => {
+		let snapshotCalls = 0;
+		const m = gatedEngine(
+			async () => {
+				snapshotCalls += 1;
+				return { entries: [], failed: [], complete: true };
+			},
+			{ periodMs: 50 },
+		);
+		m.lastNamespaceNames = ["a"]; // names unchanged...
+		m.lastPersistedAt = Date.now() - 100; // ...but the last snapshot is stale
+		await m.scheduleSnapshotIfChanged();
+		await settle();
+		expect(snapshotCalls).toBe(1);
+		// the refresh persisted and reset the clock -> the next cell stays quiet
+		await m.scheduleSnapshotIfChanged();
+		await settle();
+		expect(snapshotCalls).toBe(1);
+	});
+
+	test("a recent snapshot does not force a refresh", async () => {
+		let snapshotCalls = 0;
+		const m = gatedEngine(
+			async () => {
+				snapshotCalls += 1;
+				return { entries: [], failed: [], complete: true };
+			},
+			{ periodMs: 50 },
+		);
+		m.lastNamespaceNames = ["a"];
+		m.lastPersistedAt = Date.now();
+		await m.scheduleSnapshotIfChanged();
+		await settle();
+		expect(snapshotCalls).toBe(0);
+	});
+
+	test("the forced pass stands down for already-heavy namespaces", async () => {
+		let snapshotCalls = 0;
+		const m = gatedEngine(
+			async () => {
+				snapshotCalls += 1;
+				return { entries: [], failed: [], complete: true };
+			},
+			{ periodMs: 50 },
+		);
+		m.lastNamespaceNames = ["a"];
+		m.lastPersistedAt = Date.now() - 100;
+		m.lastSnapshotBytes = FORCED_SNAPSHOT_MAX_BYTES + 1;
+		await m.scheduleSnapshotIfChanged();
+		await settle();
+		expect(snapshotCalls).toBe(0);
 	});
 });

@@ -1,8 +1,6 @@
-// The lifecycle owns boot, session binding, and the reset announcements. Recovery is a
-// background engine job (the quiet-gap restore): the first tool call waits only for the
-// kernel to come up, and the reset notice lands on the first cell AFTER the restore lands.
+// Lifecycle: boot, session binding, reset announcements. Recovery is a background quiet-gap job; the notice lands on the first cell after the restore.
 
-import type { RestoreResult } from "../engine/index.js";
+import type { HelperLoadResult, RestoreResult } from "../engine/index.js";
 
 /** Show enough names to orient, then count the rest (a revive can carry hundreds). */
 function summarizeNames(names: readonly string[], limit: number): string {
@@ -14,8 +12,7 @@ function summarizeNames(names: readonly string[], limit: number): string {
 export interface RevivableEngine {
 	/** Boot the kernel (and preload helpers), independent of snapshot recovery. */
 	start(skipRestore?: boolean): Promise<void>;
-	/** Resolves once this engine's recovery has settled: revived names, or null when there was
-	 * nothing to revive, recovery was skipped, or recovery failed. Never rejects. */
+	/** Recovery outcome: revived names, or null when nothing to revive / skipped / failed. Never rejects. */
 	restoreResult(): Promise<RestoreResult | null>;
 	/** True when recovery was deliberately skipped (a prior revive wedged). */
 	restoreWasSkipped(): boolean;
@@ -24,25 +21,21 @@ export interface RevivableEngine {
 }
 
 export interface EngineLifecycleDeps<E extends RevivableEngine> {
-	/** Builds a fresh engine. Called at most once per lifecycle generation; `skipRestore` is
-	 * true on the retry after a wedged boot, so the poisoned snapshot cannot wedge twice. */
+	/** Fresh engine; skipRestore is the retry after a wedged boot, so a poisoned snapshot can't wedge twice. */
 	create(skipRestore?: boolean): E;
 	/** Tears the current engine down, flushing its final snapshot. */
 	dispose(engine: E): Promise<void>;
 	/** Kill-then-rebuild when a wedged engine cannot serve the snapshot flush. */
 	discard?(engine: E): Promise<void>;
-	/** Boot deadline in ms; a boot (kernel start + helpers preload) that outlives it is killed
-	 * and retried fresh. Default 90s. Recovery is NOT inside this deadline: it runs in the
-	 * background and is bounded by the engine's own restore-cell watchdog. */
+	/** Boot deadline (default 90s): an overlong boot is killed and retried. Recovery is outside it — background, bounded by the restore-cell watchdog. */
 	bootTimeoutMs?: number;
 }
 
-/** `startup` restores then announces when the conversation has a saved past; `cell` means an engine was rebuilt mid-session and announces immediately. */
+/** startup: announce when the conversation has a saved past; cell: a mid-session rebuild announces immediately. */
 export type AcquireOrigin = "startup" | "cell";
 
 const DEFAULT_BOOT_TIMEOUT_MS = 90_000;
 
-/** Model-facing body for a boot whose snapshot revive wedged and was skipped. */
 function revivedNoticeBody(origin: AcquireOrigin): string {
 	const resumed = origin === "startup";
 	return resumed
@@ -50,9 +43,7 @@ function revivedNoticeBody(origin: AcquireOrigin): string {
 		: "The evaluator wedged while reviving its saved namespace, so the snapshot was skipped and the namespace is empty.";
 }
 
-// --- Terse TUI toast for the human, separate from the model-facing cell marker: the user
-// --- asked for the classic subtle notification instead of a showy in-cell message. Counts
-// --- come from the same restore the marker describes, so the two never disagree. ---
+// --- human toast, separate from the model marker; counts come from the same restore, so the two never disagree ---
 export function formatResetToast(origin: AcquireOrigin, restore: RestoreResult | null, wedged = false): string {
 	const resumed = origin === "startup";
 	const verb = resumed ? "repl session resumed" : "repl kernel rebuilt";
@@ -118,22 +109,36 @@ function formatEngineResetNotice(restore: RestoreResult | null, origin: AcquireO
 	return lines.join("\n");
 }
 
+// --- split audience: toast for the human whenever a boot preloaded anything; a marker for the model ONLY when a helper failed (all-good boots are silent) ---
+
+export function formatHelperToast(report: readonly HelperLoadResult[]): string {
+	const loaded = report.filter((h) => h.ok).map((h) => h.name);
+	const failed = report.filter((h) => !h.ok);
+	const loadedPart = loaded.length > 0 ? `helpers loaded: ${loaded.join(", ")}` : "no helpers loaded";
+	const failedPart =
+		failed.length > 0 ? ` · failed: ${failed.map((f) => `${f.name} (${f.error ?? "failed to load"})`).join(", ")}` : "";
+	return `repl ${loadedPart}${failedPart}`;
+}
+
+export function formatHelperFailuresLine(report: readonly HelperLoadResult[] | null): string | undefined {
+	if (!report) return undefined;
+	const failed = report.filter((h) => !h.ok);
+	if (failed.length === 0) return undefined;
+	return `<repl_helpers_failed: ${failed.map((f) => `${f.name} (${f.error ?? "failed to load"})`).join(", ")}>`;
+}
+
 export class EngineLifecycle<E extends RevivableEngine> {
 	private engine?: E;
 	private pendingNotice?: string;
 	private pendingReset?: { origin: AcquireOrigin; restore: RestoreResult | null; wedged: boolean };
 	private teardown?: Promise<void>;
-	/** First-build in progress. */
 	private acquiring?: Promise<{ engine: E; restore: RestoreResult | null; created: boolean }>;
 	/** The conversation this engine was built for; a different key on acquire tears it down. */
 	private boundKey?: string;
 
 	constructor(private readonly deps: EngineLifecycleDeps<E>) {}
 
-	/** Race one BOOT attempt (kernel start + helpers preload) against the deadline. Recovery is
-	 * deliberately outside this race: it runs as a background quiet-gap job and is bounded by the
-	 * engine's own restore-cell watchdog. A failed start is soft — the first cell observes it and
-	 * the caller rebuilds. */
+	/** Race one boot (kernel start + helpers preload) against the deadline; a failed start is soft — the first cell observes it and rebuilds. */
 	private bootOnce(engine: E, deadlineMs: number): Promise<boolean> {
 		const work = Promise.resolve()
 			.then(() => engine.start(false))
@@ -146,16 +151,7 @@ export class EngineLifecycle<E extends RevivableEngine> {
 		return Promise.race([work.then(() => true), guard]).finally(() => clearTimeout(timer));
 	}
 
-	/**
-	 * Built and booted on demand; the snapshot restore proceeds in the background, so acquire()
-	 * NEVER waits on it. The engine's revive is announced (reset notice + toast) on the first
-	 * cell after it completes.
-	 *
-	 * `sessionKey` guards against sessions bleeding into each other: pi tears the old session
-	 * down before starting the next, but a missed or out-of-order shutdown must never serve one
-	 * conversation's engine and namespace to another — acquire for a different key tears the
-	 * bound engine down (flushing its snapshot) before building the new one.
-	 */
+	/** Built on demand; acquire() never waits on the background restore (announced on the first cell after it completes). sessionKey: a different conversation's acquire tears the bound engine down, so sessions can't bleed into each other. */
 	async acquire(
 		origin: AcquireOrigin,
 		sessionKey?: string,
@@ -179,8 +175,7 @@ export class EngineLifecycle<E extends RevivableEngine> {
 			this.engine = engine;
 			let booted = await this.bootOnce(engine, deadline);
 			if (!booted) {
-				// --- the kernel is alive but stuck; only a kill frees it. Retry once WITHOUT the
-				// --- snapshot, so a poisoned snapshot cannot wedge the session twice in a row. ---
+				// --- the kernel is stuck, not dead; kill and retry once WITHOUT the snapshot so a poisoned one can't wedge twice ---
 				await (this.deps.discard ?? this.deps.dispose)(engine);
 				engine = this.deps.create(true);
 				this.engine = engine;
@@ -192,11 +187,7 @@ export class EngineLifecycle<E extends RevivableEngine> {
 					throw new Error("evaluator boot timed out twice (kernel/helpers wedged); no session was started");
 				}
 			}
-			// --- recovery is async and off the first call's critical path: the engine revives in
-			// --- the first quiet gap and the notice lands on the first cell AFTER it completes
-			// --- (index.ts takes it with takeResetNotice after the next execute). announce when
-			// --- mid-session rebuilds happen, or on startup for a conversation with a saved past;
-			// --- a first-ever session stays quiet. ---
+			// --- the notice lands on the first cell AFTER the restore completes; announce mid-session rebuilds and resumes with a saved past, never first sessions ---
 			const announce = origin === "cell" || (origin === "startup" && engine.hasSnapshotHistory());
 			void engine.restoreResult().then((restore) => {
 				if (this.engine !== engine) return; // a replacement engine took over; no stale notice
@@ -222,8 +213,7 @@ export class EngineLifecycle<E extends RevivableEngine> {
 		}
 	}
 
-	/** Returns the pending reset notice exactly once (alongside its origin, restore result, and
-	 * whether the restore was skipped), then clears it. */
+	/** The pending reset notice, taken exactly once. */
 	takeResetNotice():
 		| { notice: string; origin: AcquireOrigin; restore: RestoreResult | null; wedged: boolean }
 		| undefined {
