@@ -111,7 +111,7 @@ written via temp-file-and-rename so a crash cannot corrupt the last good copy; a
 at save time is named in the resume notice, never dropped silently, and a failed snapshot leaves
 the retry gate in place (only a persisted write advances it); a periodic refresh (default 2 min, `snapshot.periodMs`, 0 disables) bounds the loss window for same-name mutations and stands down when the last snapshot exceeded 8 MiB; value entries are zlib-compressed (file format version 3 — v1/v2 files remain restorable); session dirs are
 pruned to the newest 25, and dirs whose conversation file no longer exists are swept entirely —
-deleting a conversation deletes its snapshots. "ephemeral" and the live session are exempt. A /fork'd conversation inherits the parent's last snapshot — copied once into the fork's own key at first start, so it resumes with state and announces it like any resume; the parent is untouched.
+deleting a conversation deletes its snapshots. "ephemeral" and the live session are exempt. A /fork'd conversation inherits the parent's last snapshot — copied once into the fork's own key at first start, so it resumes with state, carries the standard reset marker on its first cell, and the human gets a dedicated fork toast; the parent is untouched.
 
 A revive that never completes (a poisoned pickle) is bounded by an engine restore-cell watchdog
 (`PI_REPL_BOOT_TIMEOUT_MS`, default 90s): the kernel is killed and the restore marked skipped —

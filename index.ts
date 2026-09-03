@@ -8,7 +8,7 @@ import { withSkillsBlock } from "./src/extension/skill-hook.js";
 import { buildHelpersPromptSection } from "./src/extension/helpers.js";
 import { EngineManager, pruneOrphanedSnapshotDirs, pruneSnapshotDirs } from "./src/engine/index.js";
 import { ExecuteCellComponent, type ExecuteDetails, type ExecuteRenderState } from "./src/extension/render.js";
-import { EngineLifecycle, formatHelperFailuresLine, formatHelperToast, formatResetToast } from "./src/extension/session-engine.js";
+import { EngineLifecycle, formatForkToast, formatHelperFailuresLine, formatHelperToast, formatResetToast } from "./src/extension/session-engine.js";
 import { conversationName, inheritForkSnapshot, resolveStateDir } from "./src/extension/state-layout.js";
 import { EXECUTE_DESCRIPTION, buildExecutePromptGuidelines, EXECUTE_PROMPT_SNIPPET } from "./src/extension/tool-meta.js";
 
@@ -67,6 +67,7 @@ export default function (pi: ExtensionAPI) {
 			// --- state lives under ~/.pi/agent/pi-repl/state/<slug>__<conv>; conversations never share a snapshot; ephemeral sessions get none ---
 			const stateRoot = join(homedir(), ".pi", "agent", "pi-repl", "state");
 			let snapshot: { path: string } | undefined;
+			let forkInherited = false;
 			let currentDir: string | undefined;
 			if (sessionFile) {
 				const { dir, snapshotPath } = resolveStateDir(stateRoot, sessionFile);
@@ -74,7 +75,7 @@ export default function (pi: ExtensionAPI) {
 				snapshot = { path: snapshotPath };
 				// --- a /fork'd conversation inherits the parent's last namespace (copied once into the fork's own key) ---
 				try {
-					inheritForkSnapshot(stateRoot, sessionFile, snapshotPath);
+					forkInherited = inheritForkSnapshot(stateRoot, sessionFile, snapshotPath);
 				} catch {}
 				// --- keep the state root from growing one dir per session forever; the live dir is exempt ---
 				try {
@@ -90,6 +91,7 @@ export default function (pi: ExtensionAPI) {
 				// --- snapshots are per-conversation; skipRestore marks the wedged-boot retry ---
 				snapshot,
 				skipRestore,
+				forkInherited,
 			});
 		},
 		async dispose(engine) {
@@ -190,7 +192,11 @@ export default function (pi: ExtensionAPI) {
 				});
 				// --- reset notice leads so the model reads the rebuild; the human gets a terse toast instead ---
 				const reset = lifecycle.takeResetNotice();
-				if (reset?.notice) ctx?.ui?.notify?.(formatResetToast(reset.origin, reset.restore, reset.wedged), "info");
+				if (reset?.notice)
+					ctx?.ui?.notify?.(
+						m.inheritedFromFork ? formatForkToast(reset.restore) : formatResetToast(reset.origin, reset.restore, reset.wedged),
+						"info",
+					);
 				// --- helper verdicts once per boot: toast for the human, marker for the model only when a helper failed (all-good boots stay silent) ---
 				const helperReport = m.takeHelperReport();
 				if (helperReport && helperReport.length > 0) ctx?.ui?.notify?.(formatHelperToast(helperReport), "info");

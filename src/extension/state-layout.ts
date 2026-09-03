@@ -46,12 +46,13 @@ export function forkParentSnapshot(stateRoot: string, sessionFile: string, snaps
 	return existsSync(parent.snapshotPath) ? parent.snapshotPath : undefined;
 }
 
-/** Copy the parent's last snapshot into the fork's own key once; the fork then restores like any resume, and the parent is never touched. */
-export function inheritForkSnapshot(stateRoot: string, sessionFile: string, snapshotPath: string): void {
+/** Copy the parent's last snapshot into the fork's own key once (true when something was inherited); the fork then restores like any resume, and the parent is never touched. */
+export function inheritForkSnapshot(stateRoot: string, sessionFile: string, snapshotPath: string): boolean {
 	const parentSnap = forkParentSnapshot(stateRoot, sessionFile, snapshotPath);
-	if (parentSnap === undefined) return;
+	if (parentSnap === undefined) return false;
 	mkdirSync(dirname(snapshotPath), { recursive: true });
 	const tmp = `${snapshotPath}.tmp`;
 	copyFileSync(parentSnap, tmp);
 	renameSync(tmp, snapshotPath);
+	return true;
 }

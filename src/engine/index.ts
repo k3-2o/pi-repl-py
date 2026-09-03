@@ -80,6 +80,8 @@ export interface EngineOptions {
 	};
 	/** Do not revive the snapshot on this engine (used after a wedged restore was detected once). */
 	skipRestore?: boolean;
+	/** True when this engine's snapshot was inherited from a /fork'd parent session. */
+	forkInherited?: boolean;
 }
 
 // --- process-wide cleanup: a child does not die with its parent, so SIGKILL live kernels on exit ---
@@ -195,6 +197,7 @@ export class EngineManager {
 	private helperReport: readonly HelperLoadResult[] | null = null;
 	/** Whether the current boot's report has been handed out (once per boot). */
 	private helperReportTaken = true;
+	private readonly forkInherited: boolean;
 	/** When the last snapshot was persisted; 0 = never. Drives the periodic refresh. */
 	private lastPersistedAt = 0;
 	/** Payload bytes of the last persisted snapshot; the periodic refresh stands down above FORCED_SNAPSHOT_MAX_BYTES. */
@@ -202,6 +205,7 @@ export class EngineManager {
 
 	constructor(options: EngineOptions = {}) {
 		this.options = options;
+		this.forkInherited = options.forkInherited ?? false;
 		this.restoreSkipped = options.skipRestore ?? false;
 		// no snapshot capability: recovery is trivially "nothing to revive"
 		if (!options.snapshot) this.settleRestore(null);
@@ -209,6 +213,11 @@ export class EngineManager {
 
 	get isRunning(): boolean {
 		return this.state === "running" && (this.kernel?.isRunning ?? false);
+	}
+
+	/** True when this engine is a fork that inherited its parent's namespace (drives the fork toast). */
+	get inheritedFromFork(): boolean {
+		return this.forkInherited;
 	}
 
 	/** Current boot's helper verdicts, handed out once per boot (first cell of a session/rebuild); null when nothing to announce. */

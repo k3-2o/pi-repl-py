@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inflateSync } from "node:zlib";
 import { EngineManager } from "../src/engine/index.ts";
-import { EngineLifecycle } from "../src/extension/session-engine.ts";
+import { EngineLifecycle, formatForkToast } from "../src/extension/session-engine.ts";
 import { inheritForkSnapshot, resolveStateDir } from "../src/extension/state-layout.ts";
 
 const tempDirs: string[] = [];
@@ -427,6 +427,58 @@ print(os.getcwd() != ${JSON.stringify(d)})`);
 		expect(r.stdout).toContain("yes");
 		expect(r.stdout).toContain("42");
 	});
+
+	test(
+		"a /fork'd conversation carries the reset marker on its first cell, like any resume",
+		{ timeout: 90_000 },
+		async () => {
+			const d = tempDir();
+			const sessionsRoot = mkdtempSync(join(tmpdir(), "pi-repl-fork-lc-"));
+			tempDirs.push(sessionsRoot);
+			const slugDir = join(sessionsRoot, "proj-a");
+			mkdirSync(slugDir, { recursive: true });
+			const parentFile = join(slugDir, "parent.jsonl");
+			const forkFile = join(slugDir, "forked.jsonl");
+			const stateRoot = join(d, "state");
+
+			const parentSnap = resolveStateDir(stateRoot, parentFile).snapshotPath;
+			const m1 = engine({ cwd: d, snapshot: { path: parentSnap, debounceMs: 200 } });
+			await m1.execute("forked_data = {'from': 'parent'}");
+			await m1.snapshotState();
+			await m1.kill();
+
+			writeFileSync(parentFile, '{"type":"session","version":3,"id":"parent"}\n');
+			writeFileSync(forkFile, JSON.stringify({ type: "session", version: 3, id: "forked", parentSession: parentFile }));
+			const forkSnap = resolveStateDir(stateRoot, forkFile).snapshotPath;
+			expect(inheritForkSnapshot(stateRoot, forkFile, forkSnap)).toBe(true);
+
+			// the lifecycle path, exactly as index.ts drives it
+			const lifecycle = new EngineLifecycle<EngineManager>({
+				create: () => new EngineManager({ cwd: d, snapshot: { path: forkSnap, debounceMs: 100 }, forkInherited: true }),
+				dispose: async (e) => e.kill(),
+			});
+			const { engine: m2 } = await lifecycle.acquire("startup", "fork-conv");
+
+			// the restore lands in the quiet gap and the marker follows it
+			const deadline = Date.now() + 30_000;
+			let revived = false;
+			while (Date.now() < deadline && !revived) {
+				await new Promise((resolve) => setTimeout(resolve, 250));
+				const r = await m2.execute("print('forked_data' in globals())");
+				revived = r.stdout.includes("True");
+			}
+			expect(revived).toBe(true);
+			expect(m2.inheritedFromFork).toBe(true);
+
+			const reset = lifecycle.takeResetNotice();
+			expect(reset?.notice).toContain("<repl_engine_reset>");
+			expect(reset?.notice).toContain("forked_data");
+			expect(formatForkToast(reset?.restore ?? null)).toContain("fork started");
+			expect(formatForkToast(reset?.restore ?? null)).toContain("1 name inherited");
+
+			await lifecycle.shutdown();
+		},
+	);
 
 	test(
 		"a snapshot whose revive wedges is skipped in the background and the session still starts",

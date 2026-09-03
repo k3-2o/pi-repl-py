@@ -109,6 +109,18 @@ function formatEngineResetNotice(restore: RestoreResult | null, origin: AcquireO
 	return lines.join("\n");
 }
 
+/** Human toast when a /fork'd conversation inherited its parent's namespace — same counts as the reset marker, named as a fork so it can't pass for a plain resume. */
+export function formatForkToast(restore: RestoreResult | null): string {
+	const revived = restore?.restored.length ?? 0;
+	if (revived > 0) {
+		const noun = revived === 1 ? "name" : "names";
+		return `repl fork started — ${revived} ${noun} inherited from the parent session`;
+	}
+	return restore === null
+		? "repl fork started — nothing to inherit"
+		: "repl fork started — parent snapshot revived nothing";
+}
+
 // --- split audience: toast for the human whenever a boot preloaded anything; a marker for the model ONLY when a helper failed (all-good boots are silent) ---
 
 export function formatHelperToast(report: readonly HelperLoadResult[]): string {

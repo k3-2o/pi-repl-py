@@ -40,6 +40,7 @@ import {
 import {
 	EngineLifecycle,
 	type EngineLifecycleDeps,
+	formatForkToast,
 	formatHelperFailuresLine,
 	formatHelperToast,
 	formatResetToast,
@@ -1557,5 +1558,18 @@ describe("fork inheritance", () => {
 		const { stateRoot, forkFile } = forkWorld();
 		writeFileSync(forkFile, "not json at all");
 		expect(forkParentSnapshot(stateRoot, forkFile, forkSnap(stateRoot, forkFile))).toBeUndefined();
+	});
+
+	test("formatForkToast names the inheritance, never masquerades as a resume", () => {
+		expect(formatForkToast({ path: "x", restored: ["a", "b"], failed: [] })).toBe(
+			"repl fork started — 2 names inherited from the parent session",
+		);
+		expect(formatForkToast({ path: "x", restored: ["a"], failed: [] })).toBe(
+			"repl fork started — 1 name inherited from the parent session",
+		);
+		expect(formatForkToast(null)).toBe("repl fork started — nothing to inherit");
+		expect(formatForkToast({ path: "x", restored: [], failed: [] })).toBe(
+			"repl fork started — parent snapshot revived nothing",
+		);
 	});
 });
