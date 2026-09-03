@@ -1,3 +1,30 @@
+## [0.7.0] - 2026-09-04
+
+### Added
+
+- The helper roster follows the session's working directory, so the model is told exactly what the kernel booted with; failures surface as a marker on the first cell, and all-good boots stay silent.
+- Each helper preloads in its own cell, so one broken file can no longer abort the rest.
+- The prompt side honors PI_HELPERS_DIR / PI_HELPERS_GLOBAL_DIR exactly like the kernel loader.
+- A /fork'd conversation inherits its parent's namespace: the parent's last snapshot is copied into the fork on first start, restored, and announced with a dedicated fork toast.
+- Periodic snapshot refresh (`snapshot.periodMs`, default 2 minutes, 0 disables) bounds the loss window for same-name mutations; namespaces whose last snapshot exceeded 8 MiB stand down.
+- Value payloads are zlib-compressed (version 3 snapshot format); v1 and v2 snapshots remain restorable.
+
+### Changed
+
+- The model-facing execute prompt: edits anchor the exact lines before replacing, prior state is framed as amortizing over re-deriving, and the truncation marker names its exact size.
+
+### Fixed
+
+- Kernel replies are HMAC-verified before routing; unsigned or forged traffic is now dropped.
+- A failed snapshot no longer disables all future snapshots: the name-diff gate advances only on a persisted write.
+- Bindings skipped at save time (oversized) are named in the resume notice alongside restore-time failures.
+- Pending replies are type-gated, so a wrong-type message on the same parent id cannot settle a probe.
+- Kernel recovery from a deleted cwd is covered by a test.
+
+### Removed
+
+- The prose paragraph from the static tool guidelines (restored to the pre-feature wording); comments from prompt.ts and tool-meta.ts.
+
 ## [0.6.14] - 2026-09-01
 
 ### Changed
@@ -239,3 +266,4 @@
 ---
 
 See docs/ARCHITECTURE.md for the design and `docs/` for how-to material.
+
