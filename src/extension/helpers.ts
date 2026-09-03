@@ -64,6 +64,8 @@ export function buildHelpersPromptSection(cwd: string): string | undefined {
 	const lines = [
 		"Preloaded helpers, use them as any loaded function or variable:",
 		...map.map((line) => `  - ${line.replace(/\n/g, "\n    ")}`),
+		"",
+		"If output begins with <repl_helpers_failed>, those helpers failed to load at boot — do not call the listed names.",
 	];
 	return lines.join("\n");
 }

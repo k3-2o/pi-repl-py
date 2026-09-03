@@ -279,11 +279,18 @@ describe("helper boot announcements", () => {
 		expect(none).toBe("repl no helpers loaded · failed: scraper (boom)");
 	});
 
-	test("static guidelines teach both markers and carry no concrete helper list", () => {
-		const bullets = buildPromptGuidelines();
+	test("static guidelines carry no roster and no helper marker; the per-session block carries both", () => {
+		const bullets = buildPromptGuidelines([]);
 		expect(bullets.some((b) => b.includes("<repl_engine_reset>"))).toBe(true);
-		expect(bullets.some((b) => b.includes("<repl_helpers_failed>"))).toBe(true);
-		expect(bullets.some((b) => b.includes("Preloaded helpers"))).toBe(false); // the rosters move to the system prompt
+		expect(bullets.some((b) => b.includes("Preloaded helpers"))).toBe(false); // the roster moves to the system prompt
+		expect(bullets.some((b) => b.includes("<repl_helpers_failed>"))).toBe(false); // ...and so does its marker note
+
+		const proj = mkdtempSync(join(tmpdir(), "pi-repl-sec-"));
+		const global = mkdtempSync(join(tmpdir(), "pi-repl-sec-global-"));
+		mkdirSync(join(proj, ".pi", "helpers"), { recursive: true });
+		writeFileSync(join(proj, ".pi", "helpers", "web.py"), 'helper_description = """web() the block."""\n');
+		const block = buildHelpersPromptSection(proj);
+		expect(block?.includes("<repl_helpers_failed>")).toBe(true);
 	});
 });
 
