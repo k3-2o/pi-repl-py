@@ -1,6 +1,3 @@
-// --- execute tool: the model-facing contract, shaped exactly like pi's built-in tools ---
-// description = rich short behavior; promptSnippet = one-liner; guidelines = flat bullets.
-
 export const executeToolDescription =
 	"Execute Python in a Jupyter notebook. Your workspace is one notebook where every cell runs in a " +
 	"shared Python environment: variables, functions, imports, classes, and data defined in one cell " +
@@ -9,7 +6,6 @@ export const executeToolDescription =
 
 export const executePromptSnippet = "Run Python cells in a Jupyter notebook (read, write, run, search, and more)";
 
-// --- the model-facing guidelines, flat bullets like pi's own tool contributions ---
 export function buildPromptGuidelines(preloaded: string[]): string[] {
 	return [
 		"Write modern idiomatic Python.",
