@@ -2,6 +2,9 @@
 
 ### Changed
 
+- The execute prompt is rewritten as named, trained-in principles (live session with the namespace as
+  single source of truth, exploratory data analysis, quit thinking and look, minimal diff, idempotent
+  cells) instead of prose steering; the description derives the output cap from the engine constant.
 - The host no longer speaks the Jupyter wire protocol: one stdio pipe to `bridge.py` replaces the
   hand-rolled ZMTP 3.0 client, HMAC framing, and settle protocol (~1,100 lines deleted). The
   bridge owns `jupyter_client` + ipykernel; the host sends one JSON line per op and routes by id.
