@@ -8,7 +8,6 @@ import { fileURLToPath } from "node:url";
 import { resolveHelperDirs } from "./helpers-locate.js";
 
 const SILENCE_KILL_GRACE_MS = 2000;
-const DEFAULT_MAX_OUTPUT_CHARS = 1_000_000;
 /** The bridge ships at the package root, next to index.ts; src/engine is two levels deep. */
 const BRIDGE_PATH = fileURLToPath(new URL("../../bridge.py", import.meta.url));
 
@@ -33,7 +32,8 @@ export interface CellResult {
 export interface CellOptions {
 	signal?: AbortSignal;
 	onStream?: (chunk: string, name: "stdout" | "stderr") => void;
-	maxOutputChars?: number;
+	/** The engine owns cap policy (DEFAULT_MAX_OUTPUT_CHARS); the kernel is transport and must not default its own. */
+	maxOutputChars: number;
 }
 
 export interface SnapshotReply {
@@ -293,12 +293,12 @@ export class KernelClient {
 		});
 	}
 
-	executeCell(code: string, opts: CellOptions = {}): Promise<CellResult> {
+	executeCell(code: string, opts: CellOptions): Promise<CellResult> {
 		return this.enqueue(() => this.executeCellNow(code, opts));
 	}
 
 	private executeCellNow(code: string, opts: CellOptions): Promise<CellResult> {
-		const maxChars = opts.maxOutputChars ?? DEFAULT_MAX_OUTPUT_CHARS;
+		const maxChars = opts.maxOutputChars;
 		// one op id per request; the bridge echoes it on every stream and the result event
 		const id = `e${this.nextId++}`;
 		const active: ActiveCell = {

@@ -14,6 +14,7 @@ import { resolveHelperDirs } from "../src/engine/helpers-locate.js";
 import type { RestoreResult } from "../src/engine/index.js";
 import {
 	capLinesForContext,
+	DEFAULT_MAX_OUTPUT_CHARS,
 	EngineManager,
 	MAX_OUTPUT_LINE_CHARS,
 	pruneOrphanedSnapshotDirs,
@@ -1349,7 +1350,10 @@ describe("bridge pipe routing", () => {
 	test("stream and result events settle a cell, routed by op id", async () => {
 		const { kc, sent, feed } = routedKernel();
 		const chunks: string[] = [];
-		const cell = kc.executeCellNow("x = 1", { onStream: (c: string, n: string) => chunks.push(`${n}:${c}`) });
+		const cell = kc.executeCellNow("x = 1", {
+			maxOutputChars: DEFAULT_MAX_OUTPUT_CHARS,
+			onStream: (c: string, n: string) => chunks.push(`${n}:${c}`),
+		});
 		expect(sent).toHaveLength(1); // the exec request
 		feed('{"type":"stream","id":"e0","name":"stdout","text":"hello "}');
 		feed('{"type":"stream","id":"e0","name":"stderr","text":"warn\\n"}');
@@ -1363,7 +1367,7 @@ describe("bridge pipe routing", () => {
 
 	test("a stream event for another op id is ignored", async () => {
 		const { kc, feed } = routedKernel();
-		const cell = kc.executeCellNow("x = 1", {});
+		const cell = kc.executeCellNow("x = 1", { maxOutputChars: DEFAULT_MAX_OUTPUT_CHARS });
 		feed('{"type":"stream","id":"e9","name":"stdout","text":"noise"}');
 		feed('{"type":"result","id":"e0","status":"ok"}');
 		const r = await cell;
@@ -1383,7 +1387,7 @@ describe("bridge pipe routing", () => {
 
 	test("an error result surfaces name, message, and stack", async () => {
 		const { kc, feed } = routedKernel();
-		const cell = kc.executeCellNow("raise", {});
+		const cell = kc.executeCellNow("raise", { maxOutputChars: DEFAULT_MAX_OUTPUT_CHARS });
 		feed(
 			'{"type":"result","id":"e0","status":"error","error":{"name":"ValueError","message":"boom","stack":["line1"]}}',
 		);
@@ -1395,7 +1399,7 @@ describe("bridge pipe routing", () => {
 
 	test("an aborted status wins over a carried error", async () => {
 		const { kc, feed } = routedKernel();
-		const cell = kc.executeCellNow("sleep", {});
+		const cell = kc.executeCellNow("sleep", { maxOutputChars: DEFAULT_MAX_OUTPUT_CHARS });
 		feed(
 			'{"type":"result","id":"e0","status":"aborted","error":{"name":"KeyboardInterrupt","message":"interrupted","stack":[]}}',
 		);
