@@ -130,6 +130,14 @@ class Bridge:
         self.requests = queue.Queue()
         self.op_id = None          # id of the exec currently streaming, for stream routing
         self.op_payload_mime = None  # private MIME awaited for the current internal cell
+        # snapshot policy + name-diff gate: the bridge schedules snapshots itself in quiet gaps,
+        # so a pickle can never land in front of a user cell (the bridge IS the queue)
+        self.policy = None         # {"path": str, "max_bytes": int, "period_ms": int} | None
+        self.last_names = None     # names at the last persisted write; None = never written
+        self.last_persisted_at = 0.0
+        self.last_bytes = 0
+        self.pending_check = False # a cell just completed; the gate owes a name diff
+        self.deferred_restore = None  # background revive: runs at the first quiet gap
 
     # ----- IO -----
 
@@ -299,11 +307,52 @@ class Bridge:
 
     # ----- ops -----
 
-    def op_boot(self, helpers):
-        self.helper_names = [h["name"] for h in helpers]
+    FORCED_SNAPSHOT_MAX_BYTES = 8 * 1024 * 1024
+    QUIET_WINDOW_S = 0.15
+
+    def _names(self):
+        res = self.run_cell(names_code(self.helper_names), emit_stream=False, payload_mime=NAMES_MIME)
+        return json.loads(res["payload"]) if res["payload"] else []
+
+    def _snapshot_due(self, names):
+        changed = self.last_names is None or names != self.last_names
+        period = (self.policy or {}).get("period_ms") or 0
+        stale = (period > 0 and self.last_persisted_at > 0
+                 and (time.time() - self.last_persisted_at) * 1000 >= period
+                 and self.last_bytes <= self.FORCED_SNAPSHOT_MAX_BYTES)
+        return changed or stale
+
+    def quiet_seconds(self):
+        """How long the serve loop may block waiting for ops before the gap counts as quiet.
+        None = nothing is due; block indefinitely."""
+        if self.deferred_restore is not None:
+            return self.QUIET_WINDOW_S
+        if self.pending_check and self.policy:
+            return self.QUIET_WINDOW_S
+        return None
+
+    def quiet_tick(self):
+        """The queue stayed empty for the quiet window: run the deferred revive, then the
+        owed snapshot. The gate advances only on a persisted write, so a failed write
+        retries at the next gap."""
+        if self.deferred_restore is not None:
+            op, self.deferred_restore = self.deferred_restore, None
+            self.op_restore(op)
+            return
+        if not (self.pending_check and self.policy):
+            return
+        self.pending_check = False
+        names = self._names()
+        if not self._snapshot_due(names):
+            return
+        self._write_snapshot(self.policy["path"], self.policy["max_bytes"], names)
+
+    def op_boot(self, boot):
+        self.helper_names = [h["name"] for h in boot.get("helpers") or []]
+        self.policy = boot.get("snapshot")
         self.start_kernel()
         report = []
-        for h in helpers:
+        for h in boot.get("helpers") or []:
             res = self.run_cell(h["source"], emit_stream=False)
             if res["status"] == "ok":
                 report.append({"name": h["name"], "ok": True})
@@ -322,6 +371,28 @@ class Bridge:
             out["error"] = res["error"]
         self.emit(out)
 
+    def _write_snapshot(self, path, max_bytes, names=None):
+        import cloudpickle  # noqa: F401 — fail loudly here, not at bridge boot
+        res = self.run_cell(snapshot_code(self.helper_names, max_bytes), emit_stream=False,
+                            payload_mime=SNAPSHOT_MIME)
+        payload = res["payload"]
+        if payload is None:
+            return {"saved": [], "failed": [], "complete": False, "bytes": 0}
+        body = json.loads(payload)
+        entries, failed = body.get("entries", []), body.get("failed", [])
+        # atomic write: temp + rename, so a crash can't corrupt the last good snapshot
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"version": 4, "entries": entries, "failed": failed}, fh)
+        os.replace(tmp, path)
+        # only a persisted write advances the gate
+        self.last_names = names if names is not None else [e["name"] for e in entries]
+        self.last_persisted_at = time.time()
+        self.last_bytes = sum(len(e["payload"]) for e in entries)
+        return {"saved": [e["name"] for e in entries], "failed": failed,
+                "complete": True, "bytes": self.last_bytes}
+
     def op_snapshot(self, op):
         try:
             import cloudpickle  # noqa: F401 — fail loudly here, not at bridge boot
@@ -329,23 +400,8 @@ class Bridge:
             self.emit({"type": "reply", "id": op["id"], "error":
                        "cloudpickle is missing from the evaluator venv: %s" % e})
             return
-        res = self.run_cell(snapshot_code(self.helper_names, op["max_bytes"]), emit_stream=False,
-                            payload_mime=SNAPSHOT_MIME)
-        payload = res["payload"]
-        if payload is None:
-            self.emit({"type": "reply", "id": op["id"], "saved": [], "failed": [], "complete": False, "bytes": 0})
-            return
-        body = json.loads(payload)
-        entries, failed = body.get("entries", []), body.get("failed", [])
-        # atomic write: temp + rename, so a crash can't corrupt the last good snapshot
-        os.makedirs(os.path.dirname(op["path"]) or ".", exist_ok=True)
-        tmp = op["path"] + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump({"version": 4, "entries": entries, "failed": failed}, fh)
-        os.replace(tmp, op["path"])
-        self.emit({"type": "reply", "id": op["id"],
-                   "saved": [e["name"] for e in entries], "failed": failed,
-                   "complete": True, "bytes": sum(len(e["payload"]) for e in entries)})
+        out = self._write_snapshot(op["path"], op["max_bytes"])
+        self.emit({"type": "reply", "id": op["id"], **out})
 
     def op_restore(self, op):
         try:
@@ -388,12 +444,16 @@ class Bridge:
         if boot.get("op") == "__eof__":
             return
         try:
-            self.op_boot(boot.get("helpers") or [])
+            self.op_boot(boot)
         except Exception as e:
             self.emit({"type": "error", "message": "boot failed: %s" % e})
             sys.exit(1)
         while True:
-            op = self.requests.get()
+            try:
+                op = self.requests.get(timeout=self.quiet_seconds())
+            except queue.Empty:
+                self.quiet_tick()
+                continue
             o = op.get("op")
             if o == "__eof__":
                 self.stop_kernel()
@@ -401,10 +461,16 @@ class Bridge:
             try:
                 if o == "exec":
                     self.op_exec(op)
+                    self.pending_check = True
                 elif o == "snapshot":
                     self.op_snapshot(op)
                 elif o == "restore":
-                    self.op_restore(op)
+                    if op.get("defer"):
+                        # background revive: run at the first quiet gap, never ahead of a cell;
+                        # the reply (same id) settles the host's restoreResult promise
+                        self.deferred_restore = op
+                    else:
+                        self.op_restore(op)
                 elif o == "listNames":
                     self.op_names(op)
                 elif o == "interrupt":

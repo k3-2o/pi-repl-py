@@ -7,7 +7,6 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveHelperDirs } from "./helpers-locate.js";
 
-const KERNEL_READY_TIMEOUT_MS = 30_000;
 const SILENCE_KILL_GRACE_MS = 2000;
 const DEFAULT_MAX_OUTPUT_CHARS = 1_000_000;
 /** The bridge ships at the package root, next to index.ts; src/engine is two levels deep. */
@@ -18,6 +17,8 @@ export interface KernelOptions {
 	env?: Record<string, string>;
 	/** Silence watchdog in ms; 0 = no cap (a silent-but-working cell may run on). */
 	timeoutMs?: number;
+	/** When present, the bridge self-schedules snapshots in its own quiet gaps. */
+	snapshot?: { path: string; max_bytes: number; period_ms: number };
 }
 
 export interface CellResult {
@@ -155,6 +156,7 @@ export class KernelClient {
 			kc.settleActive(new Error("kernel process exited"));
 			kc.ready = false;
 			kc.child = undefined;
+			kc.rejectBootWaiters(new Error("bridge exited before it was ready"));
 			kc._onUnexpectedExit?.();
 		});
 
@@ -164,10 +166,10 @@ export class KernelClient {
 				? readHelperSources([opts.env.PI_HELPERS_DIR])
 				: readHelperSources(resolveHelperDirs(opts.cwd, opts.env?.PI_HELPERS_GLOBAL_DIR))
 		).map((h) => ({ name: h.name, source: h.source }));
-		kc.send({ op: "boot", helpers });
+		kc.send({ op: "boot", helpers, snapshot: opts.snapshot });
 
 		try {
-			await kc.waitReady(KERNEL_READY_TIMEOUT_MS);
+			await kc.waitReady();
 		} catch (error) {
 			kc.kill();
 			throw error instanceof Error
@@ -254,24 +256,17 @@ export class KernelClient {
 		this.child?.stdin?.write(JSON.stringify(msg) + "\n");
 	}
 
-	private waitReady(timeoutMs: number): Promise<void> {
+	/** Resolves on the bridge's ready event; rejects on a boot error or a bridge exit.
+	 *  A wedged (alive but silent) bridge is bounded by the lifecycle's boot race. */
+	private waitReady(): Promise<void> {
 		return new Promise<void>((resolve, reject) => {
-			const timer = setTimeout(() => {
-				this.readyWaiters.shift();
-				reject(new Error(`bridge did not become ready in ${timeoutMs}ms`));
-			}, timeoutMs);
-			timer.unref?.();
-			this.readyWaiters.push({
-				resolve: () => {
-					clearTimeout(timer);
-					resolve();
-				},
-				reject: (error) => {
-					clearTimeout(timer);
-					reject(error);
-				},
-			});
+			this.readyWaiters.push({ resolve: () => resolve(), reject });
 		});
+	}
+
+	private rejectBootWaiters(error: Error): void {
+		const waiters = this.readyWaiters.splice(0);
+		for (const w of waiters) w.reject(error);
 	}
 
 	private enqueue<T>(fn: () => Promise<T>): Promise<T> {
@@ -463,7 +458,20 @@ export class KernelClient {
 		});
 	}
 
-	restore(path: string): Promise<{ restored: string[]; failed: { name: string; reason: string }[] }> {
+	restore(path: string, defer = false): Promise<{ restored: string[]; failed: { name: string; reason: string }[] }> {
+		if (defer) {
+			// background revive: bypass the op queue — a queued restore would hold every user
+			// cell behind its completion. The bridge runs it at its first quiet gap instead.
+			const id = `r${this.nextId++}`;
+			return new Promise<BridgeMessage>((resolve, reject) => {
+				this.pending.set(id, { resolve, reject });
+				this.send({ op: "restore", path, defer: true, id });
+			}).then((msg) => {
+				const m = msg as { restored?: string[]; failed?: { name: string; reason: string }[]; error?: string };
+				if (m.error !== undefined) throw new Error(m.error);
+				return { restored: m.restored ?? [], failed: m.failed ?? [] };
+			});
+		}
 		return this.request({ op: "restore", path }).then((msg) => {
 			const m = msg as { restored?: string[]; failed?: { name: string; reason: string }[]; error?: string };
 			if (m.error !== undefined) throw new Error(m.error);

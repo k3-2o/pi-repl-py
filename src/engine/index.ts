@@ -22,15 +22,11 @@ const DEFAULT_MAX_OUTPUT_CHARS = 46080;
 /** Per-line cap: one giant line must not own the channel budget while long JSON/reprs/errors still pass whole. */
 export const MAX_OUTPUT_LINE_CHARS = 4096;
 const ABORT_GRACE_MS = 20_000;
-const DEFAULT_SNAPSHOT_DEBOUNCE_MS = 1500;
-const DEFAULT_SNAPSHOT_PERIOD_MS = 120_000;
-/** Guard: a periodic refresh stands down for already-heavy namespaces — they re-arm on name churn anyway. */
-export const FORCED_SNAPSHOT_MAX_BYTES = 8 * 1024 * 1024;
+/** Shared deadline: bounds a wedged boot (lifecycle) and a wedged background restore alike. */
+export const DEFAULT_BOOT_TIMEOUT_MS = 90_000;
 /** Snapshot size cap, also per-entry; oversized bindings are reported as skipped names. */
 const DEFAULT_SNAPSHOT_MAX_BYTES = 128 * 1024 * 1024;
-const RESTORE_QUIET_MS = 250;
-/** Restore-cell deadline: a poisoned pickle would wedge the kernel's single queue forever — kill and mark skipped. */
-const DEFAULT_RESTORE_DEADLINE_MS = 90_000;
+const DEFAULT_SNAPSHOT_PERIOD_MS = 120_000;
 
 interface EngineExecuteError {
 	name: string;
@@ -72,7 +68,6 @@ export interface EngineOptions {
 	env?: Record<string, string>;
 	snapshot?: {
 		path: string;
-		debounceMs?: number;
 		/** Total base64 payload cap; also the per-entry cap. Oversized entries are skipped with a reason. Default 128 MiB. */
 		maxBytes?: number;
 		/** Force a refresh when the last persisted snapshot is older than this, even if no name changed. 0 disables. Default 2 min. */
@@ -181,16 +176,10 @@ export class EngineManager {
 	private state: "idle" | "starting" | "running" | "shutdown" = "idle";
 	private startPromise?: Promise<void>;
 	private executionQueue: Promise<unknown> = Promise.resolve();
-	private snapshotTimer?: ReturnType<typeof setTimeout>;
-	/** In-flight user cells; the debounced snapshot never cuts in front of one. */
-	private inFlightCells = 0;
-	/** Last-seen namespace names; the snapshot is gated on this set changing. */
-	private lastNamespaceNames?: string[];
 	private pythonPath?: string;
 	private restoredKernel?: KernelClient;
 	/** A wedged revive marks the engine: later kernels boot without restoring. */
 	private restoreSkipped: boolean;
-	private restoreTimer?: ReturnType<typeof setTimeout>;
 	private restoreResolve?: (result: RestoreResult | null) => void;
 	private restorePromise?: Promise<RestoreResult | null>;
 	private restoreSettledResult?: RestoreResult | null;
@@ -198,10 +187,6 @@ export class EngineManager {
 	/** Whether the current boot's report has been handed out (once per boot). */
 	private helperReportTaken = true;
 	private readonly forkInherited: boolean;
-	/** When the last snapshot was persisted; 0 = never. Drives the periodic refresh. */
-	private lastPersistedAt = 0;
-	/** Payload bytes of the last persisted snapshot; the periodic refresh stands down above FORCED_SNAPSHOT_MAX_BYTES. */
-	private lastSnapshotBytes = 0;
 
 	constructor(options: EngineOptions = {}) {
 		this.options = options;
@@ -253,10 +238,18 @@ export class EngineManager {
 		this.pythonPath = resolvePythonPath(this.options.cwd);
 		const timeoutMs = Number(process.env.PI_REPL_TIMEOUT_MS ?? this.options.env?.PI_REPL_TIMEOUT_MS ?? 0) || 0;
 		try {
+			const snap = this.options.snapshot;
 			this.kernel = await KernelClient.start(this.pythonPath, {
 				cwd: this.options.cwd,
 				env: this.options.env,
 				timeoutMs,
+				snapshot: snap
+					? {
+							path: snap.path,
+							max_bytes: snap.maxBytes ?? DEFAULT_SNAPSHOT_MAX_BYTES,
+							period_ms: snap.periodMs ?? DEFAULT_SNAPSHOT_PERIOD_MS,
+						}
+					: undefined,
 			});
 			// --- a fresh boot's helper verdicts are announced once, on the first cell after it ---
 			this.helperReport = this.kernel.helperReport;
@@ -267,7 +260,6 @@ export class EngineManager {
 				if (this.kernel !== current) return;
 				this.kernel = undefined;
 				this.startPromise = undefined;
-				this.lastNamespaceNames = undefined;
 				this.helperReport = null;
 			});
 		} catch (error) {
@@ -282,13 +274,12 @@ export class EngineManager {
 			throw new Error("Engine has been shut down");
 		}
 		this.state = "running";
-		// --- recovery runs in the first quiet gap — never ahead of a user cell, never on the first call's critical path ---
-		this.maybeScheduleRestore();
+		// --- recovery runs in the bridge's first quiet gap — never ahead of a user cell ---
+		this.restoreInBackground();
 	}
 
 	/** Abrupt teardown: SIGKILL the kernel; safe from process.on("exit"). */
 	killSync(): void {
-		this.clearSnapshotTimer();
 		this.state = "shutdown";
 		liveEngines.delete(this);
 		this.kernel?.kill();
@@ -361,15 +352,12 @@ export class EngineManager {
 			};
 			opts.signal?.addEventListener("abort", onAbort, { once: true });
 
-			this.inFlightCells++;
 			try {
 				const r = await this.kernel!.executeCell(code, {
 					signal: opts.signal,
 					onStream: opts.onStream,
 					maxOutputChars: maxChars,
 				});
-				// --- names gate runs off the critical path so the next cell enqueues before it ---
-				if (r.status === "ok") setImmediate(() => void this.scheduleSnapshotIfChanged());
 				const status: ExecuteResult["status"] = opts.signal?.aborted ? "aborted" : r.status;
 				// Channel cap (truncateWithMarker), then per-line cap; both append a marker so truncation is explicit.
 				const finalize = (text: string, channelTruncated: boolean): string => {
@@ -395,7 +383,6 @@ export class EngineManager {
 			} finally {
 				opts.signal?.removeEventListener("abort", onAbort);
 				if (graceTimer) clearTimeout(graceTimer);
-				this.inFlightCells--;
 			}
 		} finally {
 			release();
@@ -411,20 +398,10 @@ export class EngineManager {
 			if (reply.complete === false) return null;
 			// --- the bridge wrote the file atomically; names and counts only cross the pipe ---
 			const saved = reply.saved ?? reply.entries?.map((e) => e.name) ?? [];
-			const bytes = reply.bytes ?? reply.entries?.reduce((n, e) => n + e.payload.length, 0) ?? 0;
-			this.lastPersistedAt = Date.now();
-			this.lastSnapshotBytes = bytes;
-			await this.advanceSnapshotGate();
 			return { path: config.path, saved, failed: reply.failed };
 		} catch {
 			return null;
 		}
-	}
-
-	/** On success, advance the name-diff gate to today's names — a failed write never blocks the retry. */
-	private async advanceSnapshotGate(): Promise<void> {
-		const names = await this.listNamespaceNames();
-		if (names !== null && names.length > 0) this.lastNamespaceNames = [...names].sort();
 	}
 
 	/** Restore outcome (never rejects); the background quiet-gap job — this promise is the lifecycle's only announce hook. */
@@ -450,36 +427,46 @@ export class EngineManager {
 		this.restoreResolve = undefined;
 	}
 
-	/** Background revive: fires in the first quiet gap (never ahead of a user cell); mid-session rebuilds force it synchronously. */
-	private maybeScheduleRestore(): void {
+	/** Background revive: the bridge runs it at its first quiet gap (never ahead of a user cell);
+	 *  mid-session rebuilds force it synchronously instead. */
+	private restoreInBackground(): void {
 		const config = this.options.snapshot;
-		if (!config) return;
-		if (this.restoreSkipped) {
+		const kernel = this.kernel;
+		if (!config || !kernel || this.restoreSkipped) {
 			this.settleRestore(null);
 			return;
 		}
-		if (this.kernel && this.kernel === this.restoredKernel) return; // this kernel already revived
+		if (kernel === this.restoredKernel) return; // this kernel already revived
 		if (!existsSync(config.path)) {
 			this.settleRestore(null);
 			return;
 		}
-		if (this.restoreTimer) return; // already armed
-		const arm = () => {
-			this.restoreTimer = setTimeout(() => {
-				this.restoreTimer = undefined;
-				// --- quiet-gap rule: a pickling restore must not queue ahead of the user's next cell ---
-				if (this.inFlightCells > 0 || !this.kernel?.isRunning) {
-					arm();
-					return;
-				}
-				void this.runRestore();
-			}, RESTORE_QUIET_MS);
-			this.restoreTimer.unref?.();
-		};
-		arm();
+		this.restoredKernel = kernel;
+		// a poisoned pickle would wedge the bridge's single loop forever — the boot deadline
+		// kills and marks the revive skipped instead
+		const deadlineMs =
+			Number(process.env.PI_REPL_BOOT_TIMEOUT_MS ?? this.options.env?.PI_REPL_BOOT_TIMEOUT_MS ?? 0) ||
+			DEFAULT_BOOT_TIMEOUT_MS;
+		const reaper = setTimeout(() => {
+			this.restoreSkipped = true;
+			this.settleRestore(null);
+			this.kernel?.kill();
+		}, deadlineMs);
+		reaper.unref?.();
+		kernel
+			.restore(config.path, true)
+			.then((reply) => {
+				clearTimeout(reaper);
+				const result: RestoreResult = { path: config.path, restored: reply.restored, failed: reply.failed };
+				this.settleRestore(result);
+			})
+			.catch(() => {
+				clearTimeout(reaper);
+				this.settleRestore(null);
+			});
 	}
 
-	/** Restore-cell watchdog: an unpickling that never returns would wedge the single queue forever — kill, skip, and rebuild honestly. */
+	/** Restore-cell deadline: a poisoned pickle would wedge the bridge's single loop forever — kill, skip, and rebuild honestly. */
 	private async restoreWithReap(): Promise<RestoreResult | null> {
 		const config = this.options.snapshot;
 		if (!config || !this.kernel || this.restoreSkipped) {
@@ -489,7 +476,7 @@ export class EngineManager {
 		if (this.kernel === this.restoredKernel) return this.restoreResult();
 		const deadlineMs =
 			Number(process.env.PI_REPL_BOOT_TIMEOUT_MS ?? this.options.env?.PI_REPL_BOOT_TIMEOUT_MS ?? 0) ||
-			DEFAULT_RESTORE_DEADLINE_MS;
+			DEFAULT_BOOT_TIMEOUT_MS;
 		const reaper = setTimeout(() => {
 			this.restoreSkipped = true;
 			this.settleRestore(null);
@@ -501,10 +488,6 @@ export class EngineManager {
 		} finally {
 			clearTimeout(reaper);
 		}
-	}
-
-	private async runRestore(): Promise<void> {
-		await this.restoreWithReap();
 	}
 
 	/** Restore, idempotent per kernel: a second call shares the in-flight outcome. */
@@ -524,7 +507,7 @@ export class EngineManager {
 		if (kernel === this.restoredKernel) {
 			return this.restoreResult();
 		}
-		// claim the kernel now so the quiet-gap scheduler cannot start a second restore cell
+		// claim the kernel now so a background revive cannot start a second restore cell
 		this.restoredKernel = kernel;
 		if (!existsSync(config.path)) {
 			this.settleRestore(null);
@@ -553,51 +536,6 @@ export class EngineManager {
 			return await this.kernel.listNames();
 		} catch {
 			return null;
-		}
-	}
-
-	/** Snapshot on name change, or when the last persisted snapshot went stale (periodMs) — same-name mutations would otherwise never re-arm; a failed write leaves the gate in place. */
-	private async scheduleSnapshotIfChanged(): Promise<void> {
-		const config = this.options.snapshot;
-		if (!config) return;
-		const names = await this.listNamespaceNames();
-		if (names === null || names.length === 0) return;
-		const key = [...names].sort().join(",");
-		const prev = this.lastNamespaceNames ? [...this.lastNamespaceNames].sort().join(",") : undefined;
-		const changed = prev === undefined || prev !== key;
-		const periodMs = config.periodMs ?? DEFAULT_SNAPSHOT_PERIOD_MS;
-		const stale =
-			periodMs > 0 &&
-			this.lastPersistedAt > 0 &&
-			Date.now() - this.lastPersistedAt >= periodMs &&
-			this.lastSnapshotBytes <= FORCED_SNAPSHOT_MAX_BYTES;
-		if (!changed && !stale) return;
-		this.scheduleSnapshot();
-	}
-
-	private scheduleSnapshot(): void {
-		const config = this.options.snapshot;
-		if (!config) return;
-		this.clearSnapshotTimer();
-		const quiet = config.debounceMs ?? DEFAULT_SNAPSHOT_DEBOUNCE_MS;
-		const fire = () => {
-			this.snapshotTimer = undefined;
-			if (this.inFlightCells > 0) {
-				// --- pickling must not queue ahead of the user's next request; re-arm the quiet window until the kernel is idle ---
-				this.snapshotTimer = setTimeout(fire, quiet);
-				this.snapshotTimer.unref?.();
-				return;
-			}
-			void this.snapshotState();
-		};
-		this.snapshotTimer = setTimeout(fire, quiet);
-		this.snapshotTimer.unref?.();
-	}
-
-	private clearSnapshotTimer(): void {
-		if (this.snapshotTimer) {
-			clearTimeout(this.snapshotTimer);
-			this.snapshotTimer = undefined;
 		}
 	}
 }

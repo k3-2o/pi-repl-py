@@ -15,7 +15,6 @@ import type { RestoreResult } from "../src/engine/index.js";
 import {
 	capLinesForContext,
 	EngineManager,
-	FORCED_SNAPSHOT_MAX_BYTES,
 	MAX_OUTPUT_LINE_CHARS,
 	pruneOrphanedSnapshotDirs,
 	pruneSnapshotDirs,
@@ -1255,124 +1254,6 @@ describe("pruneSnapshotDirs keeps only the newest snapshots", () => {
 			rmSync(root, { recursive: true, force: true });
 			rmSync(sessions, { recursive: true, force: true });
 		}
-	});
-});
-
-describe("snapshot gate retry", () => {
-	// The name-diff gate may only advance on a PERSISTED snapshot: a failed write must leave
-	// it in place, or a transient failure would silently end every later snapshot. The fake
-	// kernel below drives the real EngineManager gate + debounce through its private seam.
-	function gatedEngine(
-		onSnapshot: () => Promise<{ entries: never[]; failed: never[]; complete: boolean }>,
-		opts: { periodMs?: number } = {},
-	) {
-		const d = mkdtempSync(join(tmpdir(), "pi-repl-gate-"));
-		const m = new EngineManager({
-			cwd: d,
-			snapshot: { path: join(d, "ns.snapshot"), debounceMs: 1, periodMs: opts.periodMs ?? 0 },
-		});
-		const anyM = m as unknown as {
-			kernel: object;
-			state: string;
-			lastNamespaceNames: string[] | undefined;
-			lastPersistedAt: number;
-			lastSnapshotBytes: number;
-			scheduleSnapshotIfChanged(): Promise<void>;
-		};
-		anyM.state = "running";
-		anyM.lastNamespaceNames = [];
-		anyM.lastPersistedAt = 0;
-		anyM.lastSnapshotBytes = 0;
-		anyM.kernel = {
-			listNames: async () => ["a"],
-			snapshot: onSnapshot,
-		} as never;
-		return anyM;
-	}
-
-	const settle = () => new Promise((resolve) => setTimeout(resolve, 30));
-
-	test("a failed snapshot leaves the gate in place, so the next cell retries", async () => {
-		let snapshotCalls = 0;
-		const m = gatedEngine(async () => {
-			snapshotCalls += 1;
-			return { entries: [], failed: [], complete: false };
-		});
-		await m.scheduleSnapshotIfChanged();
-		await settle();
-		expect(snapshotCalls).toBe(1);
-		// same names, gate never advanced → the diff is still visible and the debounce re-arms
-		await m.scheduleSnapshotIfChanged();
-		await settle();
-		expect(snapshotCalls).toBe(2);
-	});
-
-	test("a persisted snapshot advances the gate and stops re-arming", async () => {
-		let snapshotCalls = 0;
-		const m = gatedEngine(async () => {
-			snapshotCalls += 1;
-			return { entries: [], failed: [], complete: true };
-		});
-		await m.scheduleSnapshotIfChanged();
-		await settle();
-		expect(snapshotCalls).toBe(1);
-		// the write succeeded; the gate now holds today's names → unchanged cells skip
-		await m.scheduleSnapshotIfChanged();
-		await settle();
-		expect(snapshotCalls).toBe(1);
-	});
-
-	test("a stale snapshot forces a refresh even when names are unchanged", async () => {
-		let snapshotCalls = 0;
-		const m = gatedEngine(
-			async () => {
-				snapshotCalls += 1;
-				return { entries: [], failed: [], complete: true };
-			},
-			{ periodMs: 50 },
-		);
-		m.lastNamespaceNames = ["a"]; // names unchanged...
-		m.lastPersistedAt = Date.now() - 100; // ...but the last snapshot is stale
-		await m.scheduleSnapshotIfChanged();
-		await settle();
-		expect(snapshotCalls).toBe(1);
-		// the refresh persisted and reset the clock -> the next cell stays quiet
-		await m.scheduleSnapshotIfChanged();
-		await settle();
-		expect(snapshotCalls).toBe(1);
-	});
-
-	test("a recent snapshot does not force a refresh", async () => {
-		let snapshotCalls = 0;
-		const m = gatedEngine(
-			async () => {
-				snapshotCalls += 1;
-				return { entries: [], failed: [], complete: true };
-			},
-			{ periodMs: 50 },
-		);
-		m.lastNamespaceNames = ["a"];
-		m.lastPersistedAt = Date.now();
-		await m.scheduleSnapshotIfChanged();
-		await settle();
-		expect(snapshotCalls).toBe(0);
-	});
-
-	test("the forced pass stands down for already-heavy namespaces", async () => {
-		let snapshotCalls = 0;
-		const m = gatedEngine(
-			async () => {
-				snapshotCalls += 1;
-				return { entries: [], failed: [], complete: true };
-			},
-			{ periodMs: 50 },
-		);
-		m.lastNamespaceNames = ["a"];
-		m.lastPersistedAt = Date.now() - 100;
-		m.lastSnapshotBytes = FORCED_SNAPSHOT_MAX_BYTES + 1;
-		await m.scheduleSnapshotIfChanged();
-		await settle();
-		expect(snapshotCalls).toBe(0);
 	});
 });
 

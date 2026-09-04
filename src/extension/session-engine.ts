@@ -1,6 +1,6 @@
 // Lifecycle: boot, session binding, reset announcements. Recovery is a background quiet-gap job; the notice lands on the first cell after the restore.
 
-import type { HelperLoadResult, RestoreResult } from "../engine/index.js";
+import { DEFAULT_BOOT_TIMEOUT_MS, type HelperLoadResult, type RestoreResult } from "../engine/index.js";
 
 /** Show enough names to orient, then count the rest (a revive can carry hundreds). */
 function summarizeNames(names: readonly string[], limit: number): string {
@@ -33,8 +33,6 @@ export interface EngineLifecycleDeps<E extends RevivableEngine> {
 
 /** startup: announce when the conversation has a saved past; cell: a mid-session rebuild announces immediately. */
 export type AcquireOrigin = "startup" | "cell";
-
-const DEFAULT_BOOT_TIMEOUT_MS = 90_000;
 
 function revivedNoticeBody(origin: AcquireOrigin): string {
 	const resumed = origin === "startup";
