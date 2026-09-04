@@ -18,7 +18,7 @@ function resolvePythonPath(_cwd: string | undefined): string {
 	return process.env.PYTHON ?? "python3";
 }
 
-const DEFAULT_MAX_OUTPUT_CHARS = 46080;
+export const DEFAULT_MAX_OUTPUT_CHARS = 46080;
 /** Per-line cap: one giant line must not own the channel budget while long JSON/reprs/errors still pass whole. */
 export const MAX_OUTPUT_LINE_CHARS = 4096;
 const ABORT_GRACE_MS = 20_000;

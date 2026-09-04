@@ -1,8 +1,10 @@
+import { DEFAULT_MAX_OUTPUT_CHARS } from "../engine/index.js";
+
 export const executeToolDescription =
 	"Execute Python in a Jupyter notebook. Your workspace is a notebook where every cell runs in a " +
 	"shared Python environment: variables, functions, imports, classes, and data defined in one cell " +
 	"stay available and reuseable for later cells for the life of the notebook. " +
-	"Output is truncated to 45K with an explicit marker";
+	`Output is truncated to ${DEFAULT_MAX_OUTPUT_CHARS} chars with an explicit marker`;
 
 export const executePromptSnippet = "Execute Python in a Jupyter notebook (read, write, run, search, and more)";
 
