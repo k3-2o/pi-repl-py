@@ -1,18 +1,18 @@
 export const executeToolDescription =
-	"Execute Python in a Jupyter notebook. Your workspace is one notebook where every cell runs in a " +
+	"Execute Python in a Jupyter notebook. Your workspace is a notebook where every cell runs in a " +
 	"shared Python environment: variables, functions, imports, classes, and data defined in one cell " +
 	"stay available and reuseable for later cells for the life of the notebook. " +
-	"Output is truncated to 45K with an explicit marker ([... output truncated at 46080 chars ...]).";
+	"Output is truncated to 45K with an explicit marker";
 
-export const executePromptSnippet = "Run Python in a Jupyter notebook (read, write, run, search, and more)";
+export const executePromptSnippet = "Execute Python in a Jupyter notebook (read, write, run, search, and more)";
 
 export function buildPromptGuidelines(preloaded: string[]): string[] {
 	return [
-		"Write modern idiomatic Python.",
-		"Find, Filter, Fetch: narrow down the output in Python and only print the exact slice you'll ever need, be scrupulous.",
-		"Make surgical, precise, atomic changes over rewrites or whole-file dumps: read the exact lines FIRST, anchor them, replace, verify, read the file back before trusting it",
-		"AMORTIZE existing variables, functions, imports, classes, and data from prior cells/namespaces over re-deriving, recomputing or reconstructing.",
-		"If output begins with <repl_engine_reset>, the runtime rebuilt and the notebook was restored from a recent snapshot; reverify surviving states before building on them.",
+		"Write idiomatic Python.",
+		"Find, Filter, Fetch, Sample and Narrow down the output in Python, always print the exact (slice, snippet, Excerpt) you need. Be precise",
+		"Make surgical changes over rewrites or whole-file dumps: read the exact lines first, anchor them, then replace, verify and read the file back before trusting it",
+		"REUSE existing variables, functions, imports, classes, and data from prior cells/namespaces rather than recomputing or reconstructing states that already exist in the notebook.",
+		"If output begins with <repl_engine_reset>, the runtime rebuilt and the kernel was restored from a snapshot; reverify surviving states before building on them.",
 		...(preloaded.length
 			? [
 					[
