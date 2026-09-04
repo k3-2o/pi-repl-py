@@ -6,21 +6,13 @@ export const executeToolDescription =
 
 export const executePromptSnippet = "Execute Python in a Jupyter notebook (read, write, run, search, and more)";
 
-export function buildPromptGuidelines(preloaded: string[]): string[] {
+export function buildPromptGuidelines(): string[] {
 	return [
 		"Write idiomatic Python.",
 		"Find, Filter, Fetch, Sample and Narrow down the output in Python, always print the exact (slice, snippet, Excerpt) you need. Be precise.",
 		"Make surgical changes over rewrites or whole-file dumps: read the exact lines first, anchor them, then replace, verify and read the file back before trusting it.",
 		"REUSE existing variables, functions, imports, classes, and data from prior cells/namespaces rather than recomputing or reconstructing states that already exist in the notebook.",
 		"If output begins with <repl_engine_reset>, the runtime rebuilt and the kernel was restored from a snapshot; reverify surviving states before building on them.",
-		...(preloaded.length
-			? [
-					[
-						"Preloaded helpers, use them as any loaded function or variable:",
-						...preloaded.map((line) => `  - ${line.replace(/\n/g, "\n    ")}`),
-					].join("\n"),
-				]
-			: []),
 		"Be concise.",
 	];
 }

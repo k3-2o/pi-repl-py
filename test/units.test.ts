@@ -277,7 +277,7 @@ describe("helper boot announcements", () => {
 	});
 
 	test("static guidelines carry no roster and no helper marker; the per-session block carries both", () => {
-		const bullets = buildPromptGuidelines([]);
+		const bullets = buildPromptGuidelines();
 		expect(bullets.some((b) => b.includes("<repl_engine_reset>"))).toBe(true);
 		expect(bullets.some((b) => b.includes("Preloaded helpers"))).toBe(false); // the roster moves to the system prompt
 		expect(bullets.some((b) => b.includes("<repl_helpers_failed>"))).toBe(false); // ...and so does its marker note

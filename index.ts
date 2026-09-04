@@ -6,6 +6,7 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 import { EngineManager, pruneOrphanedSnapshotDirs, pruneSnapshotDirs } from "./src/engine/index.js";
 import { buildHelpersPromptSection } from "./src/extension/helpers.js";
+import { buildPromptGuidelines, executePromptSnippet, executeToolDescription } from "./src/extension/prompt.js";
 import { ExecuteCellComponent, type ExecuteDetails, type ExecuteRenderState } from "./src/extension/render.js";
 import {
 	EngineLifecycle,
@@ -16,11 +17,6 @@ import {
 } from "./src/extension/session-engine.js";
 import { withSkillsBlock } from "./src/extension/skill-hook.js";
 import { conversationName, inheritForkSnapshot, resolveStateDir } from "./src/extension/state-layout.js";
-import {
-	buildExecutePromptGuidelines,
-	EXECUTE_DESCRIPTION,
-	EXECUTE_PROMPT_SNIPPET,
-} from "./src/extension/tool-meta.js";
 
 const executeSchema = Type.Object({
 	code: Type.String({
@@ -164,9 +160,9 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool<typeof executeSchema, ExecuteDetails, Partial<ExecuteRenderState>>({
 		name: "execute",
 		label: "execute",
-		description: EXECUTE_DESCRIPTION,
-		promptSnippet: EXECUTE_PROMPT_SNIPPET,
-		promptGuidelines: buildExecutePromptGuidelines(),
+		description: executeToolDescription,
+		promptSnippet: executePromptSnippet,
+		promptGuidelines: buildPromptGuidelines(),
 		parameters: executeSchema,
 		renderShell: "self",
 		renderCall(args, theme, context) {
