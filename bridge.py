@@ -39,60 +39,15 @@ READY_TIMEOUT_MS = 30_000
 
 # --- kernel-side programs. These run inside ipykernel, so they stay strings (now plain Python). ---
 
-SNAPSHOT_HEAD = """import pickle as _pk, base64 as _b64, json as _js, zlib as _zl, inspect as _in, linecache as _lc
-def _repl_class_source(_c):
-    _m = getattr(_c, '__init__', None)
-    if _m is None or not _in.isfunction(_m):
-        for _v in vars(_c).values():
-            if _in.isfunction(_v):
-                _m = _v
-                break
-    if _m is None:
-        raise ValueError('class has no member methods')
-    _start = _m.__code__.co_firstlineno
-    _all = _lc.getlines(_m.__code__.co_filename)
-    if not _all:
-        raise ValueError('source not in linecache')
-    _ln = _start - 1
-    while _ln > 0:
-        _prev = _all[_ln - 1].lstrip()
-        if _prev.startswith('class ') and _c.__name__ in _prev:
-            break
-        _ln -= 1
-    if _ln == 0:
-        raise ValueError('class header not found')
-    _head = _ln - 1
-    while _head > 0:
-        _p = _all[_head - 1].lstrip()
-        if _p == '' or _p.startswith('@'):
-            _head -= 1
-        else:
-            break
-    _indent = len(_all[_head]) - len(_all[_head].lstrip())
-    _block = [_all[_head]]
-    _j = _head + 1
-    while _j < len(_all):
-        _line = _all[_j]
-        if _line.strip() == '':
-            _block.append(_line)
-            _j += 1
-            continue
-        if len(_line) - len(_line.lstrip()) > _indent:
-            _block.append(_line)
-            _j += 1
-        else:
-            break
-    return ''.join(_block)
-"""
-
-
 def skip_set_literal(helper_names):
     skip = list(helper_names) + ["helper_description", "In", "Out", "get_ipython", "exit", "quit", "open"]
     return json.dumps(skip)
 
 
 def snapshot_code(helper_names, max_bytes):
-    return (SNAPSHOT_HEAD
+    # v4: cloudpickle serializes functions and classes by value — no source-capture machinery.
+    # Entries are zlib-compressed cloudpickle streams; one unpicklable binding costs itself only.
+    return ("import cloudpickle as _cp, base64 as _b64, json as _js, zlib as _zl\n"
             + "__repl_skip = set(" + skip_set_literal(helper_names) + ")\n"
             + "__repl_max = " + str(max_bytes) + "\n"
             + """__repl_e = []
@@ -101,46 +56,32 @@ __repl_total = 0
 for _k, _v in list(globals().items()):
     if _k.startswith('_') or _k in __repl_skip:
         continue
-    __repl_p = None
-    __repl_kind = 'value'
     try:
-        if _in.isfunction(_v):
-            __repl_src = _in.getsource(_v)
-            if __repl_src:
-                __repl_p = _b64.b64encode(__repl_src.encode()).decode()
-                __repl_kind = 'def'
-        elif _in.isclass(_v):
-            __repl_src = _repl_class_source(_v)
-            if __repl_src:
-                __repl_p = _b64.b64encode(__repl_src.encode()).decode()
-                __repl_kind = 'def'
-    except Exception:
-        __repl_p = None
-        __repl_kind = 'value'
-    try:
-        if __repl_p is None:
-            __repl_p = _b64.b64encode(_zl.compress(_pk.dumps(_v), 1)).decode()
+        __repl_p = _b64.b64encode(_zl.compress(_cp.dumps(_v), 1)).decode()
         __repl_b = len(__repl_p)
         if __repl_b > __repl_max:
             __repl_f.append({'name': _k, 'reason': 'exceeds per-entry snapshot cap'})
         elif __repl_total + __repl_b > __repl_max:
             __repl_f.append({'name': _k, 'reason': 'exceeds total snapshot cap'})
         else:
-            __repl_e.append({'name': _k, 'kind': __repl_kind, 'payload': __repl_p})
+            __repl_e.append({'name': _k, 'kind': 'value', 'payload': __repl_p})
             __repl_total += __repl_b
     except Exception as _e:
         __repl_f.append({'name': _k, 'reason': str(_e)})
 """
-            + "get_ipython().display_pub.publish({" + json.dumps(SNAPSHOT_MIME) + ": _js.dumps({'version': 2, 'entries': __repl_e, 'failed': __repl_f})})\n")
+            + "get_ipython().display_pub.publish({" + json.dumps(SNAPSHOT_MIME) + ": _js.dumps({'version': 4, 'entries': __repl_e, 'failed': __repl_f})})\n")
 
 
-def _restore_body(name, kind, payload, compressed):
+def _restore_body(name, kind, payload, version):
     n = json.dumps(name)
-    if kind == "def":
+    pl = json.dumps(payload)
+    if version >= 4:
+        body = "globals()[" + n + "] = _cp.loads(_zl.decompress(_b64.b64decode(" + pl + ")))"
+    elif version == 3 and kind == "def":
         # re-execute captured source and register it in linecache under the code
         # so a later snapshot can capture it again
         body = (
-            "__repl_src = _b64.b64decode(" + json.dumps(payload) + ").decode()\n"
+            "__repl_src = _b64.b64decode(" + pl + ").decode()\n"
             + "    exec(__repl_src, globals())\n"
             + "    __repl_obj = globals().get(" + n + ")\n"
             + "    if __repl_obj is not None:\n"
@@ -152,17 +93,23 @@ def _restore_body(name, kind, payload, compressed):
             + "            _lc.cache[__repl_fname] = (len(__repl_src.splitlines()), None, __repl_src.splitlines(True), __repl_fname)"
         )
     else:
-        inner = "_pk.loads(_b64.b64decode(" + json.dumps(payload) + "))"
-        if compressed:
-            inner = "_pk.loads(_zl.decompress(" + (json.dumps(payload))[0:0] + "_b64.b64decode(" + json.dumps(payload) + ")))"
-        body = "globals()[" + n + "] = " + inner
+        inner = "_b64.b64decode(" + pl + ")"
+        if version == 3:
+            inner = "_zl.decompress(" + inner + ")"
+        body = "globals()[" + n + "] = _pk.loads(" + inner + ")"
     return ("try:\n    " + body + "\n    __repl_r['restored'].append(" + n + ")\n"
             + "except Exception as _e:\n    __repl_r['failed'].append({'name': " + n + ", 'reason': str(_e)})\n")
 
 
-def restore_code(entries, compressed_values):
-    per = "".join(_restore_body(e["name"], e.get("kind", "value"), e["payload"], compressed_values) for e in entries)
-    return ("import pickle as _pk, base64 as _b64, json as _js, zlib as _zl, linecache as _lc\n"
+def restore_code(entries, version):
+    if version >= 4:
+        head = "import cloudpickle as _cp, base64 as _b64, json as _js, zlib as _zl\n"
+    elif version == 3:
+        head = "import pickle as _pk, base64 as _b64, json as _js, zlib as _zl, linecache as _lc\n"
+    else:
+        head = "import pickle as _pk, base64 as _b64, json as _js\n"
+    per = "".join(_restore_body(e["name"], e.get("kind", "value"), e["payload"], version) for e in entries)
+    return (head
             + "__repl_r = {'restored': [], 'failed': []}\n"
             + per
             + "get_ipython().display_pub.publish({" + json.dumps(RESTORE_MIME) + ": _js.dumps(__repl_r)})\n")
@@ -376,6 +323,12 @@ class Bridge:
         self.emit(out)
 
     def op_snapshot(self, op):
+        try:
+            import cloudpickle  # noqa: F401 — fail loudly here, not at bridge boot
+        except ImportError as e:
+            self.emit({"type": "reply", "id": op["id"], "error":
+                       "cloudpickle is missing from the evaluator venv: %s" % e})
+            return
         res = self.run_cell(snapshot_code(self.helper_names, op["max_bytes"]), emit_stream=False,
                             payload_mime=SNAPSHOT_MIME)
         payload = res["payload"]
@@ -388,7 +341,7 @@ class Bridge:
         os.makedirs(os.path.dirname(op["path"]) or ".", exist_ok=True)
         tmp = op["path"] + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump({"version": 3, "entries": entries, "failed": failed}, fh)
+            json.dump({"version": 4, "entries": entries, "failed": failed}, fh)
         os.replace(tmp, op["path"])
         self.emit({"type": "reply", "id": op["id"],
                    "saved": [e["name"] for e in entries], "failed": failed,
@@ -409,7 +362,7 @@ class Bridge:
             # v1 files (pre-source-capture) restore via plain pickles
             entries = [{"name": n, "kind": "value", "payload": p} for n, p in (body.get("vars") or {}).items()]
             failed_at_save = []
-        res = self.run_cell(restore_code(entries, version == 3), emit_stream=False, payload_mime=RESTORE_MIME)
+        res = self.run_cell(restore_code(entries, version or 4), emit_stream=False, payload_mime=RESTORE_MIME)
         restored, failed = [], []
         if res["payload"] is not None:
             body2 = json.loads(res["payload"])

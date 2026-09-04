@@ -8,7 +8,7 @@ import { join } from "node:path";
 
 const VENV_DIR = join(homedir(), ".pi", "agent", "pi-repl", "venv");
 const PY = join(VENV_DIR, "bin", "python3");
-const DEPS = ["ipykernel"];
+const DEPS = ["ipykernel", "cloudpickle"];
 const HELPERS_DIR = join(homedir(), ".pi", "agent", "pi-repl", "helpers");
 
 // A venv that can't import ipykernel is broken — never trust the binary alone.

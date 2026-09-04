@@ -347,7 +347,7 @@ print(os.getcwd() != ${JSON.stringify(d)})`);
 		expect(r4.stdout).toContain("42");
 	});
 
-	test("snapshot files are version 3 with zlib-compressed value payloads", { timeout: 60_000 }, async () => {
+	test("snapshot files are version 4 with zlib-compressed cloudpickle payloads", { timeout: 60_000 }, async () => {
 		const d = tempDir();
 		const snap = { path: join(d, "ns.snapshot"), debounceMs: 200 };
 		const m1 = engine({ cwd: d, snapshot: snap });
@@ -357,7 +357,8 @@ print(os.getcwd() != ${JSON.stringify(d)})`);
 			version: number;
 			entries: { name: string; kind: string; payload: string }[];
 		};
-		expect(file.version).toBe(3);
+		// v4 = cloudpickle by value (functions/classes need no source capture); v1-v3 still restore
+		expect(file.version).toBe(4);
 		const entry = file.entries.find((e) => e.name === "payload_v");
 		expect(entry).toBeDefined();
 		// the payload must be a zlib stream (a raw pickle would fail to decompress)
@@ -376,7 +377,7 @@ print(os.getcwd() != ${JSON.stringify(d)})`);
 			entries: { name: string; kind: string; payload: string }[];
 			failed: unknown[];
 		};
-		expect(file.version).toBe(3);
+		expect(file.version).toBe(4);
 		for (const e of file.entries) {
 			if (e.kind === "value") {
 				const raw = inflateSync(Buffer.from(e.payload, "base64"));
@@ -539,27 +540,31 @@ print(os.getcwd() != ${JSON.stringify(d)})`);
 		},
 	);
 
-	test("a cell-defined function and class survive restart via source capture", { timeout: 90_000 }, async () => {
-		const d = tempDir();
-		const snap = { path: join(d, "ns.snapshot"), debounceMs: 200 };
-		const m1 = engine({ cwd: d, snapshot: snap });
-		const r1 = await m1.execute(
-			"def greet(name):\n    return f'hi {name}'\nclass Box:\n    def __init__(self, v):\n        self.v = v\nitem = 41",
-		);
-		expect(r1.status).toBe("ok");
-		await m1.snapshotState();
-		await m1.kill();
-		const m2 = engine({ cwd: d, snapshot: snap });
-		const restore = await m2.restoreState();
-		expect(restore?.restored).toContain("greet");
-		expect(restore?.restored).toContain("Box");
-		expect(restore?.restored).toContain("item");
-		const r2 = await m2.execute("print(greet('tester'))");
-		expect(r2.status).toBe("ok");
-		expect(r2.stdout).toContain("hi tester");
-		const r3 = await m2.execute("print(Box(7).v)");
-		expect(r3.stdout).toContain("7");
-	});
+	test(
+		"a cell-defined function and class survive restart (cloudpickle serializes them by value)",
+		{ timeout: 90_000 },
+		async () => {
+			const d = tempDir();
+			const snap = { path: join(d, "ns.snapshot"), debounceMs: 200 };
+			const m1 = engine({ cwd: d, snapshot: snap });
+			const r1 = await m1.execute(
+				"def greet(name):\n    return f'hi {name}'\nclass Box:\n    def __init__(self, v):\n        self.v = v\nitem = 41",
+			);
+			expect(r1.status).toBe("ok");
+			await m1.snapshotState();
+			await m1.kill();
+			const m2 = engine({ cwd: d, snapshot: snap });
+			const restore = await m2.restoreState();
+			expect(restore?.restored).toContain("greet");
+			expect(restore?.restored).toContain("Box");
+			expect(restore?.restored).toContain("item");
+			const r2 = await m2.execute("print(greet('tester'))");
+			expect(r2.status).toBe("ok");
+			expect(r2.stdout).toContain("hi tester");
+			const r3 = await m2.execute("print(Box(7).v)");
+			expect(r3.stdout).toContain("7");
+		},
+	);
 
 	test("snapshot excludes helper metadata and flags completeness", { timeout: 60_000 }, async () => {
 		const d = tempDir();
