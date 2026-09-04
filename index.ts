@@ -1,16 +1,26 @@
 // --- pi-repl: one execute tool over Python; everything else runs as functions inside it ---
 
-import { basename, join } from "node:path";
 import { homedir } from "node:os";
+import { basename, dirname, join } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
-import { withSkillsBlock } from "./src/extension/skill-hook.js";
-import { buildHelpersPromptSection } from "./src/extension/helpers.js";
 import { EngineManager, pruneOrphanedSnapshotDirs, pruneSnapshotDirs } from "./src/engine/index.js";
+import { buildHelpersPromptSection } from "./src/extension/helpers.js";
 import { ExecuteCellComponent, type ExecuteDetails, type ExecuteRenderState } from "./src/extension/render.js";
-import { EngineLifecycle, formatForkToast, formatHelperFailuresLine, formatHelperToast, formatResetToast } from "./src/extension/session-engine.js";
+import {
+	EngineLifecycle,
+	formatForkToast,
+	formatHelperFailuresLine,
+	formatHelperToast,
+	formatResetToast,
+} from "./src/extension/session-engine.js";
+import { withSkillsBlock } from "./src/extension/skill-hook.js";
 import { conversationName, inheritForkSnapshot, resolveStateDir } from "./src/extension/state-layout.js";
-import { EXECUTE_DESCRIPTION, buildExecutePromptGuidelines, EXECUTE_PROMPT_SNIPPET } from "./src/extension/tool-meta.js";
+import {
+	buildExecutePromptGuidelines,
+	EXECUTE_DESCRIPTION,
+	EXECUTE_PROMPT_SNIPPET,
+} from "./src/extension/tool-meta.js";
 
 const executeSchema = Type.Object({
 	code: Type.String({
@@ -76,15 +86,23 @@ export default function (pi: ExtensionAPI) {
 				// --- a /fork'd conversation inherits the parent's last namespace (copied once into the fork's own key) ---
 				try {
 					forkInherited = inheritForkSnapshot(stateRoot, sessionFile, snapshotPath);
-				} catch {}
+				} catch (error) {
+					// a racing rename or unreadable session file: the fork starts empty, but loudly
+					console.error("[pi-repl] fork snapshot inheritance failed:", error);
+				}
 				// --- keep the state root from growing one dir per session forever; the live dir is exempt ---
 				try {
 					pruneSnapshotDirs(stateRoot, 25, currentDir);
-				} catch {}
+				} catch (error) {
+					console.error("[pi-repl] snapshot dir pruning failed:", error);
+				}
 				// --- sweep state dirs whose conversation file exists in no project root: deleting a conversation deletes its snapshots (both dir formats) ---
 				try {
 					pruneOrphanedSnapshotDirs(stateRoot, sessionFile ? dirname(dirname(sessionFile)) : undefined, currentDir);
-				} catch {}
+				} catch (error) {
+					// a readdir race with a concurrent sweep: the sweep retries next session, but loudly
+					console.error("[pi-repl] orphan snapshot sweep failed:", error);
+				}
 			}
 			return new EngineManager({
 				cwd,
@@ -173,7 +191,9 @@ export default function (pi: ExtensionAPI) {
 		},
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			if (!active()) {
-				throw new Error("pi-repl is dormant in this session. Start pi with --repl (or PI_REPL_FORCE=1) to use execute.");
+				throw new Error(
+					"pi-repl is dormant in this session. Start pi with --repl (or PI_REPL_FORCE=1) to use execute.",
+				);
 			}
 			if (ctx?.cwd) location = { cwd: ctx.cwd, sessionFile: ctx.sessionManager?.getSessionFile?.() ?? undefined };
 			// --- establish the body slot at call time so Ctrl+O can expand a live, still-streaming cell ---
@@ -194,47 +214,43 @@ export default function (pi: ExtensionAPI) {
 				const reset = lifecycle.takeResetNotice();
 				if (reset?.notice)
 					ctx?.ui?.notify?.(
-						m.inheritedFromFork ? formatForkToast(reset.restore) : formatResetToast(reset.origin, reset.restore, reset.wedged),
+						m.inheritedFromFork
+							? formatForkToast(reset.restore)
+							: formatResetToast(reset.origin, reset.restore, reset.wedged),
 						"info",
 					);
 				// --- helper verdicts once per boot: toast for the human, marker for the model only when a helper failed (all-good boots stay silent) ---
 				const helperReport = m.takeHelperReport();
 				if (helperReport && helperReport.length > 0) ctx?.ui?.notify?.(formatHelperToast(helperReport), "info");
-				const sections = [
-					reset?.notice,
-					formatHelperFailuresLine(helperReport),
-					r.stdout,
-					r.stderr,
-					r.result,
-				];
+				const sections = [reset?.notice, formatHelperFailuresLine(helperReport), r.stdout, r.stderr, r.result];
 				const errorLines = r.error ? composeErrorLines(r.error) : undefined;
 				if (r.status === "error" && errorLines) sections.push(errorLines.join("\n"));
 				if (r.status === "aborted") sections.push("[cell aborted]");
-			const text = sections.filter((section) => section !== undefined && section !== "").join("\n");
+				const text = sections.filter((section) => section !== undefined && section !== "").join("\n");
 
-			const details: ExecuteDetails = {
-				status: r.status,
-				durationMs: r.durationMs,
-				errorName: r.error?.name,
-				stdout: r.stdout || undefined,
-				stderr: r.stderr || undefined,
-				result: r.result,
-				errorStack: errorLines,
-			};
-			const result = { content: [{ type: "text" as const, text: text || "(no output)" }], details };
-			if (r.status === "error") {
-				pendingErrorResults.set(toolCallId, { details });
-				throw new Error(text || "(no output)");
+				const details: ExecuteDetails = {
+					status: r.status,
+					durationMs: r.durationMs,
+					errorName: r.error?.name,
+					stdout: r.stdout || undefined,
+					stderr: r.stderr || undefined,
+					result: r.result,
+					errorStack: errorLines,
+				};
+				const result = { content: [{ type: "text" as const, text: text || "(no output)" }], details };
+				if (r.status === "error") {
+					pendingErrorResults.set(toolCallId, { details });
+					throw new Error(text || "(no output)");
+				}
+				// --- an aborted cell was interrupted, not wedged: the kernel keeps running, nothing to discard ---
+				return result;
+			} catch (error) {
+				// --- a kernel that died (or was killed as the abort backstop) is down; drop it so the next cell rebuilds ---
+				if (m.isRunning === false) {
+					await lifecycle.discard();
+				}
+				throw error;
 			}
-			// --- an aborted cell was interrupted, not wedged: the kernel keeps running, nothing to discard ---
-			return result;
-		} catch (error) {
-			// --- a kernel that died (or was killed as the abort backstop) is down; drop it so the next cell rebuilds ---
-			if (m.isRunning === false) {
-				await lifecycle.discard();
-			}
-			throw error;
-		}
 		},
 	});
 }
