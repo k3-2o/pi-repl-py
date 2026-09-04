@@ -20,6 +20,7 @@
 		"noFallthroughCasesInSwitch": true
 	},
 	"include": [
+		"index.ts",
 		"src/**/*.ts"
 	]
 }

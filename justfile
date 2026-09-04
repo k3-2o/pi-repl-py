@@ -13,8 +13,8 @@ lint:
 	{{BIOME}} check .
 	{{KNIP}}
 
-# ── typecheck ← flaky on node in this env; kept as a standalone recipe, not in check
-# (the kernel process itself is Python; the host resolves a venv at runtime)
+# ── typecheck: the entry file is the one file the runtime actually executes — the gate checks it
+# (unlike biome, tsc resolves imports, so a missing one can never ship again)
 types:
 	bunx tsc --noEmit
 
@@ -24,7 +24,7 @@ security:
 	.venv/bin/python --version
 
 # ── check (the gate: fmt + lint[+knip] + test) ─────────────────────────────
-check: fmt lint test
+check: fmt lint types test
 
 # ── test (the real spec) ──────────────────────────────────────────────────
 test:
