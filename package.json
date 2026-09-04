@@ -29,6 +29,7 @@
 		"scripts",
 		"docs",
 		"index.ts",
+		"bridge.py",
 		"README.md",
 		"LICENSE"
 	],

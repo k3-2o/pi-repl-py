@@ -1,26 +1,17 @@
+// --- KernelClient over one stdio pipe: bridge.py owns ipykernel and the Jupyter protocol;
+// --- this side spawns it, speaks one JSON line at a time, and applies the output caps. ---
+
 import { type ChildProcess, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { resolveHelperDirs } from "./helpers-locate.js";
-import {
-	type ConnectionFile,
-	executeRequest,
-	isTrustedMessage,
-	JupyterSession,
-	NAMES_MIME,
-	type ParsedMessage,
-	RESTORE_MIME,
-	readConnectionFile,
-	readPayload,
-	SNAPSHOT_MIME,
-} from "./session.js";
-import { ZmtpSocket } from "./zmtp.js";
 
 const KERNEL_READY_TIMEOUT_MS = 30_000;
 const SILENCE_KILL_GRACE_MS = 2000;
 const DEFAULT_MAX_OUTPUT_CHARS = 1_000_000;
+/** The bridge ships at the package root, next to index.ts; src/engine is two levels deep. */
+const BRIDGE_PATH = fileURLToPath(new URL("../../bridge.py", import.meta.url));
 
 export interface KernelOptions {
 	cwd?: string;
@@ -44,17 +35,15 @@ export interface CellOptions {
 	maxOutputChars?: number;
 }
 
-export interface SnapshotEntry {
-	name: string;
-	/** "value" = zlib-compressed pickle (v3 files; v2 are plain); "def" re-executes captured source (functions and classes). */
-	kind: "value" | "def";
-	payload: string;
-}
-
 export interface SnapshotReply {
-	entries: SnapshotEntry[];
+	/** Names persisted; payloads never cross the pipe — the bridge wrote the file itself. */
+	saved?: string[];
+	/** Only present for tests that fake the kernel; the real bridge replies with counts only. */
+	entries?: { name: string; kind: "value" | "def"; payload: string }[];
 	failed: { name: string; reason: string }[];
 	complete: boolean;
+	/** Payload bytes written; drives the periodic-refresh stand-down. */
+	bytes?: number;
 }
 
 export interface HelperLoadResult {
@@ -64,12 +53,46 @@ export interface HelperLoadResult {
 	error?: string;
 }
 
-/** Read the helpers dir (same skip rules as the extension's prompt loader). */
+interface BridgeMessage {
+	type?: string;
+	id?: string;
+	[key: string]: unknown;
+}
+
+interface ActiveCell {
+	id: string;
+	stdout: string[];
+	stderr: string[];
+	outLen: number;
+	errLen: number;
+	maxChars: number;
+	result?: string;
+	error?: { name: string; message: string; stack: string[] };
+	status: CellResult["status"];
+	lastActivity: number;
+	timedOut: boolean;
+	stdoutTruncated: boolean;
+	stderrTruncated: boolean;
+	signal?: AbortSignal;
+	onStream?: (chunk: string, name: "stdout" | "stderr") => void;
+	resolve(result: CellResult): void;
+	reject(error: Error): void;
+	settled: boolean;
+}
+
+interface PendingRequest {
+	resolve(msg: BridgeMessage): void;
+	reject(error: Error): void;
+	timer?: ReturnType<typeof setTimeout>;
+}
+
 /** Kernel cwd falls back to the host cwd when the requested dir is gone (a deleted project is a real resume case). */
 function resolveCwd(requested?: string): string {
 	if (requested && existsSync(requested)) return requested;
 	return process.cwd();
 }
+
+/** Read the helpers dir (same skip rules as the extension's prompt loader); sources travel in the boot line. */
 function readHelperSources(dirs: string[]): { name: string; source: string }[] {
 	// --- merged dirs come pre-ordered (project first, global last); first-seen name wins ---
 	const seen = new Set<string>();
@@ -90,427 +113,165 @@ function readHelperSources(dirs: string[]): { name: string; source: string }[] {
 	return out;
 }
 
-function buildSkipList(helperNames: string[]): string {
-	const names = new Set([...helperNames, "helper_description", "In", "Out", "get_ipython", "exit", "quit", "open"]);
-	return JSON.stringify([...names]);
-}
-
-function snapshotCode(helperNames: string[], maxBytes: number): string {
-	const skip = buildSkipList(helperNames);
-	// --- defs/classes can't be pickled by reference: capture source and re-exec on restore; oversized entries are skipped by name ---
-	return `import pickle as _pk, base64 as _b64, json as _js, zlib as _zl, inspect as _in, linecache as _lc
-def _repl_class_source(_c):
-    _m = getattr(_c, '__init__', None)
-    if _m is None or not _in.isfunction(_m):
-        for _v in vars(_c).values():
-            if _in.isfunction(_v):
-                _m = _v
-                break
-    if _m is None:
-        raise ValueError('class has no member methods')
-    _start = _m.__code__.co_firstlineno
-    _all = _lc.getlines(_m.__code__.co_filename)
-    if not _all:
-        raise ValueError('source not in linecache')
-    _ln = _start - 1
-    while _ln > 0:
-        _prev = _all[_ln - 1].lstrip()
-        if _prev.startswith('class ') and _c.__name__ in _prev:
-            break
-        _ln -= 1
-    if _ln == 0:
-        raise ValueError('class header not found')
-    _head = _ln - 1
-    while _head > 0:
-        _p = _all[_head - 1].lstrip()
-        if _p == '' or _p.startswith('@'):
-            _head -= 1
-        else:
-            break
-    _indent = len(_all[_head]) - len(_all[_head].lstrip())
-    _block = [_all[_head]]
-    _j = _head + 1
-    while _j < len(_all):
-        _line = _all[_j]
-        if _line.strip() == '':
-            _block.append(_line)
-            _j += 1
-            continue
-        if len(_line) - len(_line.lstrip()) > _indent:
-            _block.append(_line)
-            _j += 1
-        else:
-            break
-    return ''.join(_block)
-__repl_skip = set(${skip})
-__repl_max = ${maxBytes}
-__repl_e = []
-__repl_f = []
-__repl_total = 0
-for _k, _v in list(globals().items()):
-    if _k.startswith('_') or _k in __repl_skip:
-        continue
-    __repl_p = None
-    __repl_kind = 'value'
-    try:
-        if _in.isfunction(_v):
-            __repl_src = _in.getsource(_v)
-            if __repl_src:
-                __repl_p = _b64.b64encode(__repl_src.encode()).decode()
-                __repl_kind = 'def'
-        elif _in.isclass(_v):
-            __repl_src = _repl_class_source(_v)
-            if __repl_src:
-                __repl_p = _b64.b64encode(__repl_src.encode()).decode()
-                __repl_kind = 'def'
-    except Exception:
-        __repl_p = None
-        __repl_kind = 'value'
-    try:
-        if __repl_p is None:
-            __repl_p = _b64.b64encode(_zl.compress(_pk.dumps(_v), 1)).decode()
-        __repl_b = len(__repl_p)
-        if __repl_b > __repl_max:
-            __repl_f.append({'name': _k, 'reason': 'exceeds per-entry snapshot cap'})
-        elif __repl_total + __repl_b > __repl_max:
-            __repl_f.append({'name': _k, 'reason': 'exceeds total snapshot cap'})
-        else:
-            __repl_e.append({'name': _k, 'kind': __repl_kind, 'payload': __repl_p})
-            __repl_total += __repl_b
-    except Exception as _e:
-        __repl_f.append({'name': _k, 'reason': str(_e)})
-get_ipython().display_pub.publish({${JSON.stringify(SNAPSHOT_MIME)}: _js.dumps({'version': 2, 'entries': __repl_e, 'failed': __repl_f})})`;
-}
-
-function restoreCode(entries: SnapshotEntry[], compressedValues: boolean): string {
-	const per = entries
-		.map(({ name, kind, payload }) => {
-			const n = JSON.stringify(name);
-			const body =
-				kind === "def"
-					? // re-execute captured source and register it in linecache under the code
-						// --- exec also registers the source in linecache so a later snapshot can capture it again ---
-						`__repl_src = _b64.b64decode(${JSON.stringify(payload)}).decode()
-    exec(__repl_src, globals())
-    __repl_obj = globals().get(${n})
-    if __repl_obj is not None:
-        __repl_fname = getattr(getattr(__repl_obj, '__code__', None), 'co_filename', None)
-        if __repl_fname is None:
-            __repl_init = getattr(__repl_obj, '__init__', None)
-            __repl_fname = getattr(getattr(__repl_init, '__code__', None), 'co_filename', None)
-        if __repl_fname:
-            _lc.cache[__repl_fname] = (len(__repl_src.splitlines()), None, __repl_src.splitlines(True), __repl_fname)`
-					: compressedValues
-						? `globals()[${n}] = _pk.loads(_zl.decompress(_b64.b64decode(${JSON.stringify(payload)})))`
-						: `globals()[${n}] = _pk.loads(_b64.b64decode(${JSON.stringify(payload)}))`;
-			return `try:
-    ${body}
-    __repl_r['restored'].append(${n})
-except Exception as _e:
-    __repl_r['failed'].append({'name': ${n}, 'reason': str(_e)})`;
-		})
-		.join("\n");
-	return `import pickle as _pk, base64 as _b64, json as _js, zlib as _zl, linecache as _lc
-__repl_r = {'restored': [], 'failed': []}
-${per}
-get_ipython().display_pub.publish({${JSON.stringify(RESTORE_MIME)}: _js.dumps(__repl_r)})`;
-}
-
-function namesCode(helperNames: string[]): string {
-	const skip = buildSkipList(helperNames);
-	return (
-		"import json as _js\n" +
-		`__repl_skip = set(${skip})\n` +
-		"__repl_n = sorted(n for n in globals() if not n.startswith('_') and n not in __repl_skip)\n" +
-		`get_ipython().display_pub.publish({${JSON.stringify(NAMES_MIME)}: _js.dumps(__repl_n)})\n`
-	);
-}
-
-interface ActiveCell {
-	msgId: string;
-	stdout: string[];
-	stderr: string[];
-	outLen: number;
-	errLen: number;
-	maxChars: number;
-	result?: string;
-	error?: { name: string; message: string; stack: string[] };
-	status: CellResult["status"];
-	payloads: Record<string, string>;
-	lastActivity: number;
-	timedOut: boolean;
-	stdoutTruncated: boolean;
-	stderrTruncated: boolean;
-	signal?: AbortSignal;
-	onStream?: (chunk: string, name: "stdout" | "stderr") => void;
-	resolve(result: CellResult & { payloads: Record<string, string> }): void;
-	reject(error: Error): void;
-	settled: boolean;
-	replySeen: boolean;
-	idleSeen: boolean;
-	reply?: ParsedMessage;
-}
-
 export class KernelClient {
 	private child?: ChildProcess;
-	private shell?: ZmtpSocket;
-	private control?: ZmtpSocket;
-	private iopub?: ZmtpSocket;
-	private readonly session: JupyterSession;
-	private readonly helperSources: { name: string; source: string }[];
-	private helperBootReport: HelperLoadResult[] = [];
 	private readonly timeoutMs: number;
-	private activeCell?: ActiveCell;
-	private connectionFilePath?: string;
 	private ready = false;
 	/** Serializes all kernel ops: one execute at a time, snapshots between cells. */
 	private queue: Promise<unknown> = Promise.resolve();
+	private pending = new Map<string, PendingRequest>();
+	private activeCell?: ActiveCell;
+	private inputBuffer = "";
+	private readyWaiters: { resolve(msg: BridgeMessage): void; reject(error: Error): void }[] = [];
+	private helperBootReport: HelperLoadResult[] = [];
+	private nextId = 0;
 	private _onUnexpectedExit?: () => void;
-	get helperReport(): readonly HelperLoadResult[] {
-		return this.helperBootReport;
-	}
-
-	/** Engine hook: an unexpected kernel death (not a deliberate kill) should drop the instance. */
-	setOnUnexpectedExit(fn: () => void): void {
-		this._onUnexpectedExit = fn;
-	}
 	private watchdog?: ReturnType<typeof setInterval>;
 	private silenceKillTimer?: ReturnType<typeof setTimeout>;
-	private pendingReplies = new Map<
-		string,
-		{ resolve(m: ParsedMessage): void; timer?: ReturnType<typeof setTimeout>; expectedType: string }
-	>();
 
-	private constructor(conn: ConnectionFile, opts: KernelOptions) {
-		this.session = new JupyterSession({ key: conn.key });
-		this.helperSources = opts.env?.PI_HELPERS_DIR
-			? readHelperSources([opts.env.PI_HELPERS_DIR])
-			: readHelperSources(resolveHelperDirs(opts.cwd, opts.env?.PI_HELPERS_GLOBAL_DIR));
+	private constructor(opts: KernelOptions) {
 		this.timeoutMs = opts.timeoutMs ?? 0;
 	}
 
 	static async start(pythonPath: string, opts: KernelOptions = {}): Promise<KernelClient> {
-		const connPath = join(tmpdir(), `pi-repl-kernel-${randomUUID()}.json`);
-		const child = spawn(pythonPath, ["-m", "ipykernel", "-f", connPath, "--no-stdout"], {
+		const child = spawn(pythonPath, [BRIDGE_PATH], {
 			cwd: resolveCwd(opts.cwd),
 			env: { ...process.env, ...(opts.env ?? {}) },
-			stdio: ["ignore", "pipe", "pipe"],
+			stdio: ["pipe", "pipe", "pipe"],
+			// its own process group: kill(-pid) reaches the kernel the bridge spawns too
+			detached: true,
 		});
-		// --- ipykernel writes the connection file, then serves; keep stderr for post-mortems ---
+		// keep stderr for post-mortems (ipykernel warnings, bridge tracebacks)
 		let stderrTail = "";
 		child.stderr?.on("data", (b: Buffer) => {
 			stderrTail = (stderrTail + b.toString()).slice(-4000);
 		});
 
-		const deadline = Date.now() + KERNEL_READY_TIMEOUT_MS;
-		// --- poll until present AND fully written: existsSync fires before the write finishes ---
-		let conn: ConnectionFile;
-		while (true) {
-			if (child.exitCode !== null) {
-				throw new Error(
-					`ipykernel exited before writing its connection file (code=${child.exitCode})` +
-						(stderrTail ? `\nkernel stderr:\n${stderrTail}` : ""),
-				);
-			}
-			if (Date.now() > deadline) {
-				child.kill("SIGKILL");
-				throw new Error("ipykernel did not write a valid connection file in time");
-			}
-			try {
-				conn = readConnectionFile(connPath);
-				break;
-			} catch {
-				await new Promise((resolve) => setTimeout(resolve, 25));
-			}
-		}
-
-		const kc = new KernelClient(conn, opts);
+		const kc = new KernelClient(opts);
 		kc.child = child;
-		kc.connectionFilePath = connPath;
+		child.stdout?.on("data", (chunk) => kc.onData(chunk));
 		child.on("exit", () => {
-			// --- clear child/ready on death so isRunning reflects it and the engine never resumes a zombie ---
+			// --- bridge exit IS kernel death: settle the running cell and drop the zombie ---
 			kc.settleActive(new Error("kernel process exited"));
-			kc.child = undefined;
 			kc.ready = false;
-			kc.shell?.close();
-			kc.control?.close();
-			kc.iopub?.close();
-			kc.shell = undefined;
-			kc.control = undefined;
-			kc.iopub = undefined;
+			kc.child = undefined;
 			kc._onUnexpectedExit?.();
 		});
 
+		// helpers resolve host-side (one canonical list, same skip rules as the prompt); sources preload in the bridge
+		const helpers = (
+			opts.env?.PI_HELPERS_DIR
+				? readHelperSources([opts.env.PI_HELPERS_DIR])
+				: readHelperSources(resolveHelperDirs(opts.cwd, opts.env?.PI_HELPERS_GLOBAL_DIR))
+		).map((h) => ({ name: h.name, source: h.source }));
+		kc.send({ op: "boot", helpers });
+
 		try {
-			await kc.connectChannels(conn);
-			await kc.probeReady();
-			kc.helperBootReport = await kc.preload();
-			kc.ready = true;
+			await kc.waitReady(KERNEL_READY_TIMEOUT_MS);
 		} catch (error) {
 			kc.kill();
-			throw error;
+			throw error instanceof Error
+				? new Error(`${error.message}${stderrTail ? `\nbridge stderr:\n${stderrTail}` : ""}`)
+				: error;
 		}
+		kc.ready = true;
 		return kc;
 	}
 
-	private async connectChannels(conn: ConnectionFile): Promise<void> {
-		if (conn.transport !== "tcp") {
-			throw new Error(`unsupported kernel transport "${conn.transport}" (only tcp) — set PI_KERNEL_TRANSPORT=tcp`);
+	private onData(chunk: Uint8Array): void {
+		this.inputBuffer += Buffer.from(chunk).toString("utf8");
+		let idx = this.inputBuffer.indexOf("\n");
+		while (idx >= 0) {
+			const line = this.inputBuffer.slice(0, idx).trim();
+			this.inputBuffer = this.inputBuffer.slice(idx + 1);
+			if (line) this.handleLine(line);
+			idx = this.inputBuffer.indexOf("\n");
 		}
-		const [shell, control, iopub] = await Promise.all([
-			ZmtpSocket.connect({ host: conn.ip, port: conn.shell_port, socketType: "DEALER" }),
-			ZmtpSocket.connect({ host: conn.ip, port: conn.control_port, socketType: "DEALER" }),
-			ZmtpSocket.connect({ host: conn.ip, port: conn.iopub_port, socketType: "SUB" }),
-		]);
-		this.shell = shell;
-		this.control = control;
-		this.iopub = iopub;
-		shell.onMessage = (frames) => this.onShellMessage(frames);
-		control.onMessage = (frames) => this.onControlMessage(frames);
-		iopub.onMessage = (frames) => this.onIopubMessage(frames);
-		iopub.subscribe(Buffer.from([])); // all traffic
 	}
 
-	private probeReady(): Promise<void> {
-		const msgId = this.session.nextMsgId();
-		this.shell?.send(this.session.buildFrames("kernel_info_request", {}, null, msgId));
-		return this.waitForReply(msgId, KERNEL_READY_TIMEOUT_MS, "kernel_info_reply").then(() => {});
-	}
-
-	/** One cell per helper: a broken helper (syntax error or top-level raise) must cost itself alone, not abort the rest. */
-	private async preload(): Promise<HelperLoadResult[]> {
-		const report: HelperLoadResult[] = [];
-		for (const h of this.helperSources) {
-			const res = await this.executeCell(h.source, { maxOutputChars: DEFAULT_MAX_OUTPUT_CHARS });
-			if (res.status === "ok") {
-				report.push({ name: h.name, ok: true });
-			} else {
-				const err = res.error;
-				report.push({
-					name: h.name,
-					ok: false,
-					error: err ? `${err.name}: ${err.message}` : "failed to load",
-				});
-			}
-		}
-		return report;
-	}
-
-	private onShellMessage(frames: Buffer[]): void {
-		const msg = this.session.parseMessage(frames);
-		if (!isTrustedMessage(msg)) return;
-		const active = this.activeCell;
-		if (msg.msg_type === "execute_reply" && active && msg.parent.msg_id === active.msgId) {
-			// --- the shell reply races the iopub stream: record it, settle only after idle ---
-			active.reply = msg;
-			active.replySeen = true;
-			this.maybeSettle(active);
+	/** Route-gate: a line that is not valid JSON is not the bridge. */
+	private handleLine(line: string): void {
+		let msg: BridgeMessage;
+		try {
+			msg = JSON.parse(line) as BridgeMessage;
+		} catch {
+			console.error("[pi-repl] unparseable bridge line:", line.slice(0, 200));
 			return;
 		}
-		if (msg.msg_type === "kernel_info_reply" || msg.msg_type === "execute_reply") this.resolveReply(msg);
-	}
-
-	private onControlMessage(frames: Buffer[]): void {
-		const msg = this.session.parseMessage(frames);
-		if (!isTrustedMessage(msg)) return;
-		// interrupt_reply / shutdown_reply — nothing awaits them; keep draining.
-		this.resolveReply(msg);
-	}
-
-	private onIopubMessage(frames: Buffer[]): void {
-		const msg = this.session.parseMessage(frames);
-		if (!isTrustedMessage(msg)) return;
-		const active = this.activeCell;
-		if (!active || msg.parent.msg_id !== active.msgId) return;
-		active.lastActivity = Date.now();
-		const c = msg.content;
-		switch (msg.msg_type) {
+		switch (msg.type) {
+			case "ready": {
+				const helpers = Array.isArray(msg.helpers) ? (msg.helpers as HelperLoadResult[]) : [];
+				this.helperBootReport = helpers;
+				this.readyWaiters.shift()?.resolve(msg);
+				break;
+			}
 			case "stream": {
-				const text = (c.text as string) ?? "";
-				this.accumulate(active, c.name === "stderr" ? "stderr" : "stdout", text);
-				break;
-			}
-			case "execute_result": {
-				const data = c.data as Record<string, unknown> | undefined;
-				const plain = data?.["text/plain"];
-				if (typeof plain === "string") active.result = plain;
-				this.collectPayload(active, c);
-				break;
-			}
-			case "display_data":
-				this.collectPayload(active, c);
-				break;
-			case "error": {
-				const traceback = Array.isArray(c.traceback) ? (c.traceback as string[]) : [];
-				active.error = {
-					name: (c.ename as string) ?? "Error",
-					message: (c.evalue as string) ?? traceback.join("\n"),
-					stack: traceback,
-				};
-				break;
-			}
-			case "status":
-				// --- status idle is published after every byte; the cell is complete only once we have it ---
-				if (c.execution_state === "idle") {
-					active.idleSeen = true;
-					this.maybeSettle(active);
+				const active = this.activeCell;
+				if (active && msg.id === active.id) {
+					active.lastActivity = Date.now();
+					this.accumulate(active, msg.name === "stderr" ? "stderr" : "stdout", String(msg.text ?? ""));
 				}
 				break;
-		}
-	}
-
-	private collectPayload(active: ActiveCell, content: Record<string, unknown>): void {
-		for (const mime of [SNAPSHOT_MIME, RESTORE_MIME, NAMES_MIME]) {
-			const payload = readPayload(content, mime);
-			if (payload !== null) {
-				active.payloads[mime] = payload;
-				return;
 			}
+			case "result": {
+				const active = this.activeCell;
+				if (active && msg.id === active.id) this.settleFromResult(active, msg);
+				break;
+			}
+			case "reply": {
+				const id = msg.id;
+				if (id !== undefined) {
+					const pending = this.pending.get(id);
+					if (pending) {
+						this.pending.delete(id);
+						if (pending.timer) clearTimeout(pending.timer);
+						pending.resolve(msg);
+					}
+				}
+				break;
+			}
+			case "error": {
+				const error = new Error(String(msg.message ?? "bridge error"));
+				const id = msg.id;
+				if (id !== undefined && this.pending.has(id)) {
+					const pending = this.pending.get(id)!;
+					this.pending.delete(id);
+					if (pending.timer) clearTimeout(pending.timer);
+					pending.reject(error);
+				} else if (this.readyWaiters.length > 0) {
+					this.readyWaiters.shift()!.reject(error); // boot failure
+				} else {
+					console.error("[pi-repl] bridge error:", error.message);
+				}
+				break;
+			}
+			default:
+				console.error("[pi-repl] unknown bridge event:", JSON.stringify(msg).slice(0, 200));
 		}
 	}
 
-	private accumulate(active: ActiveCell, name: "stdout" | "stderr", text: string): void {
-		const arr = name === "stdout" ? active.stdout : active.stderr;
-		const len = name === "stdout" ? active.outLen : active.errLen;
-		const room = active.maxChars - len;
-		const keep = Math.min(text.length, Math.max(0, room));
-		if (keep > 0) {
-			arr.push(text.slice(0, keep));
-			if (name === "stdout") active.outLen += keep;
-			else active.errLen += keep;
-		}
-		// --- one oversized stream frame (10 MB print) overflows the cap within this call ---
-		if (text.length > keep) {
-			if (name === "stdout") active.stdoutTruncated = true;
-			else active.stderrTruncated = true;
-		}
-		// --- beyond the cap we drop text but keep draining ---
-		active.onStream?.(text.slice(0, keep), name);
+	private send(msg: object): void {
+		this.child?.stdin?.write(JSON.stringify(msg) + "\n");
 	}
 
-	private waitForReply(msgId: string, timeoutMs: number, expectedType: string): Promise<ParsedMessage> {
-		return new Promise<ParsedMessage>((resolve, reject) => {
+	private waitReady(timeoutMs: number): Promise<void> {
+		return new Promise<void>((resolve, reject) => {
 			const timer = setTimeout(() => {
-				this.pendingReplies.delete(msgId);
-				reject(new Error(`kernel did not answer ${expectedType} in time`));
+				this.readyWaiters.shift();
+				reject(new Error(`bridge did not become ready in ${timeoutMs}ms`));
 			}, timeoutMs);
 			timer.unref?.();
-			this.pendingReplies.set(msgId, { resolve, timer, expectedType });
+			this.readyWaiters.push({
+				resolve: () => {
+					clearTimeout(timer);
+					resolve();
+				},
+				reject: (error) => {
+					clearTimeout(timer);
+					reject(error);
+				},
+			});
 		});
-	}
-
-	private resolveReply(msg: ParsedMessage): void {
-		const pending = this.pendingReplies.get(msg.parent.msg_id as string);
-		if (!pending) return;
-		// --- any reply echoes the parent id; only the awaited type settles the wait, the timer stays armed for it ---
-		if (msg.msg_type !== pending.expectedType) return;
-		this.pendingReplies.delete(msg.parent.msg_id as string);
-		if (pending.timer) clearTimeout(pending.timer);
-		pending.resolve(msg);
-	}
-
-	executeCell(code: string, opts: CellOptions = {}): Promise<CellResult> {
-		return this.enqueue(() => this.executeCellNow(code, opts)).then(({ payloads: _payloads, ...rest }) => rest);
 	}
 
 	private enqueue<T>(fn: () => Promise<T>): Promise<T> {
@@ -519,18 +280,39 @@ export class KernelClient {
 		return result;
 	}
 
-	private executeCellNow(code: string, opts: CellOptions): Promise<CellResult & { payloads: Record<string, string> }> {
+	/** A request/reply op: snapshot, restore, listNames, shutdown. Serialized with cells. */
+	private request(msg: Record<string, unknown>, timeoutMs?: number): Promise<BridgeMessage> {
+		return this.enqueue(() => {
+			const id = `r${this.nextId++}`;
+			return new Promise<BridgeMessage>((resolve, reject) => {
+				const timer = timeoutMs
+					? setTimeout(() => {
+							this.pending.delete(id);
+							reject(new Error(`bridge did not answer ${String(msg.op)} in time`));
+						}, timeoutMs)
+					: undefined;
+				timer?.unref?.();
+				this.pending.set(id, { resolve, reject, timer });
+				this.send({ ...msg, id });
+			});
+		});
+	}
+
+	executeCell(code: string, opts: CellOptions = {}): Promise<CellResult> {
+		return this.enqueue(() => this.executeCellNow(code, opts));
+	}
+
+	private executeCellNow(code: string, opts: CellOptions): Promise<CellResult> {
 		const maxChars = opts.maxOutputChars ?? DEFAULT_MAX_OUTPUT_CHARS;
-		// --- one msg_id per request; the kernel echoes it as the reply's parent for routing ---
-		const msgId = this.session.nextMsgId();
+		// one op id per request; the bridge echoes it on every stream and the result event
+		const id = `e${this.nextId++}`;
 		const active: ActiveCell = {
-			msgId,
+			id,
 			stdout: [],
 			stderr: [],
 			outLen: 0,
 			errLen: 0,
 			maxChars,
-			payloads: {},
 			lastActivity: Date.now(),
 			timedOut: false,
 			stdoutTruncated: false,
@@ -539,8 +321,6 @@ export class KernelClient {
 			onStream: opts.onStream,
 			status: "ok",
 			settled: false,
-			replySeen: false,
-			idleSeen: false,
 			resolve: () => {},
 			reject: () => {},
 		};
@@ -548,11 +328,11 @@ export class KernelClient {
 		const onAbort = () => this.interrupt();
 		opts.signal?.addEventListener("abort", onAbort, { once: true });
 
-		this.shell?.send(this.session.buildFrames("execute_request", executeRequest(code, false), null, msgId));
+		this.send({ op: "exec", id, code });
 		this.startWatchdog(active);
 
-		return new Promise<CellResult & { payloads: Record<string, string> }>((resolve, reject) => {
-			active.resolve = (result) => resolve(result);
+		return new Promise<CellResult>((resolve, reject) => {
+			active.resolve = resolve;
 			active.reject = reject;
 			if (opts.signal?.aborted) this.interrupt();
 		}).finally(() => {
@@ -569,30 +349,29 @@ export class KernelClient {
 		active.reject(error);
 	}
 
-	private maybeSettle(active: ActiveCell): void {
-		// --- settle only once the shell reply AND the idle iopub stream arrive, else output is dropped ---
-		if (active.settled || !active.replySeen || !active.idleSeen) return;
-		this.settleFromReply(active, active.reply!);
-	}
-
-	private settleFromReply(active: ActiveCell, msg: ParsedMessage): void {
+	private settleFromResult(active: ActiveCell, msg: BridgeMessage): void {
+		// the bridge settles only once the shell reply AND the iopub idle arrived
 		if (active.settled) return;
 		active.settled = true;
-		const content = msg.content;
-		const replyStatus = (content.status as string) ?? "ok";
-		if (replyStatus === "error" && !active.error) {
+		const content = msg as {
+			status?: string;
+			result?: string;
+			error?: { name?: string; message?: string; stack?: string[] };
+		};
+		if (content.result !== undefined) active.result = content.result;
+		if (content.error) {
 			active.error = {
-				name: (content.ename as string) ?? "Error",
-				message: (content.evalue as string) ?? "error",
-				stack: [],
+				name: content.error.name ?? "Error",
+				message: content.error.message ?? "",
+				stack: content.error.stack ?? [],
 			};
 		}
-		let status: CellResult["status"] = replyStatus === "aborted" ? "aborted" : active.error ? "error" : "ok";
+		let status: CellResult["status"] = content.status === "aborted" ? "aborted" : active.error ? "error" : "ok";
 		if (active.signal?.aborted) {
-			// --- the caller withdrew; report aborted even if the cell raised ---
+			// the caller withdrew; report aborted even if the cell raised
 			status = "aborted";
 		} else if (active.timedOut) {
-			// --- silence watchdog tripped: the cell was still running, not done ---
+			// silence watchdog tripped: the cell was still running, not done
 			status = "error";
 			active.error = {
 				name: "Timeout",
@@ -608,8 +387,26 @@ export class KernelClient {
 			error: active.error,
 			status,
 			truncated: { stdout: active.stdoutTruncated, stderr: active.stderrTruncated },
-			payloads: active.payloads,
 		});
+	}
+
+	private accumulate(active: ActiveCell, name: "stdout" | "stderr", text: string): void {
+		const arr = name === "stdout" ? active.stdout : active.stderr;
+		const len = name === "stdout" ? active.outLen : active.errLen;
+		const room = active.maxChars - len;
+		const keep = Math.min(text.length, Math.max(0, room));
+		if (keep > 0) {
+			arr.push(text.slice(0, keep));
+			if (name === "stdout") active.outLen += keep;
+			else active.errLen += keep;
+		}
+		// one oversized stream frame (10 MB print) overflows the cap within this call
+		if (text.length > keep) {
+			if (name === "stdout") active.stdoutTruncated = true;
+			else active.stderrTruncated = true;
+		}
+		// beyond the cap we drop text but keep draining
+		active.onStream?.(text.slice(0, keep), name);
 	}
 
 	private startWatchdog(active: ActiveCell): void {
@@ -621,7 +418,7 @@ export class KernelClient {
 				if (quiet >= this.timeoutMs && !active.settled) {
 					active.timedOut = true;
 					this.interrupt();
-					// --- a cell that swallows the interrupt never replies; escalate to a kill so the queue frees ---
+					// a cell that swallows the interrupt never replies; escalate to a kill so the queue frees
 					this.silenceKillTimer ??= setTimeout(() => {
 						if (!active.settled) this.kill();
 					}, SILENCE_KILL_GRACE_MS);
@@ -644,107 +441,78 @@ export class KernelClient {
 		}
 	}
 
-	/** Genuine KeyboardInterrupt via control-channel interrupt_request; the kernel survives. */
+	/** Genuine KeyboardInterrupt via the bridge's control channel; the kernel survives. */
 	interrupt(): void {
-		const active = this.activeCell;
-		if (!active || active.settled) return;
-		this.control?.send(this.session.buildFrames("interrupt_request", {}, null));
+		this.send({ op: "interrupt" });
 	}
 
-	snapshot(maxBytes: number): Promise<SnapshotReply> {
-		return this.enqueue(async () => {
-			const res = await this.executeCellNow(
-				snapshotCode(
-					this.helperSources.map((h) => h.name),
-					maxBytes,
-				),
-				{
-					maxOutputChars: 8_000_000,
-				},
-			);
-			const payload = res.payloads[SNAPSHOT_MIME];
-			if (payload === undefined) return { entries: [], failed: [], complete: false };
-			try {
-				const obj = JSON.parse(payload) as {
-					entries?: SnapshotEntry[];
-					failed?: { name: string; reason: string }[];
-				};
-				return { entries: obj.entries ?? [], failed: obj.failed ?? [], complete: true };
-			} catch {
-				return { entries: [], failed: [], complete: false };
+	snapshot(path: string, maxBytes: number): Promise<SnapshotReply> {
+		return this.request({ op: "snapshot", path, max_bytes: maxBytes }).then((msg) => {
+			const m = msg as {
+				saved?: string[];
+				entries?: { name: string; kind: "value" | "def"; payload: string }[];
+				failed?: { name: string; reason: string }[];
+				complete?: boolean;
+				bytes?: number;
+				error?: string;
+			};
+			if (m.error !== undefined || m.complete === undefined) {
+				throw new Error(String(m.error ?? "snapshot failed"));
 			}
+			return { saved: m.saved, entries: m.entries, failed: m.failed ?? [], complete: m.complete, bytes: m.bytes };
 		});
 	}
 
-	restore(
-		entries: SnapshotEntry[],
-		compressedValues = false,
-	): Promise<{ restored: string[]; failed: { name: string; reason: string }[] }> {
-		if (entries.length === 0) return Promise.resolve({ restored: [], failed: [] });
-		return this.enqueue(async () => {
-			const res = await this.executeCellNow(restoreCode(entries, compressedValues), { maxOutputChars: 8_000_000 });
-			const payload = res.payloads[RESTORE_MIME];
-			if (payload === undefined) return { restored: [], failed: [] };
-			try {
-				const obj = JSON.parse(payload) as { restored?: string[]; failed?: { name: string; reason: string }[] };
-				return { restored: obj.restored ?? [], failed: obj.failed ?? [] };
-			} catch {
-				return { restored: [], failed: [] };
-			}
+	restore(path: string): Promise<{ restored: string[]; failed: { name: string; reason: string }[] }> {
+		return this.request({ op: "restore", path }).then((msg) => {
+			const m = msg as { restored?: string[]; failed?: { name: string; reason: string }[]; error?: string };
+			if (m.error !== undefined) throw new Error(m.error);
+			return { restored: m.restored ?? [], failed: m.failed ?? [] };
 		});
 	}
 
 	listNames(): Promise<string[]> {
-		return this.enqueue(async () => {
-			const res = await this.executeCellNow(namesCode(this.helperSources.map((h) => h.name)), {
-				maxOutputChars: 8_000_000,
-			});
-			const payload = res.payloads[NAMES_MIME];
-			if (payload === undefined) return [];
-			try {
-				const arr = JSON.parse(payload) as unknown;
-				return Array.isArray(arr) ? (arr as string[]) : [];
-			} catch {
-				return [];
-			}
+		return this.request({ op: "listNames" }).then((msg) => {
+			const names = (msg as { names?: unknown }).names;
+			return Array.isArray(names) ? (names as string[]) : [];
 		});
 	}
 
-	/** Graceful stop: shutdown_request on control, then SIGKILL as backstop. */
+	/** Graceful stop: shutdown op, then SIGKILL the process group as backstop. */
 	async shutdown(): Promise<void> {
-		const child = this.child;
-		if (this.ready && this.control && child && child.exitCode === null) {
-			this.control.send(this.session.buildFrames("shutdown_request", { restart: false }, null));
-			await Promise.race([this.childExit(), new Promise((resolve) => setTimeout(resolve, 2000).unref?.())]).catch(
-				() => {},
-			);
+		if (this.ready && this.child) {
+			await this.request({ op: "shutdown" }, 2000).catch(() => {});
 		}
 		this.kill();
-	}
-
-	private childExit(): Promise<void> {
-		const child = this.child;
-		if (!child) return Promise.resolve();
-		return child.exitCode !== null ? Promise.resolve() : new Promise((resolve) => child.once("exit", () => resolve()));
 	}
 
 	kill(): void {
 		this.stopWatchdog();
 		this.settleActive(new Error("kernel killed"));
-		this.shell?.close();
-		this.control?.close();
-		this.iopub?.close();
-		this.child?.kill("SIGKILL");
-		this.child = undefined;
-		if (this.connectionFilePath) {
+		const pid = this.child?.pid;
+		if (pid !== undefined) {
+			// group kill: the bridge's kernel is in the same process group (detached spawn)
 			try {
-				rmSync(this.connectionFilePath, { force: true });
-			} catch {}
-			this.connectionFilePath = undefined;
+				process.kill(-pid, "SIGKILL");
+			} catch {
+				try {
+					process.kill(pid, "SIGKILL");
+				} catch {}
+			}
 		}
+		this.child = undefined;
+	}
+
+	/** Engine hook: an unexpected bridge exit (not a deliberate kill) should drop the instance. */
+	setOnUnexpectedExit(fn: () => void): void {
+		this._onUnexpectedExit = fn;
+	}
+
+	get helperReport(): readonly HelperLoadResult[] {
+		return this.helperBootReport;
 	}
 
 	get isRunning(): boolean {
-		return this.ready && this.child !== undefined;
+		return this.ready && this.child !== undefined && this.child.exitCode === null;
 	}
 }

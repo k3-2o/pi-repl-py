@@ -20,9 +20,7 @@ import {
 	pruneOrphanedSnapshotDirs,
 	pruneSnapshotDirs,
 } from "../src/engine/index.js";
-import { KernelClient } from "../src/engine/kernel.js";
-import { type ConnectionFile, isTrustedMessage, JupyterSession } from "../src/engine/session.js";
-import { encodeFrame, ZmtpFrameParser } from "../src/engine/zmtp.js";
+import { type CellResult, KernelClient } from "../src/engine/kernel.js";
 import { buildHelpersMap, buildHelpersMapForCwd, buildHelpersPromptSection } from "../src/extension/helpers.js";
 import { buildPromptGuidelines } from "../src/extension/prompt.js";
 import {
@@ -294,138 +292,6 @@ describe("helper boot announcements", () => {
 	});
 });
 
-describe("jupyter session framing", () => {
-	test("buildFrames emits exactly [DELIM, sig, header, parent, metadata, content]", () => {
-		const s = new JupyterSession({ key: "testkey" });
-		const frames = s.buildFrames("kernel_info_request", {});
-		expect(frames).toHaveLength(6);
-		expect(frames[0].toString("utf8")).toBe("<IDS|MSG>");
-		expect(frames[1]).toHaveLength(64); // hex SHA-256
-		const header = JSON.parse(frames[2].toString("utf8"));
-		expect(header.msg_type).toBe("kernel_info_request");
-		expect(header.version).toBe("5.3");
-		expect(header.session).toBe(s.sessionId);
-	});
-
-	test("a message round-trips with a verified signature", () => {
-		const s = new JupyterSession({ key: "testkey" });
-		const frames = s.buildFrames("execute_request", { code: "x = 1" });
-		const parsed = s.parseMessage(frames);
-		expect(parsed?.msg_type).toBe("execute_request");
-		expect(parsed?.signatureOk).toBe(true);
-		expect(parsed?.content.code).toBe("x = 1");
-	});
-
-	test("a tampered payload fails signature verification", () => {
-		const s = new JupyterSession({ key: "testkey" });
-		const frames = s.buildFrames("execute_request", { code: "x = 1" });
-		const tampered = [...frames];
-		tampered[5] = Buffer.from(JSON.stringify({ code: "x = 2" }));
-		const parsed = s.parseMessage(tampered);
-		expect(parsed?.content.code).toBe("x = 2");
-		expect(parsed?.signatureOk).toBe(false);
-	});
-
-	test("isTrustedMessage routes only verified traffic", () => {
-		expect(isTrustedMessage(null)).toBe(false); // malformed
-		expect(isTrustedMessage({ signatureOk: false } as never)).toBe(false); // unsigned / bad HMAC
-		expect(isTrustedMessage({ signatureOk: true } as never)).toBe(true); // verified
-	});
-
-	test("a wrong-type reply does not satisfy a pending wait (parent id alone is not enough)", () => {
-		// KernelClient's runtime constructor does not spawn anything — build it directly so the
-		// private reply router is testable without a kernel process.
-		const Seam = KernelClient as unknown as new (
-			conn: ConnectionFile,
-			opts: object,
-		) => {
-			pendingReplies: Map<string, { resolve(m: unknown): void; expectedType: string }>;
-			resolveReply(msg: { msg_type: string; parent: { msg_id: string } }): void;
-		};
-		const kc = new Seam(
-			{
-				ip: "127.0.0.1",
-				transport: "tcp",
-				shell_port: 1,
-				iopub_port: 2,
-				stdin_port: 3,
-				control_port: 4,
-				hb_port: 5,
-				key: "k",
-				signature_scheme: "hmac-sha256",
-			},
-			{},
-		);
-		let resolved: unknown;
-		kc.pendingReplies.set("probe-1", {
-			resolve: (m) => {
-				resolved = m;
-			},
-			expectedType: "kernel_info_reply",
-		});
-		// a shell/control reply riding the probe's parent must not settle the wait
-		kc.resolveReply({ msg_type: "execute_reply", parent: { msg_id: "probe-1" } });
-		expect(resolved).toBeUndefined();
-		expect(kc.pendingReplies.has("probe-1")).toBe(true);
-		// the awaited type does
-		kc.resolveReply({ msg_type: "kernel_info_reply", parent: { msg_id: "probe-1" } });
-		expect(resolved).toMatchObject({ msg_type: "kernel_info_reply" });
-		expect(kc.pendingReplies.has("probe-1")).toBe(false);
-	});
-
-	test("an explicit msg_id is used verbatim (the kernel echoes it as parent)", () => {
-		const s = new JupyterSession({ key: "k" });
-		const frames = s.buildFrames("kernel_info_request", {}, null, "probe-1");
-		expect(JSON.parse(frames[2].toString("utf8")).msg_id).toBe("probe-1");
-	});
-
-	test("malformed inbound messages are rejected", () => {
-		const s = new JupyterSession({ key: "k" });
-		expect(s.parseMessage([Buffer.from("no delim here")])).toBeNull();
-		expect(s.parseMessage([Buffer.from("<IDS|MSG>"), Buffer.from("only-two")])).toBeNull();
-		expect(s.parseMessage([Buffer.from("<IDS|MSG>"), Buffer.alloc(0), Buffer.from("not json")])).toBeNull();
-	});
-});
-
-describe("zmtp framing", () => {
-	test("short frames: flags byte + 1-byte length + body", () => {
-		const frame = encodeFrame(Buffer.from("hello"), false);
-		expect(frame).toHaveLength(7);
-		expect(frame[0]).toBe(0);
-		expect(frame[1]).toBe(5);
-		expect(frame.subarray(2).toString("utf8")).toBe("hello");
-	});
-
-	test("the 'more' flag survives encoding", () => {
-		const frame = encodeFrame(Buffer.from("part"), true);
-		expect(frame[0] & 0x01).toBe(0x01);
-	});
-
-	test("long frames use the 8-byte length with the long flag", () => {
-		const body = Buffer.alloc(300, 0x61);
-		const frame = encodeFrame(body, false);
-		expect(frame[0] & 0x02).toBe(0x02);
-		expect(frame.readUInt32BE(5)).toBe(300);
-		expect(frame.length).toBe(9 + 300);
-	});
-
-	test("the parser reassembles multipart messages from chunked input", () => {
-		const parser = new ZmtpFrameParser();
-		const a = encodeFrame(Buffer.from("one"), true);
-		const b = encodeFrame(Buffer.from("two"), false);
-		const wire = Buffer.concat([a, b]);
-		const messages = parser.feed(wire.subarray(0, 4)).concat(parser.feed(wire.subarray(4)));
-		expect(messages).toHaveLength(1);
-		expect(messages[0].map((f) => f.toString("utf8"))).toEqual(["one", "two"]);
-	});
-
-	test("the parser holds partial frames until the bytes arrive", () => {
-		const parser = new ZmtpFrameParser();
-		expect(parser.feed(Buffer.from([0x00, 0x05, 0x68]))).toHaveLength(0); // 2 header bytes + 1 of 5 body bytes
-		expect(parser.feed(Buffer.from("ello"))).toHaveLength(1);
-	});
-});
-
 const ANSI = /\x1b\[[0-9;]*m/g;
 const stripAnsi = (text: string) => text.replace(ANSI, "");
 
@@ -483,7 +349,6 @@ function makeState(overrides: Partial<ExecuteRenderState> = {}): ExecuteRenderSt
 		...overrides,
 	};
 }
-
 describe("render-core: helpers", () => {
 	test("closeOpenSgr resets colors left open by wrapping", () => {
 		expect(closeOpenSgr("\x1b[31mred")).toBe("\x1b[31mred\x1b[0m");
@@ -1578,5 +1443,114 @@ describe("fork inheritance", () => {
 		expect(formatForkToast({ path: "x", restored: [], failed: [] })).toBe(
 			"repl fork started — parent snapshot revived nothing",
 		);
+	});
+});
+
+describe("bridge pipe routing", () => {
+	// KernelClient's private constructor spawns nothing; drive the JSON-line router by feeding
+	// it lines, with send() captured so replies can be matched by op id.
+	const Seam = KernelClient as unknown as new (
+		opts: object,
+	) => {
+		send(msg: unknown): void;
+		handleLine(line: string): void;
+		executeCellNow(code: string, opts: object): Promise<CellResult>;
+	};
+
+	function routedKernel() {
+		const sent: unknown[] = [];
+		const kc = new Seam({});
+		kc.send = (m) => sent.push(m as never);
+		const feed = (line: string) => kc.handleLine(line);
+		return { kc, sent, feed };
+	}
+
+	test("stream and result events settle a cell, routed by op id", async () => {
+		const { kc, sent, feed } = routedKernel();
+		const chunks: string[] = [];
+		const cell = kc.executeCellNow("x = 1", { onStream: (c: string, n: string) => chunks.push(`${n}:${c}`) });
+		expect(sent).toHaveLength(1); // the exec request
+		feed('{"type":"stream","id":"e0","name":"stdout","text":"hello "}');
+		feed('{"type":"stream","id":"e0","name":"stderr","text":"warn\\n"}');
+		feed('{"type":"result","id":"e0","status":"ok"}');
+		const r = await cell;
+		expect(r.status).toBe("ok");
+		expect(r.stdout).toBe("hello ");
+		expect(r.stderr).toBe("warn\n");
+		expect(chunks).toEqual(["stdout:hello ", "stderr:warn\n"]);
+	});
+
+	test("a stream event for another op id is ignored", async () => {
+		const { kc, feed } = routedKernel();
+		const cell = kc.executeCellNow("x = 1", {});
+		feed('{"type":"stream","id":"e9","name":"stdout","text":"noise"}');
+		feed('{"type":"result","id":"e0","status":"ok"}');
+		const r = await cell;
+		expect(r.stdout).toBe("");
+	});
+
+	test("channel caps apply during streaming and are reported", async () => {
+		const { kc, feed } = routedKernel();
+		const cell = kc.executeCellNow("print(1)", { maxOutputChars: 5 });
+		feed('{"type":"stream","id":"e0","name":"stdout","text":"hello "}');
+		feed('{"type":"stream","id":"e0","name":"stdout","text":"world"}');
+		feed('{"type":"result","id":"e0","status":"ok"}');
+		const r = await cell;
+		expect(r.stdout).toBe("hello");
+		expect(r.truncated?.stdout).toBe(true);
+	});
+
+	test("an error result surfaces name, message, and stack", async () => {
+		const { kc, feed } = routedKernel();
+		const cell = kc.executeCellNow("raise", {});
+		feed(
+			'{"type":"result","id":"e0","status":"error","error":{"name":"ValueError","message":"boom","stack":["line1"]}}',
+		);
+		const r = await cell;
+		expect(r.status).toBe("error");
+		expect(r.error?.name).toBe("ValueError");
+		expect(r.error?.stack).toEqual(["line1"]);
+	});
+
+	test("an aborted status wins over a carried error", async () => {
+		const { kc, feed } = routedKernel();
+		const cell = kc.executeCellNow("sleep", {});
+		feed(
+			'{"type":"result","id":"e0","status":"aborted","error":{"name":"KeyboardInterrupt","message":"interrupted","stack":[]}}',
+		);
+		const r = await cell;
+		expect(r.status).toBe("aborted");
+	});
+
+	test("a reply event resolves the pending request by id", async () => {
+		const { kc, sent, feed } = routedKernel();
+		const snap = kc.snapshot("/tmp/ns.snapshot", 1024);
+		await Promise.resolve(); // the request is enqueued on a microtask
+		const req = sent.find((m) => (m as { op?: string }).op === "snapshot") as { id: string };
+		expect(req).toBeDefined();
+		feed(`{"type":"reply","id":"${req.id}","saved":["a"],"failed":[],"complete":true,"bytes":5}`);
+		const reply = await snap;
+		expect(reply.complete).toBe(true);
+		expect(reply.saved).toEqual(["a"]);
+		expect(reply.bytes).toBe(5);
+	});
+
+	test("an error event rejects the pending request", async () => {
+		const { kc, sent, feed } = routedKernel();
+		const names = kc.listNames();
+		await Promise.resolve(); // the request is enqueued on a microtask
+		const req = sent.find((m) => (m as { op?: string }).op === "listNames") as { id: string };
+		feed(`{"type":"error","id":"${req.id}","message":"unpicklable"}`);
+		await expect(names).rejects.toThrow("unpicklable");
+	});
+
+	test("restore rejects on an error reply; unparseable bridge lines are dropped", async () => {
+		const { kc, sent, feed } = routedKernel();
+		const rest = kc.restore("/tmp/x");
+		await Promise.resolve(); // the request is enqueued on a microtask
+		const req = sent.find((m) => (m as { op?: string }).op === "restore") as { id: string };
+		feed(`{"type":"reply","id":"${req.id}","error":"snapshot unreadable"}`);
+		await expect(rest).rejects.toThrow("snapshot unreadable");
+		expect(() => feed("this is not json")).not.toThrow();
 	});
 });

@@ -1,9 +1,9 @@
 // --- EngineManager: venv resolution, spawn, queue, snapshots, abort grace, teardown; the wire lives in kernel.ts ---
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { type HelperLoadResult, KernelClient, type SnapshotEntry } from "./kernel.js";
+import { type HelperLoadResult, KernelClient } from "./kernel.js";
 
 export type { HelperLoadResult } from "./kernel.js";
 
@@ -406,18 +406,16 @@ export class EngineManager {
 		const config = this.options.snapshot;
 		if (!config || this.state !== "running" || !this.kernel) return null;
 		try {
-			const reply = await this.kernel.snapshot(config.maxBytes ?? DEFAULT_SNAPSHOT_MAX_BYTES);
+			const reply = await this.kernel.snapshot(config.path, config.maxBytes ?? DEFAULT_SNAPSHOT_MAX_BYTES);
 			// --- an incomplete snapshot must not overwrite the last good file ---
 			if (reply.complete === false) return null;
-			mkdirSync(dirname(config.path), { recursive: true });
-			// --- atomic write: temp file + rename, so a crash can't corrupt the last good snapshot ---
-			const tmp = `${config.path}.tmp`;
-			writeFileSync(tmp, JSON.stringify({ version: 3, entries: reply.entries, failed: reply.failed }));
-			renameSync(tmp, config.path);
+			// --- the bridge wrote the file atomically; names and counts only cross the pipe ---
+			const saved = reply.saved ?? reply.entries?.map((e) => e.name) ?? [];
+			const bytes = reply.bytes ?? reply.entries?.reduce((n, e) => n + e.payload.length, 0) ?? 0;
 			this.lastPersistedAt = Date.now();
-			this.lastSnapshotBytes = reply.entries.reduce((n, e) => n + e.payload.length, 0);
+			this.lastSnapshotBytes = bytes;
 			await this.advanceSnapshotGate();
-			return { path: config.path, saved: reply.entries.map((e) => e.name), failed: reply.failed };
+			return { path: config.path, saved, failed: reply.failed };
 		} catch {
 			return null;
 		}
@@ -533,26 +531,9 @@ export class EngineManager {
 			return null;
 		}
 		try {
-			const payload = JSON.parse(readFileSync(config.path, "utf8")) as {
-				version?: number;
-				entries?: SnapshotEntry[];
-				vars?: Record<string, string>;
-				failed?: { name: string; reason: string }[];
-			};
-			// --- v1 files (pre-source-capture) restore via plain pickles; v3 value entries are zlib-compressed ---
-			const entries: SnapshotEntry[] =
-				payload.version !== undefined && payload.version >= 2
-					? (payload.entries ?? [])
-					: Object.entries(payload.vars ?? {}).map(([name, b64]) => ({ name, kind: "value", payload: b64 }));
-			const reply = await kernel.restore(entries, payload.version === 3);
-			// --- merge save-time skips (oversized bindings) into the result so the resume notice names every loss ---
-			const failed = [...(payload.failed ?? [])];
-			const seen = new Set(failed.map((f) => f.name));
-			for (const f of reply.failed) {
-				if (!seen.has(f.name)) failed.push(f);
-				seen.add(f.name);
-			}
-			const result: RestoreResult = { path: config.path, restored: reply.restored, failed };
+			// v1/v2/v3 dispatch, un-pickling, and the save-time failure merge all live in the bridge
+			const reply = await kernel.restore(config.path);
+			const result: RestoreResult = { path: config.path, restored: reply.restored, failed: reply.failed };
 			this.settleRestore(result);
 			return result;
 		} catch {
