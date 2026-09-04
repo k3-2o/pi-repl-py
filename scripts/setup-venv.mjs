@@ -2,7 +2,7 @@
 /** postinstall: build the stable per-user venv at ~/.pi/agent/pi-repl/venv; repair in place if ipykernel is missing; a bad build fails the install loudly. */
 
 import { execSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -11,10 +11,10 @@ const PY = join(VENV_DIR, "bin", "python3");
 const DEPS = ["ipykernel", "cloudpickle"];
 const HELPERS_DIR = join(homedir(), ".pi", "agent", "pi-repl", "helpers");
 
-// A venv that can't import ipykernel is broken — never trust the binary alone.
-function ipykernelOk() {
+// A venv that can't import every runtime dep is broken — never trust the binary alone.
+function depsOk() {
   try {
-    execSync(`${PY} -c "import ipykernel"`, { stdio: "ignore" });
+    execSync(`${PY} -c "import ipykernel, cloudpickle"`, { stdio: "ignore" });
     return true;
   } catch {
     return false;
@@ -49,8 +49,8 @@ function seedHelpersDir() {
 
 function main() {
   seedHelpersDir();
-  if (ipykernelOk()) {
-    log(`venv ready (ipykernel present) at ${VENV_DIR}`);
+  if (depsOk()) {
+    log(`venv ready (${DEPS.join(", ")}) at ${VENV_DIR}`);
     return;
   }
   const systemPython = findSystemPython();
@@ -61,6 +61,19 @@ function main() {
     );
     return;
   }
+  // an existing venv missing a dep (e.g. cloudpickle added in an upgrade) is repaired in place;
+  // a missing/broken venv is rebuilt from a clean slate
+  if (existsSync(PY)) {
+    log(`repairing evaluator venv at ${VENV_DIR} (installing ${DEPS.join(" ")})...`);
+    try {
+      execSync(`${PY} -m pip install ${DEPS.join(" ")}`, { stdio: "inherit" });
+      if (!depsOk()) fail(`deps still not importable after install; the evaluator won't start.`);
+      log("done. The pi-repl evaluator will use this venv.");
+      return;
+    } catch (error) {
+      fail(`could not repair the evaluator venv (${error && error.message ? error.message : error}). `);
+    }
+  }
   log(`building evaluator venv at ${VENV_DIR} (uses ${systemPython})...`);
   try {
     mkdirSync(join(VENV_DIR, ".."), { recursive: true });
@@ -68,8 +81,8 @@ function main() {
     execSync(`${systemPython} -m venv --clear ${VENV_DIR}`, { stdio: "inherit" });
     execSync(`${PY} -m pip install --upgrade pip`, { stdio: "inherit" });
     execSync(`${PY} -m pip install ${DEPS.join(" ")}`, { stdio: "inherit" });
-    if (!ipykernelOk()) {
-      fail(`ipykernel still not importable after install; the evaluator won't start.`);
+    if (!depsOk()) {
+      fail(`runtime deps still not importable after install; the evaluator won't start.`);
       return;
     }
     log("done. The pi-repl evaluator will use this venv.");

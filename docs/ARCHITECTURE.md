@@ -1,39 +1,49 @@
 # Architecture
 
-pi-repl runs in **two processes**: pi hosts the TypeScript extension, which manages a separate
-Python `ipykernel` process where user code runs, speaking the standard Jupyter protocol directly
-(no Python middleman, no private framing). A cell can raise or wedge the kernel without taking pi
-down; the host stays answerable.
+pi-repl runs in **three processes**: pi hosts the TypeScript extension, which manages a small
+Python bridge (`bridge.py`) that owns the real `ipykernel` evaluator through `jupyter_client`.
+The host and the bridge speak one tiny JSON-lines vocabulary over a stdio pipe; the bridge speaks
+the standard Jupyter protocol to the kernel with ready-made libraries. A cell can raise or wedge
+the kernel without taking pi down; the host stays answerable.
 
 ```
 pi
  └─ extension (index.ts)              registers `execute`; dormant until --repl
      └─ EngineManager (src/engine/index.ts)   venv resolution, lazy spawn,
-         │                                   the call queue, snapshots,
+         │                                   the call queue, output caps,
          │                                   abort grace, teardown
-         └─ KernelClient (src/engine/kernel.ts)   one ipykernel subprocess
-             ├─ ZMTP 3.0 (src/engine/zmtp.ts)     the wire protocol, by hand
-             ├─ Jupyter session (src/engine/session.ts)   framing + HMAC + JSON
-             └─ python -m ipykernel -f <connection-file>   the evaluator
+         └─ KernelClient (src/engine/kernel.ts)   spawn the bridge, one JSON
+             │                                   line per op, route by id
+             └─ stdio pipe ─── bridge.py   owns jupyter_client + ipykernel:
+                                 │          cells, streaming, snapshots,
+                                 │          restore, interrupts
+                                 └─ ipykernel   the evaluator
 ```
 
-## Why the host speaks ZMTP itself
+## Why the boundary is one pipe
 
-A TypeScript host cannot load libzmq's native Node bindings (they crash `bun`), and the earlier
-Python middleman (`guest.py`) that translated a private JSON protocol is gone. The host instead
-implements the small slice of ZMTP 3.0 a Jupyter client needs — DEALER for shell/control, SUB for
-iopub (`src/engine/zmtp.ts`). The payoff:
+An earlier iteration had the TypeScript host speak ZMTP 3.0, HMAC-sign every frame, and
+re-implement the Jupyter client protocol by hand (`zmtp.ts`, `session.ts`, ~1,100 lines) because
+libzmq's native bindings crash `bun`. Each layer compensated the one below it: the wire had no
+auth so frames were signed; two channels raced so cells settled on a two-message protocol; the
+machine could wedge so it grew eight watchdog timers. All of it is deleted.
 
-- **one process boundary** instead of two;
-- **one standard protocol** (Jupyter) instead of a private one on top of it;
-- **no invented framing** to maintain;
-- **messages are authenticated with HMAC** — the host signs and verifies every message with the
-  kernel's HMAC key, replacing the old nonce that guarded against false completion messages.
+The replacement is one stdio pipe to `bridge.py` (~250 lines), which owns everything Python-side
+with ready-made libraries:
+
+- **the file descriptor is the authentication** — the OS gives the pipe to exactly two processes;
+- **one FIFO owner** — the bridge's single-threaded loop serializes every op, so ordering needs
+  no protocol;
+- **death is EOF plus an exit code** — no socket-liveness guessing; ipykernel also shuts itself
+  down when its parent (the bridge) dies;
+- **the host caps output** exactly as before, but snapshot payloads never cross the pipe — the
+  bridge writes the snapshot file itself and replies with names and counts only.
 
 ## The Python environment (the venv)
 
 The evaluator is a real ipykernel, so it needs Python with `ipykernel` installed — a hard runtime
-dependency (`jupyter_client` is *not* needed: the host is the client). A package install runs
+dependency. `jupyter_client` ships with ipykernel (the bridge drives the kernel through it), and
+`cloudpickle` serializes snapshots (functions and classes by value). A package install runs
 `postinstall` (`scripts/setup-venv.mjs`), which builds a stable per-user venv at
 `~/.pi/agent/pi-repl/venv/bin/python3` — stable because it sits outside the package dir that npm
 replaces on each update. If `python3` or the network is missing at install time, it prints a
@@ -44,31 +54,32 @@ At spawn, `resolvePythonPath` uses exactly one interpreter: the install venv, el
 killed the kernel whenever cwd happened to contain one. The kernel starts in the session's cwd
 and falls back to the host cwd if that directory is gone, so a stale cwd never prevents boot.
 
-## The kernel client
+## The bridge
 
-`KernelClient.start` spawns `python -m ipykernel -f <connection-file>` (a per-run connection file
-in the temp dir), connects the three channels over ZMTP, and waits for `kernel_info_reply` before
-declaring the kernel ready. Cells run as standard `execute_request`s, routed by `msg_id`:
+`KernelClient.start` spawns `<venv python> bridge.py` and waits for its `ready` event; the bridge
+starts ipykernel through `jupyter_client`, waits for `kernel_info_reply`, and preloads each
+helper in its own cell (one broken helper fails alone). Host and bridge exchange one JSON object
+per line:
 
-- **iopub** — output: `stream`, `execute_result`, `display_data`, `error`, plus private-MIME
-  payloads for snapshot/restore/namespace data;
-- **shell** — the authoritative `execute_reply` (status, ename, evalue);
-- **control** — interrupts (`interrupt_request`) and shutdown.
+- **host → bridge**: `boot` (helper sources + snapshot policy), `exec`, `snapshot`, `restore`,
+  `listNames`, `interrupt`, `shutdown`;
+- **bridge → host**: `ready`, `stream` (cell output, streamed), `result` (a cell settles only
+  once the shell reply **and** iopub idle have arrived — a tiny reply can beat a large output),
+  `reply` (op results), `error`.
 
-Four protocol details have contract tests.
+Failure semantics have contract tests.
 
-**A cell settles only on two messages.** The shell reply and the iopub stream travel on different
-connections, so a tiny reply can beat a large output. A cell completes only when **both** the
-`execute_reply` and the matching iopub `status idle` (published after every byte) arrive;
-settling on the reply alone would drop output still in flight.
+**Death is immediate and truthful.** When the kernel dies, the bridge exits; the host observes
+the pipe's EOF and the exit code, settles the running cell with an error, and the next call
+rebuilds from the last snapshot.
 
 **Output is capped per channel and per line**, both announced with markers: channels accumulate
-against `maxOutputChars` (checked within each message), and each line is capped at 4096 chars, so
+against `maxOutputChars` (checked within each event), and each line is capped at 4096 chars, so
 one oversized line cannot own the budget while long JSON/reprs/errors pass whole.
 
-**Cancellation is real.** An abort sends `interrupt_request`, raising a genuine
+**Cancellation is real.** An abort makes the bridge send `interrupt_request`, raising a genuine
 `KeyboardInterrupt`; the namespace survives. Cells wedged in C code (which ignore interrupts)
-get a 20-second grace, then the kernel is killed and the next call rebuilds from the last
+get a 20-second grace, then the process group is killed and the next call rebuilds from the last
 snapshot.
 
 **History is off.** IPython's `In`/`Out` retention pins every last-expression result and cannot be
@@ -97,21 +108,30 @@ Full contract: [helpers.md](helpers.md).
 
 ## Snapshots & honest resets
 
-After each successful cell, a debounced snapshot pickles the kernel's `globals` entry by entry
-(one un-picklable value costs only itself) and publishes it back over a private MIME payload; the
-host stores it as `namespace.snapshot` under `~/.pi/agent/pi-repl/state/<session>/`.
+After each successful cell, the bridge pickles the kernel's `globals` entry by entry with
+cloudpickle (functions and classes serialize by value; one un-picklable binding costs only
+itself), zlib-compresses each payload, and writes `namespace.snapshot` (format v4) under
+`~/.pi/agent/pi-repl/state/<session>/` atomically. The gate — only a persisted write marks the
+namespace as saved — lives in the bridge too, and a pickling snapshot never runs ahead of a user
+cell because the bridge's own loop is the queue.
 
-A fresh engine restores that snapshot **in the background**: recovery is a quiet-gap job that
-never runs ahead of a user cell, so a large revive does not delay the first cell; only a
-mid-session rebuild (kernel death) forces the restore before the cell that found the kernel dead.
-Functions and classes defined in cells are captured by source and re-executed on restore (plain
-pickle cannot revive them in `__main__`); bindings that still fail are reported by name, never
-dropped silently. Entries are capped per-binding and in total (128 MiB default); the file is
-written via temp-file-and-rename so a crash cannot corrupt the last good copy; a binding skipped
-at save time is named in the resume notice, never dropped silently, and a failed snapshot leaves
-the retry gate in place (only a persisted write advances it); a periodic refresh (default 2 min, `snapshot.periodMs`, 0 disables) bounds the loss window for same-name mutations and stands down when the last snapshot exceeded 8 MiB; value entries are zlib-compressed (file format version 3 — v1/v2 files remain restorable); session dirs are
-pruned to the newest 25, and dirs whose conversation file no longer exists are swept entirely —
-deleting a conversation deletes its snapshots. "ephemeral" and the live session are exempt. A /fork'd conversation inherits the parent's last snapshot — copied once into the fork's own key at first start, so it resumes with state, carries the standard reset marker on its first cell, and the human gets a dedicated fork toast; the parent is untouched.
+A fresh engine restores that snapshot **in the background**: the revive is a quiet-gap job the
+bridge runs only when its queue has been idle, so a large revive does not delay the first cell;
+only a mid-session rebuild (kernel death) forces the restore before the cell that found the
+kernel dead. Functions and classes revive through cloudpickle's by-value serialization;
+bindings that still fail are reported by name, never dropped silently. Entries are capped
+per-binding and in total (128 MiB default); the file is written via temp-file-and-rename so a
+crash cannot corrupt the last good copy; a binding skipped at save time is named in the resume
+notice, never dropped silently, and a failed snapshot leaves the retry gate in place (only a
+persisted write advances it); a periodic refresh (default 2 min, `snapshot.periodMs`, 0
+disables) bounds the loss window for same-name mutations and stands down when the last snapshot
+exceeded 8 MiB; value payloads are zlib-compressed cloudpickle streams (file format version 4 —
+v1/v2/v3 files remain restorable); session dirs are pruned to the newest 25, and dirs whose
+conversation file no longer exists are swept entirely — deleting a conversation deletes its
+snapshots. "ephemeral" and the live session are exempt. A /fork'd conversation inherits the
+parent's last snapshot — copied once into the fork's own key at first start, so it resumes with
+state, carries the standard reset marker on its first cell, and the human gets a dedicated fork
+toast; the parent is untouched.
 
 A revive that never completes (a poisoned pickle) is bounded by an engine restore-cell watchdog
 (`PI_REPL_BOOT_TIMEOUT_MS`, default 90s): the kernel is killed and the restore marked skipped —

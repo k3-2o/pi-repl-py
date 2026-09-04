@@ -1,3 +1,31 @@
+## [0.8.0] - 2026-09-05
+
+### Changed
+
+- The host no longer speaks the Jupyter wire protocol: one stdio pipe to `bridge.py` replaces the
+  hand-rolled ZMTP 3.0 client, HMAC framing, and settle protocol (~1,100 lines deleted). The
+  bridge owns `jupyter_client` + ipykernel; the host sends one JSON line per op and routes by id.
+- Kernel death is pipe EOF plus an exit code — no socket-liveness guessing. The bridge also exits
+  when the kernel dies, so the engine's rebuild path is driven by one truthful signal.
+- Snapshot payloads never cross into the host: the bridge writes `namespace.snapshot` itself
+  (atomic temp+rename) and replies with names and counts only.
+- Snapshot cadence (name-diff gate, debounce, periodic refresh with the heavy-namespace
+  stand-down) and the background revive's quiet-gap deferral moved into the bridge — a pickling
+  snapshot or revive can never be sent ahead of a queued user cell by construction.
+- Host deadlines collapse to three: boot (also bounds a wedged background revive), abort grace,
+  and the optional silence watchdog.
+
+### Added
+
+- Snapshot format v4: cloudpickle serializes functions and classes by value, zlib-compressed.
+  v1-v3 files remain restorable. The install venv gains `cloudpickle` (postinstall repairs
+  existing venvs in place).
+
+### Removed
+
+- `src/engine/zmtp.ts` and `src/engine/session.ts` (the wire protocol, HMAC signing, and the
+  settle-on-two-messages host machinery — the settle guarantee moved into the bridge).
+
 ## [0.7.1] - 2026-09-04
 
 ### Changed
