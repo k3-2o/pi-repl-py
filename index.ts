@@ -20,7 +20,7 @@ import { conversationName, inheritForkSnapshot, resolveStateDir } from "./src/ex
 
 const executeSchema = Type.Object({
 	code: Type.String({
-		description: "Python to execute in the persistent evaluator.",
+		description: "Python source for this cell; stdout, stderr, and the last-expression result are returned.",
 	}),
 });
 
