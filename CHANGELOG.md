@@ -1,3 +1,9 @@
+## [0.7.1] - 2026-09-04
+
+### Changed
+
+- tightened contract
+
 ## [0.7.0] - 2026-09-04
 
 ### Added
