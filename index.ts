@@ -66,10 +66,10 @@ export default function (pi: ExtensionAPI) {
 		type: "boolean",
 		description: "Single execute tool backed by a persistent Python evaluator; replaces the default tool surface",
 	});
-	// Flag only lands post-factory; gate per event. PI_REPL_FORCE is the dev escape.
-	// /repl on|off flips replMode mid-session; the flag only seeds the starting mode.
-	let replMode = pi.getFlag("repl") === true || process.env.PI_REPL_FORCE === "1";
-	const active = () => replMode;
+	// The flag lands post-factory, so it is read per event and never cached here. PI_REPL_FORCE=1 is the
+	// dev escape; /repl on|off is the per-session override and beats the flag, so it is held separately.
+	let replOverride: boolean | undefined;
+	const active = () => replOverride ?? (pi.getFlag("repl") === true || process.env.PI_REPL_FORCE === "1");
 
 	let location = { cwd: process.cwd(), sessionFile: undefined as string | undefined };
 	/** Active tools captured when /repl on takes over; /repl off puts them back. */
@@ -162,16 +162,16 @@ export default function (pi: ExtensionAPI) {
 		handler: async (args, ctx) => {
 			const toggle: ReplToggle | undefined = parseReplToggle(args);
 			if (!toggle) {
-				ctx.ui.notify(replUsageMessage(replMode), "warning");
+				ctx.ui.notify(replUsageMessage(active()), "warning");
 				return;
 			}
 			const on = toggle === "on";
-			if (on === replMode) {
+			if (on === active()) {
 				// --- idempotent: a repeat /repl on must not overwrite the captured stock loadout with execute-only ---
 				ctx.ui.notify(replToast(toggle), "info");
 				return;
 			}
-			replMode = on;
+			replOverride = on;
 			if (toggle === "on") {
 				// --- remember the stock loadout before it collapses to execute-only (same guard as
 				// session_start: an execute-only loadout must not capture as []) ---

@@ -10,6 +10,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import extension from "../index.js";
 import { resolveHelperDirs } from "../src/engine/helpers-locate.js";
 import type { RestoreResult } from "../src/engine/index.js";
 import {
@@ -732,6 +733,72 @@ describe("/repl toggle", () => {
 		// an empty capture must never restore zero tools — setActiveTools([]) bricks the session
 		expect(restoredTools([])).toEqual(["read", "bash", "edit", "write"]);
 	});
+});
+
+describe("the --repl flag lands post-factory, so it has to be read per event", () => {
+	/** pi's own ordering, reproduced: the extension factory runs first, argv flags land afterwards. */
+	function fakePi() {
+		let flag: boolean | undefined;
+		let active = ["read", "bash", "edit", "write"];
+		const handlers = new Map<string, (args: string, ctx: unknown) => Promise<void>>();
+		const pi = {
+			registerFlag: () => {},
+			registerTool: (tool: { name: string }) => { active.push(tool.name); },
+			registerCommand: (name: string, def: { handler: (args: string, ctx: unknown) => Promise<void> }) => {
+				handlers.set(name, def.handler);
+			},
+			on: () => {},
+			getFlag: (name: string) => (name === "repl" ? flag : undefined),
+			getActiveTools: () => [...active],
+			setActiveTools: (names: string[]) => { active = [...names]; },
+			// harness-only
+			_flagLanded: () => { flag = true; },
+			_command: (name: string) => handlers.get(name)!,
+		};
+		return pi;
+	}
+
+	/** Read the mode back the way a human does: the no-argument `/repl` prints it. */
+	async function usage(pi: ReturnType<typeof fakePi>): Promise<string> {
+		const notices: string[] = [];
+		await pi._command("repl")("", { ui: { notify: (message: string) => notices.push(message) } });
+		return notices.join(" ");
+	}
+
+	test("a flag that arrives after the factory still reports repl as on", async () => {
+		const pi = fakePi();
+		extension(pi as never); // factory time: getFlag("repl") is still undefined here
+		pi._flagLanded(); // pi has parsed argv, and now the flag exists
+		expect(await usage(pi)).toContain("repl is currently on");
+	});
+
+	test("no flag, no repl: the same command reports off (the control)", async () => {
+		const pi = fakePi();
+		extension(pi as never);
+		expect(await usage(pi)).toContain("repl is currently off");
+	});
+
+	test("PI_REPL_FORCE=1 engages with no flag on the command line", async () => {
+		process.env.PI_REPL_FORCE = "1";
+		try {
+			const pi = fakePi();
+			extension(pi as never);
+			expect(await usage(pi)).toContain("repl is currently on");
+		} finally {
+			delete process.env.PI_REPL_FORCE;
+		}
+	});
+
+	test("/repl off overrides a flag-started session for the rest of it", async () => {
+		const pi = fakePi();
+		extension(pi as never);
+		pi._flagLanded();
+		await pi._command("repl")("off", { ui: { notify: () => {} } });
+		expect(await usage(pi)).toContain("repl is currently off");
+	});
+
+	// PI_REPL_FORCE=0 is not a veto over an explicit --repl, before or after this fix: it is the
+	// escape hatch in the on direction only. Left unasserted so a future change may still choose.
 });
 
 describe("skills advertisement in --repl (withSkillsBlock)", () => {
